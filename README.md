@@ -66,6 +66,12 @@ When falling back, Hadrix prints a single informational message:
 Fast vector search unavailable; using portable mode.
 ```
 
+### Fast vs portable mode
+
+- Fast mode uses `sqlite-vec` for in-database vector search (native extension).
+- Portable mode stores embeddings in SQLite and runs cosine similarity in pure JavaScript.
+- Portable mode is correct but slower, especially on larger repos. Fast mode is significantly faster for top‑k similarity search.
+
 ## Advanced override
 
 For debugging or power users, you can force a specific vector extension file:
@@ -75,3 +81,35 @@ HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vector-extension.dylib
 ```
 
 If the override cannot be loaded, Hadrix silently falls back to portable mode.
+
+## Architecture
+
+```text
+      ┌──────────────┐
+      │   hadrix     │
+      └──────┬───────┘
+             │
+             v
+   ┌───────────────────┐
+   │ Static scanners   │
+   │ semgrep/gitleaks  │
+   │ osv-scanner       │
+   └────────┬──────────┘
+            │ static findings
+            v
+   ┌───────────────────┐
+   │ Chunk + Embed     │
+   │ (SQLite storage)  │
+   └────────┬──────────┘
+            │ retrieve top‑k
+            v
+   ┌───────────────────┐
+   │ LLM scan          │
+   │ + static summary  │
+   └────────┬──────────┘
+            │
+            v
+   ┌───────────────────┐
+   │ Findings output   │
+   └───────────────────┘
+```
