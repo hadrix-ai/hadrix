@@ -32,7 +32,7 @@
     "tar": "^7.5.4"
   },
   "optionalDependencies": {
-    "sqlite-vec": "^0.1.7"
+    "vectorlite": "^0.2.0"
   },
   "devDependencies": {
     "tsup": "^8.0.1",

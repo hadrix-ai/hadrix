@@ -2,10 +2,13 @@ import path from "node:path";
 import { mkdirSync, renameSync, chmodSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
+import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
-import tar from "tar";
-import AdmZip from "adm-zip";
 import { getToolsDir, resolveToolPath } from "../scan/staticScanners.js";
+
+const require = createRequire(import.meta.url);
+const tar = require("tar") as typeof import("tar");
+const AdmZip = require("adm-zip") as typeof import("adm-zip");
 
 const VERSIONS = {
   gitleaks: "8.18.1",

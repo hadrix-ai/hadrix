@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import Database from "better-sqlite3";
 
@@ -7,6 +7,7 @@ export interface DbOptions {
   stateDir: string;
   extensionPath?: string | null;
   vectorDimensions: number;
+  vectorMaxElements?: number;
   logger?: (message: string) => void;
 }
 
@@ -21,6 +22,7 @@ export interface FileRow {
 export class HadrixDb {
   private db: Database.Database;
   private vectorDimensions: number;
+  private vectorMaxElements: number;
   private embeddingReset = false;
   private vectorMode: "fast" | "portable" = "portable";
   private fallbackNotified = false;
@@ -30,6 +32,7 @@ export class HadrixDb {
     const dbPath = path.join(options.stateDir, "index.db");
     this.db = new Database(dbPath);
     this.vectorDimensions = options.vectorDimensions;
+    this.vectorMaxElements = options.vectorMaxElements ?? 200000;
     this.init();
   }
 
@@ -154,10 +157,30 @@ export class HadrixDb {
 
     try {
       const require = createRequire(import.meta.url);
-      const mod = require("sqlite-vec");
-      const sqliteVec = (mod?.default ?? mod) as { load?: (db: Database.Database) => void };
-      if (typeof sqliteVec.load === "function") {
-        sqliteVec.load(this.db);
+      const mod = require("vectorlite");
+      const vectorlite = (mod?.default ?? mod) as {
+        load?: (db: Database.Database) => void;
+        getLoadablePath?: () => string;
+      };
+
+      if (typeof vectorlite.load === "function") {
+        vectorlite.load(this.db);
+        return true;
+      }
+
+      if (typeof vectorlite.getLoadablePath === "function") {
+        const loadable = vectorlite.getLoadablePath();
+        if (loadable) {
+          this.db.loadExtension(loadable);
+          return true;
+        }
+      }
+
+      const pkgPath = require.resolve("vectorlite/package.json");
+      const pkgRoot = path.dirname(pkgPath);
+      const candidate = this.findExtensionFile(pkgRoot);
+      if (candidate) {
+        this.db.loadExtension(candidate);
         return true;
       }
     } catch {
@@ -167,13 +190,52 @@ export class HadrixDb {
     return false;
   }
 
+  private findExtensionFile(root: string): string | null {
+    const exts = process.platform === "win32" ? [".dll"] : process.platform === "darwin" ? [".dylib"] : [".so"];
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
+    const maxDepth = 4;
+
+    while (queue.length) {
+      const next = queue.shift();
+      if (!next) break;
+      const { dir, depth } = next;
+      if (depth > maxDepth) continue;
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry);
+        let stat;
+        try {
+          stat = statSync(fullPath);
+        } catch {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          queue.push({ dir: fullPath, depth: depth + 1 });
+          continue;
+        }
+        const lower = entry.toLowerCase();
+        if (!lower.includes("vectorlite")) continue;
+        if (exts.some((ext) => lower.endsWith(ext))) {
+          return fullPath;
+        }
+      }
+    }
+    return null;
+  }
+
   private ensureEmbeddingsTable(mode: "fast" | "portable"): boolean {
     const row = this.db
       .prepare("SELECT sql FROM sqlite_master WHERE name = 'chunk_embeddings' AND type = 'table'")
       .get() as { sql?: string } | undefined;
 
     const existingSql = row?.sql?.toLowerCase() ?? "";
-    const isVecTable = existingSql.includes("vec0");
+    const isVecTable = existingSql.includes("vectorlite");
 
     if (mode === "fast" && row && !isVecTable) {
       try {
@@ -197,9 +259,9 @@ export class HadrixDb {
       try {
         this.db.exec(`
           CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings
-          USING vec0(
-            chunk_id integer primary key,
-            embedding float[${this.vectorDimensions}] distance_metric=cosine
+          USING vectorlite(
+            embedding float32[${this.vectorDimensions}] cosine,
+            hnsw(max_elements=${this.vectorMaxElements})
           );
         `);
         return true;
@@ -267,7 +329,7 @@ export class HadrixDb {
       const ids = rows.map((row) => row.id);
       const placeholder = ids.map(() => "?").join(",");
       if (this.vectorMode === "fast") {
-        this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
+        this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
       } else {
         this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
       }
@@ -310,7 +372,7 @@ export class HadrixDb {
   insertEmbeddings(rows: Array<{ chunkId: number; embedding: Buffer }>) {
     const insert =
       this.vectorMode === "fast"
-        ? this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)")
+        ? this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)")
         : this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
 
     const tx = this.db.transaction(() => {
@@ -341,7 +403,9 @@ export class HadrixDb {
   querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
     if (this.vectorMode === "fast") {
       return this.db
-        .prepare("SELECT chunk_id as chunkId, distance FROM chunk_embeddings WHERE embedding MATCH ? AND k = ?")
+        .prepare(
+          "SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE knn_search(embedding, knn_param(?, ?))"
+        )
         .all(embedding, limit) as Array<{ chunkId: number; distance: number }>;
     }
 

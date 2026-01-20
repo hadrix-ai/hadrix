@@ -68,7 +68,7 @@ Fast vector search unavailable; using portable mode.
 
 ### Fast vs portable mode
 
-- Fast mode uses `sqlite-vec` for in-database vector search (native extension).
+- Fast mode uses `vectorlite` for in-database vector search (native extension).
 - Portable mode stores embeddings in SQLite and runs cosine similarity in pure JavaScript.
 - Portable mode is correct but slower, especially on larger repos. Fast mode is significantly faster for top‑k similarity search.
 
@@ -77,7 +77,7 @@ Fast vector search unavailable; using portable mode.
 For debugging or power users, you can force a specific vector extension file:
 
 ```bash
-HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vector-extension.dylib
+HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vectorlite.dylib
 ```
 
 If the override cannot be loaded, Hadrix silently falls back to portable mode.

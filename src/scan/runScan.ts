@@ -84,6 +84,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     stateDir: config.stateDir,
     extensionPath: config.vector.extensionPath,
     vectorDimensions: config.embeddings.dimensions,
+    vectorMaxElements: config.vector.maxElements,
     logger: log
   });
 

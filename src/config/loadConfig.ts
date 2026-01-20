@@ -39,8 +39,9 @@ export interface HadrixConfig {
     exclude: string[];
   };
   vector: {
-    extension: "sqlite-vec";
+    extension: "vectorlite";
     extensionPath?: string | null;
+    maxElements: number;
   };
   sampling: {
     queries: string[];
@@ -293,9 +294,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       exclude: configFile.chunking?.exclude ?? DEFAULT_EXCLUDES
     },
     vector: {
-      extension: "sqlite-vec",
+      extension: "vectorlite",
       extensionPath:
-        readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || null
+        readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || null,
+      maxElements: configFile.vector?.maxElements ?? 200000
     },
     sampling: {
       queries: configFile.sampling?.queries ?? DEFAULT_QUERIES,
