@@ -1,4 +1,4 @@
-import type { HadrixConfig } from "../config/loadConfig.js";
+import type { HadrixConfig, Provider } from "../config/loadConfig.js";
 
 interface EmbeddingResponseItem {
   embedding: number[];
@@ -10,23 +10,89 @@ interface EmbeddingResponse {
   error?: { message?: string };
 }
 
-function buildHeaders(config: HadrixConfig): Record<string, string> {
-  return {
+interface GeminiEmbeddingResponse {
+  embeddings?: Array<{ values?: number[] }>;
+  error?: { message?: string };
+}
+
+function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${config.api.apiKey}`,
     ...config.api.headers
   };
+
+  if (provider === "openai") {
+    headers.Authorization = `Bearer ${apiKey}`;
+  } else if (provider === "gemini") {
+    headers["x-goog-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function normalizeGeminiEmbeddings(payload: GeminiEmbeddingResponse, expected: number): number[][] {
+  const embeddings = payload.embeddings ?? [];
+  const vectors = embeddings
+    .map((item) => item.values)
+    .filter((values): values is number[] => Array.isArray(values));
+
+  if (vectors.length !== expected) {
+    throw new Error(`Embedding response length mismatch: expected ${expected}, got ${vectors.length}.`);
+  }
+
+  return vectors;
 }
 
 export async function embedTexts(config: HadrixConfig, texts: string[]): Promise<number[][]> {
   if (!texts.length) return [];
 
+  const provider = config.embeddings.provider;
+  const apiKey = config.embeddings.apiKey || config.api.apiKey;
+
+  if (!apiKey) {
+    throw new Error("Missing embeddings API key.");
+  }
+
+  if (provider === "anthropic") {
+    throw new Error("Anthropic does not provide an embeddings API.");
+  }
+
+  if (provider === "gemini") {
+    const modelName = config.embeddings.model.startsWith("models/")
+      ? config.embeddings.model
+      : `models/${config.embeddings.model}`;
+    const response = await fetch(config.embeddings.endpoint, {
+      method: "POST",
+      headers: buildHeaders(config, provider, apiKey),
+      body: JSON.stringify({
+        requests: texts.map((text) => ({
+          model: modelName,
+          content: { parts: [{ text }] },
+          outputDimensionality: config.embeddings.dimensions
+        }))
+      })
+    });
+
+    const payload = (await response.json()) as GeminiEmbeddingResponse;
+
+    if (!response.ok) {
+      const message = payload.error?.message || `Embedding request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    return normalizeGeminiEmbeddings(payload, texts.length);
+  }
+
+  const includeDimensions =
+    provider === "openai" && config.embeddings.model.startsWith("text-embedding-3");
+
   const response = await fetch(config.embeddings.endpoint, {
     method: "POST",
-    headers: buildHeaders(config),
+    headers: buildHeaders(config, provider, apiKey),
     body: JSON.stringify({
       model: config.embeddings.model,
-      input: texts
+      input: texts,
+      ...(includeDimensions ? { dimensions: config.embeddings.dimensions } : {})
     })
   });
 

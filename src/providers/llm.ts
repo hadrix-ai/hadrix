@@ -1,4 +1,4 @@
-import type { HadrixConfig } from "../config/loadConfig.js";
+import type { HadrixConfig, Provider } from "../config/loadConfig.js";
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -16,18 +16,136 @@ interface ChatCompletionResponse {
   error?: { message?: string };
 }
 
-function buildHeaders(config: HadrixConfig): Record<string, string> {
-  return {
+interface AnthropicResponse {
+  content?: Array<{ type?: string; text?: string }>;
+  error?: { message?: string };
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+  error?: { message?: string };
+}
+
+function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${config.api.apiKey}`,
     ...config.api.headers
   };
+
+  if (provider === "openai") {
+    headers.Authorization = `Bearer ${apiKey}`;
+  } else if (provider === "anthropic") {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  } else if (provider === "gemini") {
+    headers["x-goog-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function splitSystemMessages(messages: ChatMessage[]): { system: string; rest: ChatMessage[] } {
+  const systemParts: string[] = [];
+  const rest: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "system") {
+      systemParts.push(message.content);
+    } else {
+      rest.push(message);
+    }
+  }
+  return { system: systemParts.join("\n"), rest };
 }
 
 export async function runChatCompletion(config: HadrixConfig, messages: ChatMessage[]): Promise<string> {
+  const provider = config.llm.provider;
+  const apiKey = config.llm.apiKey || config.api.apiKey;
+
+  if (!apiKey) {
+    throw new Error("Missing LLM API key.");
+  }
+
+  if (provider === "anthropic") {
+    const { system, rest } = splitSystemMessages(messages);
+    const response = await fetch(config.llm.endpoint, {
+      method: "POST",
+      headers: buildHeaders(config, provider, apiKey),
+      body: JSON.stringify({
+        model: config.llm.model,
+        system,
+        messages: rest.map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: message.content
+        })),
+        max_tokens: config.llm.maxTokens,
+        temperature: config.llm.temperature
+      })
+    });
+
+    const payload = (await response.json()) as AnthropicResponse;
+
+    if (!response.ok) {
+      const message = payload.error?.message || `LLM request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    const text = payload.content
+      ?.filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .filter(Boolean)
+      .join("");
+
+    if (!text) {
+      throw new Error("LLM response missing message content.");
+    }
+
+    return text;
+  }
+
+  if (provider === "gemini") {
+    const { system, rest } = splitSystemMessages(messages);
+    const response = await fetch(config.llm.endpoint, {
+      method: "POST",
+      headers: buildHeaders(config, provider, apiKey),
+      body: JSON.stringify({
+        system_instruction: system ? { parts: [{ text: system }] } : undefined,
+        contents: rest.map((message) => ({
+          role: message.role === "assistant" ? "model" : "user",
+          parts: [{ text: message.content }]
+        })),
+        generationConfig: {
+          temperature: config.llm.temperature,
+          maxOutputTokens: config.llm.maxTokens
+        }
+      })
+    });
+
+    const payload = (await response.json()) as GeminiResponse;
+
+    if (!response.ok) {
+      const message = payload.error?.message || `LLM request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    const text = payload.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text)
+      .filter(Boolean)
+      .join("");
+
+    if (!text) {
+      throw new Error("LLM response missing message content.");
+    }
+
+    return text;
+  }
+
   const response = await fetch(config.llm.endpoint, {
     method: "POST",
-    headers: buildHeaders(config),
+    headers: buildHeaders(config, provider, apiKey),
     body: JSON.stringify({
       model: config.llm.model,
       messages,
