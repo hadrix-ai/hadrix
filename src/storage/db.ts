@@ -159,17 +159,11 @@ export class HadrixDb {
       const require = createRequire(import.meta.url);
       const mod = require("vectorlite");
       const vectorlite = (mod?.default ?? mod) as {
-        load?: (db: Database.Database) => void;
-        getLoadablePath?: () => string;
+        vectorlitePath?: () => string;
       };
 
-      if (typeof vectorlite.load === "function") {
-        vectorlite.load(this.db);
-        return true;
-      }
-
-      if (typeof vectorlite.getLoadablePath === "function") {
-        const loadable = vectorlite.getLoadablePath();
+      if (typeof vectorlite.vectorlitePath === "function") {
+        const loadable = vectorlite.vectorlitePath();
         if (loadable) {
           this.db.loadExtension(loadable);
           return true;
@@ -402,11 +396,12 @@ export class HadrixDb {
 
   querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
     if (this.vectorMode === "fast") {
+      const k = Math.max(1, Math.floor(limit));
       return this.db
         .prepare(
-          "SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE knn_search(embedding, knn_param(?, ?))"
+          `SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE knn_search(embedding, knn_param(?, ${k}))`
         )
-        .all(embedding, limit) as Array<{ chunkId: number; distance: number }>;
+        .all(embedding) as Array<{ chunkId: number; distance: number }>;
     }
 
     const target = this.bufferToFloat32(embedding);
