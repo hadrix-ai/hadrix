@@ -7,7 +7,8 @@ import { HadrixDb } from "../storage/db.js";
 import { embedTexts } from "../providers/embedding.js";
 import { runChatCompletion } from "../providers/llm.js";
 import { buildScanMessages, parseFindings, type PromptChunk } from "./prompt.js";
-import type { Finding, ScanResult } from "../types.js";
+import { runStaticScanners, summarizeStaticFindings } from "./staticScanners.js";
+import type { Finding, ScanResult, StaticFinding } from "../types.js";
 
 export interface RunScanOptions {
   projectRoot: string;
@@ -69,6 +70,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   });
 
   const log = options.logger ?? (() => {});
+
+  const staticFindings = await runStaticScanners(config, config.projectRoot, log);
 
   const files = await discoverFiles({
     root: config.projectRoot,
@@ -168,7 +171,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     if (!allChunks.length || !config.sampling.queries.length) {
       return {
-        findings: [],
+        findings: toStaticFindings(staticFindings),
         scannedFiles: files.length,
         scannedChunks,
         durationMs: Date.now() - start
@@ -204,20 +207,21 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     if (!selectedChunks.length) {
       return {
-        findings: [],
+        findings: toStaticFindings(staticFindings),
         scannedFiles: files.length,
         scannedChunks,
         durationMs: Date.now() - start
       };
     }
 
-    const messages = buildScanMessages(selectedChunks);
+    const staticSummary = summarizeStaticFindings(staticFindings);
+    const messages = buildScanMessages(selectedChunks, staticSummary);
     const response = await runChatCompletion(config, messages);
     const chunkMap = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]));
     const findings: Finding[] = parseFindings(response, chunkMap);
 
     return {
-      findings,
+      findings: [...toStaticFindings(staticFindings), ...findings],
       scannedFiles: files.length,
       scannedChunks,
       durationMs: Date.now() - start
@@ -225,4 +229,22 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   } finally {
     db.close();
   }
+}
+
+function toStaticFindings(staticFindings: StaticFinding[]): Finding[] {
+  return staticFindings.map((finding) => ({
+    id: `${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`,
+    title: `${finding.tool}: ${finding.ruleId}`,
+    severity: finding.severity,
+    description: finding.message,
+    location: {
+      filepath: finding.filepath,
+      startLine: finding.startLine,
+      endLine: finding.endLine
+    },
+    evidence: finding.snippet,
+    remediation: undefined,
+    source: "static",
+    chunkId: null
+  }));
 }

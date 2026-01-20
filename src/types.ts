@@ -16,6 +16,17 @@ export interface Finding {
   chunkId?: string | null;
 }
 
+export interface StaticFinding {
+  tool: "semgrep" | "gitleaks" | "osv-scanner";
+  ruleId: string;
+  message: string;
+  severity: Severity;
+  filepath: string;
+  startLine: number;
+  endLine: number;
+  snippet?: string;
+}
+
 export interface Chunk {
   id: string;
   filepath: string;

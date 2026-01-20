@@ -48,6 +48,19 @@ export interface HadrixConfig {
     maxChunks: number;
     maxChunksPerFile: number;
   };
+  staticScanners: {
+    semgrep: {
+      path?: string | null;
+      configs: string[];
+      timeoutSeconds: number;
+    };
+    gitleaks: {
+      path?: string | null;
+    };
+    osvScanner: {
+      path?: string | null;
+    };
+  };
   output: {
     format: "text" | "json";
   };
@@ -289,6 +302,22 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       topKPerQuery: configFile.sampling?.topKPerQuery ?? 8,
       maxChunks: configFile.sampling?.maxChunks ?? 80,
       maxChunksPerFile: configFile.sampling?.maxChunksPerFile ?? 2
+    },
+    staticScanners: {
+      semgrep: {
+        path: readEnv("HADRIX_SEMGREP_PATH") || configFile.staticScanners?.semgrep?.path || null,
+        configs:
+          (readEnv("HADRIX_SEMGREP_CONFIG")?.split(",").map((v) => v.trim()).filter(Boolean)) ||
+          configFile.staticScanners?.semgrep?.configs ||
+          ["p/ci"],
+        timeoutSeconds: configFile.staticScanners?.semgrep?.timeoutSeconds ?? 120
+      },
+      gitleaks: {
+        path: readEnv("HADRIX_GITLEAKS_PATH") || configFile.staticScanners?.gitleaks?.path || null
+      },
+      osvScanner: {
+        path: readEnv("HADRIX_OSV_SCANNER_PATH") || configFile.staticScanners?.osvScanner?.path || null
+      }
     },
     output: {
       format: (configFile.output?.format as "text" | "json") ?? "text"

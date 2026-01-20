@@ -37,7 +37,7 @@ function extractJson(text: string): string {
   return text.trim();
 }
 
-export function buildScanMessages(chunks: PromptChunk[]): ChatMessage[] {
+export function buildScanMessages(chunks: PromptChunk[], staticFindingsSummary?: string): ChatMessage[] {
   const system = [
     "You are a security code reviewer.",
     "Use only the provided code chunks as evidence.",
@@ -48,6 +48,7 @@ export function buildScanMessages(chunks: PromptChunk[]): ChatMessage[] {
   const instructions = [
     "Analyze the following code chunks for security risks.",
     "Only cite evidence from the chunks.",
+    "You are also given existing static scanner findings; do not repeat them.",
     "Return JSON array of findings with fields:",
     "title, severity (low|medium|high|critical), description,",
     "location { filepath, startLine, endLine }, evidence, remediation, chunkId."
@@ -65,9 +66,13 @@ export function buildScanMessages(chunks: PromptChunk[]): ChatMessage[] {
     })
     .join("\n\n");
 
+  const staticSection = staticFindingsSummary
+    ? `\n\nStatic findings summary:\n${staticFindingsSummary}`
+    : "";
+
   return [
     { role: "system", content: system },
-    { role: "user", content: `${instructions}\n\n${chunkLines}` }
+    { role: "user", content: `${instructions}${staticSection}\n\n${chunkLines}` }
   ];
 }
 

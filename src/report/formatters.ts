@@ -18,7 +18,8 @@ function severityLabel(severity: Finding["severity"]): string {
 function formatFinding(finding: Finding): string {
   const location = `${finding.location.filepath}:${finding.location.startLine}`;
   const lines: string[] = [];
-  lines.push(`${severityLabel(finding.severity)} ${finding.title}`);
+  const sourceLabel = finding.source === "static" ? pc.cyan("STATIC") : pc.magenta("LLM");
+  lines.push(`${severityLabel(finding.severity)} ${sourceLabel} ${finding.title}`);
   lines.push(`  at ${location}`);
   if (finding.description) lines.push(`  ${finding.description}`);
   if (finding.evidence) lines.push(`  evidence: ${finding.evidence}`);

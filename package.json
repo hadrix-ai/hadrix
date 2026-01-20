@@ -23,11 +23,13 @@
     "node": ">=18"
   },
   "dependencies": {
+    "adm-zip": "^0.5.12",
     "better-sqlite3": "^9.4.0",
     "commander": "^11.0.0",
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.1",
-    "picocolors": "^1.0.0"
+    "picocolors": "^1.0.0",
+    "tar": "^6.2.0"
   },
   "optionalDependencies": {
     "sqlite-vec": "^0.1.7"

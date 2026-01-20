@@ -4,6 +4,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultJson } from "./report/formatters.js";
+import { runSetup } from "./setup/runSetup.js";
 
 const program = new Command();
 
@@ -44,6 +45,33 @@ program
       const message = err instanceof Error ? err.message : String(err);
       console.error(pc.red(`Error: ${message}`));
       process.exitCode = 2;
+    }
+  });
+
+program
+  .command("setup")
+  .description("Install required static scanners")
+  .option("-y, --yes", "Install without prompting")
+  .action(async (options: { yes?: boolean }) => {
+    try {
+      const results = await runSetup({
+        autoYes: options.yes ?? false,
+        logger: (message) => console.log(message)
+      });
+      const failed = results.filter((result) => !result.installed);
+      if (failed.length) {
+        console.error(
+          pc.red(`Setup incomplete. Missing: ${failed.map((r) => r.tool).join(", ")}.`)
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(pc.green("Setup complete."));
+        process.exitCode = 0;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(pc.red(`Setup failed: ${message}`));
+      process.exitCode = 1;
     }
   });
 
