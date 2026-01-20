@@ -1,11 +1,13 @@
 import path from "node:path";
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import Database from "better-sqlite3";
 
 export interface DbOptions {
   stateDir: string;
-  extensionPath: string;
+  extensionPath?: string | null;
   vectorDimensions: number;
+  logger?: (message: string) => void;
 }
 
 export interface FileRow {
@@ -20,6 +22,8 @@ export class HadrixDb {
   private db: Database.Database;
   private vectorDimensions: number;
   private embeddingReset = false;
+  private vectorMode: "fast" | "portable" = "portable";
+  private fallbackNotified = false;
 
   constructor(private options: DbOptions) {
     mkdirSync(options.stateDir, { recursive: true });
@@ -32,15 +36,6 @@ export class HadrixDb {
   private init() {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
-
-    try {
-      this.db.loadExtension(this.options.extensionPath);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Failed to load SQLite vector extension at ${this.options.extensionPath}. ${message}`
-      );
-    }
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS files (
@@ -77,16 +72,29 @@ export class HadrixDb {
 
     const existingDims = this.getMeta("embedding_dimensions");
     if (existingDims && Number(existingDims) !== this.vectorDimensions) {
-      this.resetEmbeddings();
+      try {
+        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
+      } catch {
+        // Ignore drop failures; we can still fall back to portable mode.
+      }
       this.embeddingReset = true;
     }
 
-    this.setMeta("embedding_dimensions", String(this.vectorDimensions));
+    const fastEnabled = this.tryEnableFastVectorSearch();
+    if (fastEnabled) {
+      this.vectorMode = "fast";
+      if (!this.ensureEmbeddingsTable("fast")) {
+        this.vectorMode = "portable";
+        this.notifyFallback();
+        this.ensureEmbeddingsTable("portable");
+      }
+    } else {
+      this.vectorMode = "portable";
+      this.notifyFallback();
+      this.ensureEmbeddingsTable("portable");
+    }
 
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings
-      USING vss0(embedding(${this.vectorDimensions}));
-    `);
+    this.setMeta("embedding_dimensions", String(this.vectorDimensions));
   }
 
   private setMeta(key: string, value: string) {
@@ -100,12 +108,117 @@ export class HadrixDb {
     return row?.value ?? null;
   }
 
-  private resetEmbeddings() {
-    this.db.exec("DELETE FROM chunk_embeddings;");
-  }
-
   didResetEmbeddings(): boolean {
     return this.embeddingReset;
+  }
+
+  private notifyFallback() {
+    if (this.fallbackNotified) return;
+    this.options.logger?.("Fast vector search unavailable; using portable mode.");
+    this.fallbackNotified = true;
+  }
+
+  private bufferToFloat32(buffer: Buffer): Float32Array {
+    const slice = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength
+    );
+    return new Float32Array(slice);
+  }
+
+  private cosineSimilarity(a: Float32Array, b: Float32Array): number {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    const length = Math.min(a.length, b.length);
+    for (let i = 0; i < length; i += 1) {
+      const av = a[i] ?? 0;
+      const bv = b[i] ?? 0;
+      dot += av * bv;
+      normA += av * av;
+      normB += bv * bv;
+    }
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  private tryEnableFastVectorSearch(): boolean {
+    if (this.options.extensionPath) {
+      try {
+        this.db.loadExtension(this.options.extensionPath);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      const require = createRequire(import.meta.url);
+      const mod = require("sqlite-vss");
+      const sqliteVss = (mod?.default ?? mod) as { load?: (db: Database.Database) => void; getLoadablePath?: () => string };
+      if (typeof sqliteVss.load === "function") {
+        sqliteVss.load(this.db);
+        return true;
+      }
+      if (typeof sqliteVss.getLoadablePath === "function") {
+        const loadable = sqliteVss.getLoadablePath();
+        if (loadable) {
+          this.db.loadExtension(loadable);
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
+  }
+
+  private ensureEmbeddingsTable(mode: "fast" | "portable"): boolean {
+    const row = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'chunk_embeddings' AND type = 'table'")
+      .get() as { sql?: string } | undefined;
+
+    const existingSql = row?.sql?.toLowerCase() ?? "";
+    const isVssTable = existingSql.includes("vss0");
+
+    if (mode === "fast" && row && !isVssTable) {
+      try {
+        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
+      } catch {
+        // Ignore drop failures; we'll fall back if needed.
+      }
+      this.embeddingReset = true;
+    }
+
+    if (mode === "portable" && row && isVssTable) {
+      try {
+        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
+      } catch {
+        // Ignore drop failures; we'll fall back if needed.
+      }
+      this.embeddingReset = true;
+    }
+
+    if (mode === "fast") {
+      try {
+        this.db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings
+          USING vss0(embedding(${this.vectorDimensions}));
+        `);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chunk_embeddings (
+        chunk_id INTEGER PRIMARY KEY,
+        embedding BLOB NOT NULL
+      );
+    `);
+    return true;
   }
 
   upsertFile(params: { path: string; hash: string; mtimeMs: number; size: number }): FileRow {
@@ -157,7 +270,11 @@ export class HadrixDb {
     if (rows.length) {
       const ids = rows.map((row) => row.id);
       const placeholder = ids.map(() => "?").join(",");
-      this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
+      if (this.vectorMode === "fast") {
+        this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
+      } else {
+        this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
+      }
     }
 
     this.db.prepare("DELETE FROM chunks WHERE file_id = ?").run(fileId);
@@ -195,7 +312,10 @@ export class HadrixDb {
   }
 
   insertEmbeddings(rows: Array<{ chunkId: number; embedding: Buffer }>) {
-    const insert = this.db.prepare("INSERT INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)");
+    const insert =
+      this.vectorMode === "fast"
+        ? this.db.prepare("INSERT INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)")
+        : this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
 
     const tx = this.db.transaction(() => {
       for (const row of rows) {
@@ -223,9 +343,27 @@ export class HadrixDb {
   }
 
   querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
-    return this.db
-      .prepare("SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE vss_search(embedding, ?) LIMIT ?")
-      .all(embedding, limit) as Array<{ chunkId: number; distance: number }>;
+    if (this.vectorMode === "fast") {
+      return this.db
+        .prepare("SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE vss_search(embedding, ?) LIMIT ?")
+        .all(embedding, limit) as Array<{ chunkId: number; distance: number }>;
+    }
+
+    const target = this.bufferToFloat32(embedding);
+    const rows = this.db
+      .prepare("SELECT chunk_id as chunkId, embedding FROM chunk_embeddings")
+      .all() as Array<{ chunkId: number; embedding: Buffer }>;
+
+    const scored: Array<{ chunkId: number; distance: number }> = [];
+    for (const row of rows) {
+      const vector = this.bufferToFloat32(row.embedding);
+      if (vector.length !== target.length) continue;
+      const distance = 1 - this.cosineSimilarity(target, vector);
+      scored.push({ chunkId: row.chunkId, distance });
+    }
+
+    scored.sort((a, b) => a.distance - b.distance);
+    return scored.slice(0, limit);
   }
 
   getChunksByIds(ids: number[]): Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }> {

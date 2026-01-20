@@ -80,7 +80,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const db = new HadrixDb({
     stateDir: config.stateDir,
     extensionPath: config.vector.extensionPath,
-    vectorDimensions: config.embeddings.dimensions
+    vectorDimensions: config.embeddings.dimensions,
+    logger: log
   });
 
   const newEmbeddings: Array<{ chunkId: number; content: string }> = [];

@@ -40,7 +40,7 @@ export interface HadrixConfig {
   };
   vector: {
     extension: "sqlite-vss";
-    extensionPath: string;
+    extensionPath?: string | null;
   };
   sampling: {
     queries: string[];
@@ -282,7 +282,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     vector: {
       extension: "sqlite-vss",
       extensionPath:
-        readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || ""
+        readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || null
     },
     sampling: {
       queries: configFile.sampling?.queries ?? DEFAULT_QUERIES,
@@ -303,12 +303,6 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
 
   if (!cfg.api.baseUrl) {
     throw new Error("Missing API base URL. Set HADRIX_API_BASE or api.baseUrl in hadrix.config.json.");
-  }
-
-  if (!cfg.vector.extensionPath) {
-    throw new Error(
-      "Missing SQLite vector extension path. Set HADRIX_VECTOR_EXTENSION_PATH or vector.extensionPath in hadrix.config.json."
-    );
   }
 
   return {
