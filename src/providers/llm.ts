@@ -16,11 +16,6 @@ interface ChatCompletionResponse {
   error?: { message?: string };
 }
 
-interface AnthropicResponse {
-  content?: Array<{ type?: string; text?: string }>;
-  error?: { message?: string };
-}
-
 interface GeminiResponse {
   candidates?: Array<{
     content?: {
@@ -38,9 +33,6 @@ function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string):
 
   if (provider === "openai") {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (provider === "anthropic") {
-    headers["x-api-key"] = apiKey;
-    headers["anthropic-version"] = "2023-06-01";
   } else if (provider === "gemini") {
     headers["x-goog-api-key"] = apiKey;
   }
@@ -67,43 +59,6 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
 
   if (!apiKey) {
     throw new Error("Missing LLM API key.");
-  }
-
-  if (provider === "anthropic") {
-    const { system, rest } = splitSystemMessages(messages);
-    const response = await fetch(config.llm.endpoint, {
-      method: "POST",
-      headers: buildHeaders(config, provider, apiKey),
-      body: JSON.stringify({
-        model: config.llm.model,
-        system,
-        messages: rest.map((message) => ({
-          role: message.role === "assistant" ? "assistant" : "user",
-          content: message.content
-        })),
-        max_tokens: config.llm.maxTokens,
-        temperature: config.llm.temperature
-      })
-    });
-
-    const payload = (await response.json()) as AnthropicResponse;
-
-    if (!response.ok) {
-      const message = payload.error?.message || `LLM request failed with status ${response.status}`;
-      throw new Error(message);
-    }
-
-    const text = payload.content
-      ?.filter((item) => item.type === "text")
-      .map((item) => item.text)
-      .filter(Boolean)
-      .join("");
-
-    if (!text) {
-      throw new Error("LLM response missing message content.");
-    }
-
-    return text;
   }
 
   if (provider === "gemini") {

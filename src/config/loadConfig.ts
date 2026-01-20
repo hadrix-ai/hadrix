@@ -2,7 +2,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
-export type Provider = "openai" | "anthropic" | "gemini";
+export type Provider = "openai" | "gemini";
 
 export interface HadrixConfig {
   projectRoot: string;
@@ -125,7 +125,6 @@ function parseJsonEnv(name: string): Record<string, string> {
 
 function defaultBaseUrl(provider: Provider): string {
   if (provider === "openai") return "https://api.openai.com";
-  if (provider === "anthropic") return "https://api.anthropic.com";
   return "https://generativelanguage.googleapis.com";
 }
 
@@ -135,7 +134,6 @@ function defaultEmbeddingModel(provider: Provider): string {
 }
 
 function defaultLlmModel(provider: Provider): string {
-  if (provider === "anthropic") return "claude-sonnet-4-20250514";
   if (provider === "gemini") return "gemini-2.5-flash";
   return "gpt-4o-mini";
 }
@@ -146,9 +144,11 @@ function normalizeGeminiModel(model: string): string {
 
 function normalizeProvider(raw: string | undefined | null): Provider {
   const value = (raw || "").toLowerCase();
-  if (value === "claude") return "anthropic";
-  if (value === "anthropic" || value === "openai" || value === "gemini") {
+  if (value === "openai" || value === "gemini") {
     return value as Provider;
+  }
+  if (value === "anthropic" || value === "claude") {
+    throw new Error("Claude/Anthropic is not supported. Use openai or gemini.");
   }
   return "openai";
 }
@@ -199,7 +199,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     (llmProvider === "openai" ? baseUrl : defaultBaseUrl(llmProvider));
 
   const apiKey =
-    readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
     configFile.api?.apiKey ||
     "";
 
@@ -209,7 +209,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     apiKey;
 
   const llmApiKey =
-    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
     configFile.llm?.apiKey ||
     apiKey;
 
@@ -241,11 +241,9 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     configFile.llm?.endpoint ||
     (llmProvider === "openai"
       ? `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`
-      : llmProvider === "anthropic"
-        ? `${llmBaseUrl.replace(/\/$/, "")}/v1/messages`
-        : llmProvider === "gemini"
-          ? `${llmBaseUrl.replace(/\/$/, "")}/v1beta/models/${llmModel}:generateContent`
-          : "");
+      : llmProvider === "gemini"
+        ? `${llmBaseUrl.replace(/\/$/, "")}/v1beta/models/${llmModel}:generateContent`
+        : "");
 
   const cfg: HadrixConfig = {
     projectRoot: params.projectRoot,
@@ -299,7 +297,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
 
   if (!cfg.api.apiKey) {
     throw new Error(
-      "Missing API key. Set HADRIX_API_KEY (or provider-specific key like OPENAI_API_KEY/ANTHROPIC_API_KEY/GEMINI_API_KEY) or api.apiKey in hadrix.config.json."
+      "Missing API key. Set HADRIX_API_KEY (or provider-specific key like OPENAI_API_KEY/GEMINI_API_KEY) or api.apiKey in hadrix.config.json."
     );
   }
 
@@ -311,10 +309,6 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     throw new Error(
       "Missing SQLite vector extension path. Set HADRIX_VECTOR_EXTENSION_PATH or vector.extensionPath in hadrix.config.json."
     );
-  }
-
-  if (cfg.embeddings.provider === "anthropic") {
-    throw new Error("Anthropic does not provide an embeddings API. Set embeddings.provider to openai or gemini.");
   }
 
   return {

@@ -53,10 +53,6 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
     throw new Error("Missing embeddings API key.");
   }
 
-  if (provider === "anthropic") {
-    throw new Error("Anthropic does not provide an embeddings API.");
-  }
-
   if (provider === "gemini") {
     const modelName = config.embeddings.model.startsWith("models/")
       ? config.embeddings.model
