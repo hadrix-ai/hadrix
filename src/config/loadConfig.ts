@@ -39,7 +39,7 @@ export interface HadrixConfig {
     exclude: string[];
   };
   vector: {
-    extension: "sqlite-vss";
+    extension: "sqlite-vec";
     extensionPath?: string | null;
   };
   sampling: {
@@ -280,7 +280,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       exclude: configFile.chunking?.exclude ?? DEFAULT_EXCLUDES
     },
     vector: {
-      extension: "sqlite-vss",
+      extension: "sqlite-vec",
       extensionPath:
         readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || null
     },

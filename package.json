@@ -30,7 +30,7 @@
     "picocolors": "^1.0.0"
   },
   "optionalDependencies": {
-    "sqlite-vss": "^0.1.2"
+    "sqlite-vec": "^0.1.7"
   },
   "devDependencies": {
     "tsup": "^8.0.1",

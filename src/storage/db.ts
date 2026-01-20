@@ -154,18 +154,11 @@ export class HadrixDb {
 
     try {
       const require = createRequire(import.meta.url);
-      const mod = require("sqlite-vss");
-      const sqliteVss = (mod?.default ?? mod) as { load?: (db: Database.Database) => void; getLoadablePath?: () => string };
-      if (typeof sqliteVss.load === "function") {
-        sqliteVss.load(this.db);
+      const mod = require("sqlite-vec");
+      const sqliteVec = (mod?.default ?? mod) as { load?: (db: Database.Database) => void };
+      if (typeof sqliteVec.load === "function") {
+        sqliteVec.load(this.db);
         return true;
-      }
-      if (typeof sqliteVss.getLoadablePath === "function") {
-        const loadable = sqliteVss.getLoadablePath();
-        if (loadable) {
-          this.db.loadExtension(loadable);
-          return true;
-        }
       }
     } catch {
       return false;
@@ -180,9 +173,9 @@ export class HadrixDb {
       .get() as { sql?: string } | undefined;
 
     const existingSql = row?.sql?.toLowerCase() ?? "";
-    const isVssTable = existingSql.includes("vss0");
+    const isVecTable = existingSql.includes("vec0");
 
-    if (mode === "fast" && row && !isVssTable) {
+    if (mode === "fast" && row && !isVecTable) {
       try {
         this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
       } catch {
@@ -191,7 +184,7 @@ export class HadrixDb {
       this.embeddingReset = true;
     }
 
-    if (mode === "portable" && row && isVssTable) {
+    if (mode === "portable" && row && isVecTable) {
       try {
         this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
       } catch {
@@ -204,7 +197,10 @@ export class HadrixDb {
       try {
         this.db.exec(`
           CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings
-          USING vss0(embedding(${this.vectorDimensions}));
+          USING vec0(
+            chunk_id integer primary key,
+            embedding float[${this.vectorDimensions}] distance_metric=cosine
+          );
         `);
         return true;
       } catch {
@@ -271,7 +267,7 @@ export class HadrixDb {
       const ids = rows.map((row) => row.id);
       const placeholder = ids.map(() => "?").join(",");
       if (this.vectorMode === "fast") {
-        this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
+        this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
       } else {
         this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
       }
@@ -314,7 +310,7 @@ export class HadrixDb {
   insertEmbeddings(rows: Array<{ chunkId: number; embedding: Buffer }>) {
     const insert =
       this.vectorMode === "fast"
-        ? this.db.prepare("INSERT INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)")
+        ? this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)")
         : this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
 
     const tx = this.db.transaction(() => {
@@ -345,7 +341,7 @@ export class HadrixDb {
   querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
     if (this.vectorMode === "fast") {
       return this.db
-        .prepare("SELECT rowid as chunkId, distance FROM chunk_embeddings WHERE vss_search(embedding, ?) LIMIT ?")
+        .prepare("SELECT chunk_id as chunkId, distance FROM chunk_embeddings WHERE embedding MATCH ? AND k = ?")
         .all(embedding, limit) as Array<{ chunkId: number; distance: number }>;
     }
 

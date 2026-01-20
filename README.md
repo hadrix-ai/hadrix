@@ -33,7 +33,7 @@ Fast vector search unavailable; using portable mode.
 For debugging or power users, you can force a specific vector extension file:
 
 ```bash
-HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vss0.dylib
+HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vector-extension.dylib
 ```
 
 If the override cannot be loaded, Hadrix silently falls back to portable mode.
