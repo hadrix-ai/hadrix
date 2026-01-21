@@ -1,14 +1,16 @@
 import { statSync } from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import { loadConfig } from "../config/loadConfig.js";
 import { discoverFiles } from "../fs/discover.js";
 import { chunkFile, hashFile, toRelative } from "../chunking/chunker.js";
 import { HadrixDb } from "../storage/db.js";
 import { embedTexts } from "../providers/embedding.js";
-import { runChatCompletion } from "../providers/llm.js";
-import { buildScanMessages, parseFindings, type PromptChunk } from "./prompt.js";
-import { runStaticScanners, summarizeStaticFindings } from "./staticScanners.js";
-import type { Finding, ScanResult, StaticFinding } from "../types.js";
+import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
+import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
+import { runStaticScanners } from "./staticScanners.js";
+import type { ExistingScanFinding, Finding, RepositoryScanFinding, ScanResult, StaticFinding } from "../types.js";
 
 export interface RunScanOptions {
   projectRoot: string;
@@ -28,38 +30,132 @@ function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
   return Buffer.from(floats.buffer);
 }
 
-function pickChunks(
-  chunks: Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }>,
-  orderedIds: number[],
-  maxChunks: number,
-  maxChunksPerFile: number
-): PromptChunk[] {
-  const chunkById = new Map<number, PromptChunk>();
-  for (const chunk of chunks) {
-    chunkById.set(chunk.id, {
-      id: chunk.chunk_uid,
-      filepath: chunk.filepath,
-      startLine: chunk.start_line,
-      endLine: chunk.end_line,
-      content: chunk.content
-    });
-  }
-
-  const perFileCount = new Map<string, number>();
-  const selected: PromptChunk[] = [];
-
-  for (const id of orderedIds) {
-    const chunk = chunkById.get(id);
-    if (!chunk) continue;
-    const count = perFileCount.get(chunk.filepath) ?? 0;
-    if (count >= maxChunksPerFile) continue;
-    selected.push(chunk);
-    perFileCount.set(chunk.filepath, count + 1);
-    if (selected.length >= maxChunks) break;
-  }
-
-  return selected;
+function sha256(input: string): string {
+  return crypto.createHash("sha256").update(input).digest("hex");
 }
+
+function normalizePath(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.?\/*/, "")
+    .replace(/\/+/g, "/")
+    .replace(/\/+$/, "");
+}
+
+function normalizeLineNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.trunc(parsed);
+    }
+  }
+  return fallback;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+  }
+  return [];
+}
+
+function mergeStringArrays(...lists: string[][]): string[] {
+  const merged = new Set<string>();
+  for (const list of lists) {
+    for (const item of list) {
+      const trimmed = item.trim();
+      if (trimmed) {
+        merged.add(trimmed);
+      }
+    }
+  }
+  return Array.from(merged);
+}
+
+function normalizeLocation(
+  location: Record<string, unknown> | null,
+  fallbackPath: string
+): { filepath: string; startLine: number; endLine: number } {
+  const record = toRecord(location);
+  const filepathRaw = (record.filepath ?? record.filePath ?? record.path ?? record.file) as unknown;
+  const filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
+  const safePath = filepath || normalizePath(fallbackPath) || "(repository)";
+  const startLine = normalizeLineNumber(
+    record.startLine ?? record.start_line ?? record.line ?? record.start,
+    1
+  );
+  const endLine = normalizeLineNumber(
+    record.endLine ?? record.end_line ?? record.lineEnd ?? record.end,
+    startLine
+  );
+  return {
+    filepath: safePath,
+    startLine,
+    endLine: endLine < startLine ? startLine : endLine
+  };
+}
+
+function toExistingFindings(staticFindings: StaticFinding[]): ExistingScanFinding[] {
+  return staticFindings.map((finding) => ({
+    type: null,
+    source: finding.tool,
+    severity: finding.severity,
+    summary: finding.message,
+    location: {
+      filepath: normalizePath(finding.filepath),
+      startLine: finding.startLine,
+      endLine: finding.endLine
+    },
+    details: {
+      tool: finding.tool,
+      ruleId: finding.ruleId
+    }
+  }));
+}
+
+function toRepositoryFinding(finding: RepositoryScanFinding, fallbackPath: string): Finding {
+  const details = toRecord(finding.details);
+  const location = normalizeLocation(finding.location ?? null, fallbackPath);
+  const evidence = mergeStringArrays(
+    toStringArray(finding.evidence),
+    toStringArray(details.evidence)
+  );
+  const remediation =
+    typeof details.recommendation === "string" ? details.recommendation : undefined;
+  const rationale = typeof details.rationale === "string" ? details.rationale : "";
+  const description =
+    rationale || (typeof details.description === "string" ? details.description : "");
+  const title = finding.summary.trim();
+  const id = sha256(`${title}:${location.filepath}:${location.startLine}:${location.endLine}`);
+
+  return {
+    id,
+    title,
+    severity: finding.severity,
+    description,
+    location,
+    evidence: evidence.length ? evidence.join(" | ") : undefined,
+    remediation,
+    source: "llm",
+    chunkId: null
+  };
+}
+
 
 export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const start = Date.now();
@@ -170,7 +266,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     const allChunks = db.getAllChunks();
     const scannedChunks = allChunks.length;
 
-    if (!allChunks.length || !config.sampling.queries.length) {
+    if (!allChunks.length) {
       return {
         findings: toStaticFindings(staticFindings),
         scannedFiles: files.length,
@@ -179,34 +275,55 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       };
     }
 
-    const queryEmbeddings = await embedTexts(config, config.sampling.queries);
-    const candidates = new Map<number, number>();
+    let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
+    if (config.sampling.queries.length) {
+      const queryEmbeddings = await embedTexts(config, config.sampling.queries);
+      const candidates = new Map<number, number>();
 
-    for (const vector of queryEmbeddings) {
-      const results = db.querySimilar(
-        embeddingToBuffer(vector, config.embeddings.dimensions),
-        config.sampling.topKPerQuery
-      );
-      for (const result of results) {
-        const existing = candidates.get(result.chunkId);
-        if (existing === undefined || result.distance < existing) {
-          candidates.set(result.chunkId, result.distance);
+      for (const vector of queryEmbeddings) {
+        const results = db.querySimilar(
+          embeddingToBuffer(vector, config.embeddings.dimensions),
+          config.sampling.topKPerQuery
+        );
+        for (const result of results) {
+          const existing = candidates.get(result.chunkId);
+          if (existing === undefined || result.distance < existing) {
+            candidates.set(result.chunkId, result.distance);
+          }
         }
       }
+
+      const orderedIds = [...candidates.entries()]
+        .sort((a, b) => a[1] - b[1])
+        .map(([id]) => id);
+
+      const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
+      const rows = db.getChunksByIds(limitedIds);
+      const rowById = new Map(rows.map((row) => [row.id, row]));
+      preferredChunks = limitedIds
+        .map((id) => rowById.get(id))
+        .filter(Boolean)
+        .map((row) => toLocalChunk(row!));
     }
 
-    const orderedIds = [...candidates.entries()]
-      .sort((a, b) => a[1] - b[1])
-      .map(([id]) => id);
-
-    const selectedChunks = pickChunks(
-      db.getChunksByIds(orderedIds),
-      orderedIds,
-      config.sampling.maxChunks,
-      config.sampling.maxChunksPerFile
+    const fileSamples = buildRepositoryFileSamples(
+      allChunks.map((chunk) =>
+        toLocalChunk({
+          filepath: chunk.filepath,
+          chunk_index: chunk.chunk_index,
+          start_line: chunk.start_line,
+          end_line: chunk.end_line,
+          content: chunk.content
+        })
+      ),
+      {
+        maxFiles: config.sampling.maxChunks,
+        maxChunksPerFile: config.sampling.maxChunksPerFile,
+        preferredChunks
+      }
     );
 
-    if (!selectedChunks.length) {
+    if (!fileSamples.length) {
       return {
         findings: toStaticFindings(staticFindings),
         scannedFiles: files.length,
@@ -215,14 +332,39 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       };
     }
 
-    const staticSummary = summarizeStaticFindings(staticFindings);
-    const messages = buildScanMessages(selectedChunks, staticSummary);
-    const response = await runChatCompletion(config, messages);
-    const chunkMap = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]));
-    const findings: Finding[] = parseFindings(response, chunkMap);
+    const repository = {
+      fullName: path.basename(config.projectRoot) || "local-repo",
+      repoPaths: [""]
+    };
+
+    const existingFindings = toExistingFindings(staticFindings);
+
+    const llmFindings = await scanRepository({
+      config,
+      repository,
+      files: fileSamples,
+      existingFindings
+    });
+
+    let compositeFindings: RepositoryScanFinding[] = [];
+    if (llmFindings.length || existingFindings.length) {
+      compositeFindings = await scanRepositoryComposites({
+        config,
+        repository,
+        files: fileSamples,
+        existingFindings,
+        priorFindings: llmFindings
+      });
+    }
+
+    const combinedFindings = reduceRepositoryFindings([...llmFindings, ...compositeFindings]);
+    const fallbackPath = "(repository)";
+    const llmOutput = combinedFindings.map((finding) =>
+      toRepositoryFinding(finding, fallbackPath)
+    );
 
     return {
-      findings: [...toStaticFindings(staticFindings), ...findings],
+      findings: [...toStaticFindings(staticFindings), ...llmOutput],
       scannedFiles: files.length,
       scannedChunks,
       durationMs: Date.now() - start
@@ -234,12 +376,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
 function toStaticFindings(staticFindings: StaticFinding[]): Finding[] {
   return staticFindings.map((finding) => ({
-    id: `${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`,
+    id: sha256(`${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`),
     title: `${finding.tool}: ${finding.ruleId}`,
     severity: finding.severity,
     description: finding.message,
     location: {
-      filepath: finding.filepath,
+      filepath: normalizePath(finding.filepath),
       startLine: finding.startLine,
       endLine: finding.endLine
     },

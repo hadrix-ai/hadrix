@@ -303,7 +303,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       queries: configFile.sampling?.queries ?? DEFAULT_QUERIES,
       topKPerQuery: configFile.sampling?.topKPerQuery ?? 8,
       maxChunks: configFile.sampling?.maxChunks ?? 80,
-      maxChunksPerFile: configFile.sampling?.maxChunksPerFile ?? 2
+      maxChunksPerFile: configFile.sampling?.maxChunksPerFile ?? 5
     },
     staticScanners: {
       semgrep: {

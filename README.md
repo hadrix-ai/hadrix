@@ -85,31 +85,27 @@ If the override cannot be loaded, Hadrix silently falls back to portable mode.
 ## Architecture
 
 ```text
-      ┌──────────────┐
-      │   hadrix     │
-      └──────┬───────┘
-             │
-             v
-   ┌───────────────────┐
-   │ Static scanners   │
-   │ semgrep/gitleaks  │
-   │ osv-scanner       │
-   └────────┬──────────┘
-            │ static findings
-            v
-   ┌───────────────────┐
-   │ Chunk + Embed     │
-   │ (SQLite storage)  │
-   └────────┬──────────┘
-            │ retrieve top‑k
-            v
-   ┌───────────────────┐
-   │ LLM scan          │
-   │ + static summary  │
-   └────────┬──────────┘
-            │
-            v
-   ┌───────────────────┐
-   │ Findings output   │
-   └───────────────────┘
+hadrix scan
+  |
+  +--> Static scanners (semgrep, gitleaks, osv-scanner)
+  |       |
+  |       +--> existing findings ------------------------------+
+  |                                                            |
+  +--> File discovery -> Chunking -> Embeddings -> SQLite       |
+        (vectorlite fast mode or portable mode)                 |
+          |                                                     |
+          +--> Vector retrieval (top-k)                         |
+          +--> Heuristic sampling + file role analysis          |
+                        |                                       |
+                        +--> Candidate findings                |
+                                |                              |
+                                v                              |
+                          LLM map scan (per-file) <-------------+
+                                |
+                                +--> Candidate promotion
+                                |
+                                +--> Composite pass (repo-wide)
+                                |
+                                v
+                           Findings output
 ```
