@@ -18,7 +18,7 @@ export interface Finding {
 }
 
 export interface StaticFinding {
-  tool: "semgrep" | "gitleaks" | "osv-scanner";
+  tool: "semgrep" | "gitleaks" | "osv-scanner" | "eslint";
   ruleId: string;
   message: string;
   severity: Severity;

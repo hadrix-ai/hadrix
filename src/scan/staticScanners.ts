@@ -2,6 +2,10 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { ESLint } from "eslint";
+import eslintPluginSecurity from "eslint-plugin-security";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
 
@@ -10,6 +14,10 @@ interface ToolPaths {
   gitleaks: string;
   osvScanner: string;
 }
+
+const require = createRequire(import.meta.url);
+const ESLINT_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const TYPESCRIPT_ESLINT_PARSER = require.resolve("@typescript-eslint/parser");
 
 export function getToolsDir(): string {
   return path.join(os.homedir(), ".hadrix", "tools");
@@ -83,8 +91,13 @@ export function assertStaticScannersAvailable(config: HadrixConfig): ToolPaths {
   return { semgrep, gitleaks, osvScanner };
 }
 
-function mapSeverity(tool: StaticFinding["tool"], raw: string | undefined): Severity {
-  const value = (raw || "").toLowerCase();
+function mapSeverity(tool: StaticFinding["tool"], raw: string | number | undefined): Severity {
+  if (tool === "eslint") {
+    if (raw === 2) return "high";
+    if (raw === 1) return "medium";
+    return "low";
+  }
+  const value = (typeof raw === "string" ? raw : "").toLowerCase();
   if (tool === "semgrep") {
     if (value === "error") return "high";
     if (value === "warning") return "medium";
@@ -113,6 +126,88 @@ async function spawnCapture(command: string, args: string[], cwd: string): Promi
     proc.on("error", (err) => reject(err));
     proc.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
+  if (!config.staticScanners.eslint.enabled) return [];
+
+  const extensions = (config.staticScanners.eslint.extensions ?? [])
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+  if (!extensions.length) return [];
+
+  const ignorePatterns = (config.staticScanners.eslint.ignorePatterns ?? [])
+    .map((pattern) => pattern.trim())
+    .filter(Boolean);
+
+  const eslint = new ESLint({
+    useEslintrc: false,
+    errorOnUnmatchedPattern: false,
+    resolvePluginsRelativeTo: ESLINT_PLUGIN_ROOT,
+    overrideConfig: {
+      ignorePatterns
+    },
+    baseConfig: {
+      ...(eslintPluginSecurity as any).configs?.recommended,
+      parser: TYPESCRIPT_ESLINT_PARSER,
+      plugins: ["@typescript-eslint", "security"],
+      env: { es2021: true, node: true },
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        ecmaFeatures: { jsx: true }
+      }
+    },
+    cwd: scanRoot
+  });
+
+  const filePatterns = extensions.map((ext) => `**/*${ext}`);
+  const results = await eslint.lintFiles(filePatterns);
+  const fileCache = new Map<string, string>();
+
+  const readSnippet = (filePath: string, startLine: number, endLine: number): string | undefined => {
+    if (startLine <= 0) return undefined;
+    let content = fileCache.get(filePath);
+    if (!content) {
+      try {
+        content = readFileSync(filePath, "utf-8");
+        fileCache.set(filePath, content);
+      } catch {
+        return undefined;
+      }
+    }
+    const lines = content.split("\n");
+    const startIdx = Math.max(0, startLine - 1);
+    const endIdx = Math.min(lines.length, endLine);
+    return lines.slice(startIdx, endIdx).join("\n").slice(0, 400);
+  };
+
+  const findings: StaticFinding[] = [];
+  for (const res of results) {
+    const filePathRaw = res.filePath;
+    if (!filePathRaw) continue;
+    const absPath = path.isAbsolute(filePathRaw) ? filePathRaw : path.join(scanRoot, filePathRaw);
+    const filepath = path.relative(repoRoot, absPath);
+
+    for (const msg of res.messages) {
+      if (!msg.ruleId || !msg.line) continue;
+      const startLine = msg.line;
+      const endLine = msg.endLine && msg.endLine > 0 ? msg.endLine : startLine;
+      findings.push({
+        tool: "eslint",
+        ruleId: msg.ruleId,
+        message: msg.message,
+        severity: mapSeverity("eslint", msg.severity),
+        filepath,
+        startLine,
+        endLine,
+        snippet: readSnippet(absPath, startLine, endLine)
+      });
+    }
+  }
+
+  return findings;
 }
 
 async function runSemgrep(config: HadrixConfig, toolPath: string, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
@@ -290,14 +385,15 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
   mkdirSync(getToolsDir(), { recursive: true });
   const tools = assertStaticScannersAvailable(config);
 
-  logger?.("Running static scanners (semgrep, gitleaks, osv-scanner)...");
-  const [semgrep, gitleaks, osv] = await Promise.all([
+  logger?.("Running static scanners (eslint, semgrep, gitleaks, osv-scanner)...");
+  const [eslint, semgrep, gitleaks, osv] = await Promise.all([
+    runEslint(config, scanRoot, config.projectRoot),
     runSemgrep(config, tools.semgrep, scanRoot, config.projectRoot),
     runGitleaks(tools.gitleaks, scanRoot, config.projectRoot),
     runOsvScanner(tools.osvScanner, scanRoot, config.projectRoot)
   ]);
 
-  return [...semgrep, ...gitleaks, ...osv];
+  return [...eslint, ...semgrep, ...gitleaks, ...osv];
 }
 
 export function summarizeStaticFindings(findings: StaticFinding[], maxItems = 50): string {

@@ -62,6 +62,11 @@ export interface HadrixConfig {
     osvScanner: {
       path?: string | null;
     };
+    eslint: {
+      enabled: boolean;
+      extensions: string[];
+      ignorePatterns: string[];
+    };
   };
   output: {
     format: "text" | "json";
@@ -102,6 +107,15 @@ const DEFAULT_EXCLUDES = [
   "**/.next/**",
   "**/coverage/**",
   "**/out/**"
+];
+
+const DEFAULT_ESLINT_EXTENSIONS = [
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".cjs"
 ];
 
 const DEFAULT_QUERIES = [
@@ -321,6 +335,14 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       },
       osvScanner: {
         path: readEnv("HADRIX_OSV_SCANNER_PATH") || configFile.staticScanners?.osvScanner?.path || null
+      },
+      eslint: {
+        enabled: configFile.staticScanners?.eslint?.enabled ?? true,
+        extensions: configFile.staticScanners?.eslint?.extensions ?? DEFAULT_ESLINT_EXTENSIONS,
+        ignorePatterns:
+          configFile.staticScanners?.eslint?.ignorePatterns ??
+          configFile.chunking?.exclude ??
+          DEFAULT_EXCLUDES
       }
     },
     output: {

@@ -194,7 +194,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   const autoYes = options.autoYes ?? false;
   const results: InstallResult[] = [];
 
-  log(logger, "Hadrix setup: installing required static scanners.");
+  log(logger, "Hadrix setup: installing required external static scanners.");
 
   const tools: Array<{
     name: "semgrep" | "gitleaks" | "osv-scanner";
