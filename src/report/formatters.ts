@@ -16,7 +16,15 @@ function severityLabel(severity: Finding["severity"]): string {
 }
 
 function formatFinding(finding: Finding): string {
-  const location = `${finding.location.filepath}:${finding.location.startLine}`;
+  const repoPath = finding.location.repoPath;
+  const filepath =
+    repoPath &&
+    finding.location.filepath &&
+    !finding.location.filepath.startsWith(`${repoPath}/`) &&
+    finding.location.filepath !== repoPath
+      ? `${repoPath}/${finding.location.filepath}`.replace(/\/+/g, "/")
+      : finding.location.filepath;
+  const location = `${filepath}:${finding.location.startLine}`;
   const lines: string[] = [];
   const sourceLabel = finding.source === "static" ? pc.cyan("STATIC") : pc.magenta("LLM");
   lines.push(`${severityLabel(finding.severity)} ${sourceLabel} ${finding.title}`);

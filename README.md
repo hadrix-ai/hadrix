@@ -46,6 +46,18 @@ hadrix setup
 HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix scan /path/to/repo
 ```
 
+## Monorepo support
+
+When scanning a monorepo root, Hadrix will try to infer an app root and scope the scan to that subdirectory.
+You can override or disable inference:
+
+```bash
+hadrix scan /path/to/monorepo --repo-path ui
+hadrix scan /path/to/monorepo --no-repo-path-inference
+```
+
+You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
+
 ## Static scanners
 
 Hadrix requires three local scanners and will refuse to run without them:

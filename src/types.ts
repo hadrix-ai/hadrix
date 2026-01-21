@@ -9,6 +9,7 @@ export interface Finding {
     filepath: string;
     startLine: number;
     endLine: number;
+    repoPath?: string;
   };
   evidence?: string;
   remediation?: string;

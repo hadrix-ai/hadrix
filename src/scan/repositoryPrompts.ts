@@ -35,6 +35,8 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Always include location.filepath, startLine, and endLine",
     "- If a file sample includes chunkIndex, include location.chunkIndex",
     "- Include a short type label and a brief evidence cue when possible",
+    "- Do not invent file paths or line numbers; if you cannot identify a real file/line from the samples, omit the finding",
+    "- Output strict JSON only (no markdown fences, comments, or placeholders)",
     "",
     "Explicitly look for:",
     "- IDOR (object fetched by ID without ownership or tenant validation)",

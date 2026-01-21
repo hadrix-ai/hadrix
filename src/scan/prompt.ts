@@ -37,6 +37,47 @@ function extractJson(text: string): string {
   return text.trim();
 }
 
+function stripJsonComments(input: string): string {
+  let output = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i] ?? "";
+    const next = input[i + 1] ?? "";
+    if (!inString && char === "/" && next === "/") {
+      i += 1;
+      while (i + 1 < input.length && input[i + 1] !== "\n") {
+        i += 1;
+      }
+      continue;
+    }
+    if (!inString && char === "/" && next === "*") {
+      i += 1;
+      while (i + 1 < input.length) {
+        if (input[i] === "*" && input[i + 1] === "/") {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    output += char;
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+    }
+  }
+  return output;
+}
+
 export function buildScanMessages(chunks: PromptChunk[], staticFindingsSummary?: string): ChatMessage[] {
   const system = [
     "You are a security code reviewer.",
@@ -80,7 +121,7 @@ export function parseFindings(raw: string, chunkMap: Map<string, PromptChunk>): 
   const jsonText = extractJson(raw);
   let data: unknown;
   try {
-    data = JSON.parse(jsonText);
+    data = JSON.parse(stripJsonComments(jsonText));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`LLM returned invalid JSON: ${message}`);

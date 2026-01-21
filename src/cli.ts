@@ -70,7 +70,18 @@ program
   .option("-c, --config <path>", "Path to hadrix.config.json")
   .option("-f, --format <format>", "Output format (text|json)")
   .option("--json", "Shortcut for --format json")
-  .action(async (target: string | undefined, options: { config?: string; format?: string; json?: boolean }) => {
+  .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
+  .option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots")
+  .action(async (
+    target: string | undefined,
+    options: {
+      config?: string;
+      format?: string;
+      json?: boolean;
+      repoPath?: string;
+      repoPathInference?: boolean;
+    }
+  ) => {
     const projectRoot = path.resolve(process.cwd(), target ?? ".");
     const format = options.json ? "json" : options.format ?? "text";
     const useSpinner = format !== "json" && process.stderr.isTTY;
@@ -92,6 +103,8 @@ program
       const result = await runScan({
         projectRoot,
         configPath: options.config,
+        repoPath: options.repoPath,
+        inferRepoPath: options.repoPathInference,
         logger: (message) => {
           if (format === "json") return;
           if (spinner) {

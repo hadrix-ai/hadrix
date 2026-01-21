@@ -6,6 +6,7 @@ export type Provider = "openai" | "gemini";
 
 export interface HadrixConfig {
   projectRoot: string;
+  repoPath?: string | null;
   stateDir: string;
   api: {
     provider: Provider;
@@ -261,6 +262,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
 
   const cfg: HadrixConfig = {
     projectRoot: params.projectRoot,
+    repoPath: readEnv("HADRIX_REPO_PATH") || configFile.repoPath || null,
     stateDir: path.join(params.projectRoot, ".hadrix"),
     api: {
       provider,

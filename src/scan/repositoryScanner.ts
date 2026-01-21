@@ -747,11 +747,53 @@ function extractJson(raw: string): any {
 
 function safeParseJson(raw: string): any {
   try {
-    return JSON.parse(raw);
+    const cleaned = stripJsonComments(raw);
+    return JSON.parse(cleaned);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`LLM returned invalid JSON: ${message}`);
   }
+}
+
+function stripJsonComments(input: string): string {
+  let output = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i] ?? "";
+    const next = input[i + 1] ?? "";
+    if (!inString && char === "/" && next === "/") {
+      i += 1;
+      while (i + 1 < input.length && input[i + 1] !== "\n") {
+        i += 1;
+      }
+      continue;
+    }
+    if (!inString && char === "/" && next === "*") {
+      i += 1;
+      while (i + 1 < input.length) {
+        if (input[i] === "*" && input[i + 1] === "/") {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    output += char;
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+    }
+  }
+  return output;
 }
 
 function applyLocationFallback(
@@ -781,7 +823,20 @@ function applyLocationFallback(
 
 function hasLocationFilepath(location: Record<string, unknown>): boolean {
   const raw = (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
-  return typeof raw === "string" && Boolean(raw.trim());
+  if (typeof raw !== "string") return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (isPlaceholderPath(trimmed)) return false;
+  return true;
+}
+
+function isPlaceholderPath(value: string): boolean {
+  const lower = value.toLowerCase();
+  return (
+    lower.includes("path/to/") ||
+    lower.includes("path\\to\\") ||
+    lower.includes("placeholder")
+  );
 }
 
 function hasLocationLineInfo(location: Record<string, unknown>): boolean {
@@ -800,7 +855,7 @@ function normalizeFindingLocation(
   const filepathRaw = (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
   const filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
 
-  if (filepath) {
+  if (filepath && !isPlaceholderPath(filepath)) {
     normalized.filepath = filepath;
   } else {
     delete normalized.filepath;

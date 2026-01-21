@@ -10,12 +10,15 @@ import { embedTexts } from "../providers/embedding.js";
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
+import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
 import type { ExistingScanFinding, Finding, RepositoryScanFinding, ScanResult, StaticFinding } from "../types.js";
 
 export interface RunScanOptions {
   projectRoot: string;
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
+  repoPath?: string | null;
+  inferRepoPath?: boolean;
   logger?: (message: string) => void;
 }
 
@@ -89,11 +92,19 @@ function mergeStringArrays(...lists: string[][]): string[] {
 
 function normalizeLocation(
   location: Record<string, unknown> | null,
-  fallbackPath: string
-): { filepath: string; startLine: number; endLine: number } {
+  fallbackPath: string,
+  fallbackRepoPath?: string | null
+): { filepath: string; startLine: number; endLine: number; repoPath?: string } {
   const record = toRecord(location);
   const filepathRaw = (record.filepath ?? record.filePath ?? record.path ?? record.file) as unknown;
-  const filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
+  let filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
+  const repoPathRaw = (record.repoPath ?? record.repo_path) as unknown;
+  const normalizedRepoPath = normalizeRepoPath(
+    typeof repoPathRaw === "string" ? repoPathRaw : fallbackRepoPath ?? ""
+  );
+  if (normalizedRepoPath && filepath && !filepath.startsWith(`${normalizedRepoPath}/`) && filepath !== normalizedRepoPath) {
+    filepath = `${normalizedRepoPath}/${filepath}`.replace(/\/+/g, "/");
+  }
   const safePath = filepath || normalizePath(fallbackPath) || "(repository)";
   const startLine = normalizeLineNumber(
     record.startLine ?? record.start_line ?? record.line ?? record.start,
@@ -103,34 +114,75 @@ function normalizeLocation(
     record.endLine ?? record.end_line ?? record.lineEnd ?? record.end,
     startLine
   );
-  return {
+  const normalized: {
+    filepath: string;
+    startLine: number;
+    endLine: number;
+    repoPath?: string;
+  } = {
     filepath: safePath,
     startLine,
     endLine: endLine < startLine ? startLine : endLine
   };
+  if (normalizedRepoPath) {
+    normalized.repoPath = normalizedRepoPath;
+  }
+  return normalized;
 }
 
-function toExistingFindings(staticFindings: StaticFinding[]): ExistingScanFinding[] {
-  return staticFindings.map((finding) => ({
-    type: null,
-    source: finding.tool,
-    severity: finding.severity,
-    summary: finding.message,
-    location: {
-      filepath: normalizePath(finding.filepath),
+function resolveScanRoot(
+  repoRoot: string,
+  repoPath?: string | null
+): { scanRoot: string; repoPath: string | null; missing?: string } {
+  const normalized = normalizeRepoPath(repoPath ?? "");
+  if (!normalized) {
+    return { scanRoot: repoRoot, repoPath: null };
+  }
+  const candidate = path.join(repoRoot, normalized);
+  try {
+    const stats = statSync(candidate);
+    if (stats.isDirectory()) {
+      return { scanRoot: candidate, repoPath: normalized };
+    }
+  } catch {
+    // Fall back to repo root when the repoPath doesn't exist.
+  }
+  return { scanRoot: repoRoot, repoPath: null, missing: normalized };
+}
+
+function toExistingFindings(staticFindings: StaticFinding[], repoPath?: string | null): ExistingScanFinding[] {
+  const normalizedRepoPath = normalizeRepoPath(repoPath ?? "");
+  return staticFindings.map((finding) => {
+    const filepath = normalizePath(finding.filepath);
+    const location: { filepath: string; startLine: number; endLine: number; repoPath?: string } = {
+      filepath,
       startLine: finding.startLine,
       endLine: finding.endLine
-    },
-    details: {
-      tool: finding.tool,
-      ruleId: finding.ruleId
+    };
+    if (normalizedRepoPath && (filepath === normalizedRepoPath || filepath.startsWith(`${normalizedRepoPath}/`))) {
+      location.repoPath = normalizedRepoPath;
     }
-  }));
+    return {
+      type: null,
+      source: finding.tool,
+      severity: finding.severity,
+      summary: finding.message,
+      location,
+      details: {
+        tool: finding.tool,
+        ruleId: finding.ruleId
+      }
+    };
+  });
 }
 
-function toRepositoryFinding(finding: RepositoryScanFinding, fallbackPath: string): Finding {
+function toRepositoryFinding(
+  finding: RepositoryScanFinding,
+  fallbackPath: string,
+  repoPath?: string | null
+): Finding {
   const details = toRecord(finding.details);
-  const location = normalizeLocation(finding.location ?? null, fallbackPath);
+  const location = normalizeLocation(finding.location ?? null, fallbackPath, repoPath);
   const evidence = mergeStringArrays(
     toStringArray(finding.evidence),
     toStringArray(details.evidence)
@@ -156,7 +208,6 @@ function toRepositoryFinding(finding: RepositoryScanFinding, fallbackPath: strin
   };
 }
 
-
 export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const start = Date.now();
   const config = await loadConfig({
@@ -166,12 +217,32 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   });
 
   const log = options.logger ?? (() => {});
+  const repoRoot = config.projectRoot;
+  const explicitRepoPath = normalizeRepoPath(options.repoPath ?? config.repoPath ?? "");
+  let repoPath: string | null = explicitRepoPath || null;
+  if (!repoPath && options.inferRepoPath !== false) {
+    log("Inferring repoPath...");
+    const inferredRepoPath = await inferRepoPathFromDisk(repoRoot);
+    if (inferredRepoPath) {
+      repoPath = inferredRepoPath;
+      log(`Inferred repoPath: ${repoPath}`);
+    }
+  }
 
-  const staticFindings = await runStaticScanners(config, config.projectRoot, log);
+  const resolved = resolveScanRoot(repoRoot, repoPath);
+  if (resolved.missing) {
+    log(`repoPath missing; falling back to repo root (${resolved.missing})`);
+  } else if (repoPath) {
+    log(`Scanning repoPath: ${repoPath}`);
+  }
+  const scanRoot = resolved.scanRoot;
+  repoPath = resolved.repoPath;
+
+  const staticFindings = await runStaticScanners(config, scanRoot, log);
   log("Static scanners complete.");
 
   const files = await discoverFiles({
-    root: config.projectRoot,
+    root: scanRoot,
     includeExtensions: config.chunking.includeExtensions,
     exclude: config.chunking.exclude,
     maxFileSizeBytes: config.chunking.maxFileSizeBytes
@@ -265,11 +336,16 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     }
 
     const allChunks = db.getAllChunks();
-    const scannedChunks = allChunks.length;
+    const scopedChunks = repoPath
+      ? allChunks.filter(
+          (chunk) => chunk.filepath === repoPath || chunk.filepath.startsWith(`${repoPath}/`)
+        )
+      : allChunks;
+    const scannedChunks = scopedChunks.length;
 
-    if (!allChunks.length) {
+    if (!scopedChunks.length) {
       return {
-        findings: toStaticFindings(staticFindings),
+        findings: toStaticFindings(staticFindings, repoPath),
         scannedFiles: files.length,
         scannedChunks,
         durationMs: Date.now() - start
@@ -305,12 +381,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       preferredChunks = limitedIds
         .map((id) => rowById.get(id))
         .filter(Boolean)
+        .filter((row) =>
+          repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
+        )
         .map((row) => toLocalChunk(row!));
     }
 
     log("Heuristic analysis and chunk sampling...");
     const fileSamples = buildRepositoryFileSamples(
-      allChunks.map((chunk) =>
+      scopedChunks.map((chunk) =>
         toLocalChunk({
           filepath: chunk.filepath,
           chunk_index: chunk.chunk_index,
@@ -328,7 +407,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     if (!fileSamples.length) {
       return {
-        findings: toStaticFindings(staticFindings),
+        findings: toStaticFindings(staticFindings, repoPath),
         scannedFiles: files.length,
         scannedChunks,
         durationMs: Date.now() - start
@@ -337,10 +416,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     const repository = {
       fullName: path.basename(config.projectRoot) || "local-repo",
-      repoPaths: [""]
+      repoPaths: repoPath ? [repoPath] : []
     };
 
-    const existingFindings = toExistingFindings(staticFindings);
+    const existingFindings = toExistingFindings(staticFindings, repoPath);
 
     log("LLM scan (map pass)...");
     const llmFindings = await scanRepository({
@@ -365,11 +444,11 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     const combinedFindings = reduceRepositoryFindings([...llmFindings, ...compositeFindings]);
     const fallbackPath = "(repository)";
     const llmOutput = combinedFindings.map((finding) =>
-      toRepositoryFinding(finding, fallbackPath)
+      toRepositoryFinding(finding, fallbackPath, repoPath)
     );
 
     return {
-      findings: [...toStaticFindings(staticFindings), ...llmOutput],
+      findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],
       scannedFiles: files.length,
       scannedChunks,
       durationMs: Date.now() - start
@@ -379,20 +458,28 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   }
 }
 
-function toStaticFindings(staticFindings: StaticFinding[]): Finding[] {
-  return staticFindings.map((finding) => ({
-    id: sha256(`${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`),
-    title: `${finding.tool}: ${finding.ruleId}`,
-    severity: finding.severity,
-    description: finding.message,
-    location: {
-      filepath: normalizePath(finding.filepath),
+function toStaticFindings(staticFindings: StaticFinding[], repoPath?: string | null): Finding[] {
+  const normalizedRepoPath = normalizeRepoPath(repoPath ?? "");
+  return staticFindings.map((finding) => {
+    const filepath = normalizePath(finding.filepath);
+    const location: { filepath: string; startLine: number; endLine: number; repoPath?: string } = {
+      filepath,
       startLine: finding.startLine,
       endLine: finding.endLine
-    },
-    evidence: finding.snippet,
-    remediation: undefined,
-    source: "static",
-    chunkId: null
-  }));
+    };
+    if (normalizedRepoPath && (filepath === normalizedRepoPath || filepath.startsWith(`${normalizedRepoPath}/`))) {
+      location.repoPath = normalizedRepoPath;
+    }
+    return {
+      id: sha256(`${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`),
+      title: `${finding.tool}: ${finding.ruleId}`,
+      severity: finding.severity,
+      description: finding.message,
+      location,
+      evidence: finding.snippet,
+      remediation: undefined,
+      source: "static",
+      chunkId: null
+    };
+  });
 }
