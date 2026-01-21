@@ -168,6 +168,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const log = options.logger ?? (() => {});
 
   const staticFindings = await runStaticScanners(config, config.projectRoot, log);
+  log("Static scanners complete.");
 
   const files = await discoverFiles({
     root: config.projectRoot,
@@ -277,6 +278,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
     if (config.sampling.queries.length) {
+      log("Retrieving top-k chunks...");
       const queryEmbeddings = await embedTexts(config, config.sampling.queries);
       const candidates = new Map<number, number>();
 
@@ -306,6 +308,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         .map((row) => toLocalChunk(row!));
     }
 
+    log("Heuristic analysis and chunk sampling...");
     const fileSamples = buildRepositoryFileSamples(
       allChunks.map((chunk) =>
         toLocalChunk({
@@ -339,6 +342,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     const existingFindings = toExistingFindings(staticFindings);
 
+    log("LLM scan (map pass)...");
     const llmFindings = await scanRepository({
       config,
       repository,
@@ -348,6 +352,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
     let compositeFindings: RepositoryScanFinding[] = [];
     if (llmFindings.length || existingFindings.length) {
+      log("LLM scan (composite pass)...");
       compositeFindings = await scanRepositoryComposites({
         config,
         repository,

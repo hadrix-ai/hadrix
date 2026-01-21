@@ -1,3 +1,5 @@
+import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type {
   ExistingScanFinding,
@@ -220,15 +222,25 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       { role: "user", content: JSON.stringify(payload, null, 2) }
     ]);
 
-    return parseFindings(response, input.repository, {
-      requireFilepath: true,
-      defaultLocation: {
-        filepath: file.path,
-        startLine: file.startLine,
-        endLine: file.endLine,
-        chunkIndex: file.chunkIndex
-      }
-    });
+    try {
+      return parseFindings(response, input.repository, {
+        requireFilepath: true,
+        defaultLocation: {
+          filepath: file.path,
+          startLine: file.startLine,
+          endLine: file.endLine,
+          chunkIndex: file.chunkIndex
+        }
+      });
+    } catch (err) {
+      const savedPath = await writeLlmDebugArtifact(
+        input.config,
+        "llm-map",
+        response
+      );
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`${message} (saved raw response to ${savedPath})`);
+    }
   });
 
   const llmFindings = results.flatMap((result) => result);
@@ -294,7 +306,17 @@ export async function scanRepositoryComposites(
     { role: "user", content: JSON.stringify(payload, null, 2) }
   ]);
 
-  return parseFindings(response, input.repository, { requireFilepath: false });
+  try {
+    return parseFindings(response, input.repository, { requireFilepath: false });
+  } catch (err) {
+    const savedPath = await writeLlmDebugArtifact(
+      input.config,
+      "llm-composite",
+      response
+    );
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${message} (saved raw response to ${savedPath})`);
+  }
 }
 
 function normalizeMapConcurrency(value?: number): number {
@@ -1247,4 +1269,25 @@ function normalizePath(value: string): string {
     .replace(/^\.?\/*/, "")
     .replace(/\/+/g, "/")
     .replace(/\/+$/, "");
+}
+
+async function writeLlmDebugArtifact(
+  config: HadrixConfig,
+  label: string,
+  response: string
+): Promise<string> {
+  const dir = path.join(config.stateDir, "llm-errors");
+  await mkdir(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const suffix = Math.random().toString(36).slice(2, 8);
+  const filename = `${label}-${timestamp}-${suffix}.txt`;
+  const filePath = path.join(dir, filename);
+  const content = [
+    "LLM response (raw):",
+    "",
+    response
+  ].join("\n");
+  await writeFile(filePath, content, "utf-8");
+  const relative = path.relative(process.cwd(), filePath);
+  return relative && !relative.startsWith("..") ? relative : filePath;
 }

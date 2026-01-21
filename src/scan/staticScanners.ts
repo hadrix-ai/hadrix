@@ -290,7 +290,7 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
   mkdirSync(getToolsDir(), { recursive: true });
   const tools = assertStaticScannersAvailable(config);
 
-  logger?.("Running static scanners...");
+  logger?.("Running static scanners (semgrep, gitleaks, osv-scanner)...");
   const [semgrep, gitleaks, osv] = await Promise.all([
     runSemgrep(config, tools.semgrep, scanRoot, config.projectRoot),
     runGitleaks(tools.gitleaks, scanRoot, config.projectRoot),
