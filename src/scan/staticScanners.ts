@@ -2,8 +2,6 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
 
@@ -13,9 +11,21 @@ interface ToolPaths {
   osvScanner: string;
 }
 
-const require = createRequire(import.meta.url);
-const ESLINT_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const TYPESCRIPT_ESLINT_PARSER = () => require.resolve("@typescript-eslint/parser");
+const ESLINT_FLAT_CONFIG_FILES = [
+  "eslint.config.js",
+  "eslint.config.cjs",
+  "eslint.config.mjs",
+  "eslint.config.ts"
+];
+const ESLINT_LEGACY_CONFIG_FILES = [
+  ".eslintrc",
+  ".eslintrc.js",
+  ".eslintrc.cjs",
+  ".eslintrc.json",
+  ".eslintrc.yml",
+  ".eslintrc.yaml"
+];
+
 
 export function getToolsDir(): string {
   return path.join(os.homedir(), ".hadrix", "tools");
@@ -37,6 +47,34 @@ function getSemgrepManagedPath(): string {
 
 function isExecutable(filePath: string): boolean {
   return existsSync(filePath);
+}
+
+function findEslintConfig(scanRoot: string): { configPath: string | null; legacyDetected: boolean } {
+  for (const name of ESLINT_FLAT_CONFIG_FILES) {
+    const candidate = path.join(scanRoot, name);
+    if (existsSync(candidate)) {
+      return { configPath: candidate, legacyDetected: false };
+    }
+  }
+
+  for (const name of ESLINT_LEGACY_CONFIG_FILES) {
+    const candidate = path.join(scanRoot, name);
+    if (existsSync(candidate)) {
+      return { configPath: null, legacyDetected: true };
+    }
+  }
+
+  try {
+    const pkgRaw = readFileSync(path.join(scanRoot, "package.json"), "utf-8");
+    const pkg = JSON.parse(pkgRaw) as { eslintConfig?: unknown };
+    if (pkg?.eslintConfig) {
+      return { configPath: null, legacyDetected: true };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { configPath: null, legacyDetected: false };
 }
 
 function findOnPath(command: string): string | null {
@@ -141,40 +179,64 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
 
   let ESLintCtor: typeof import("eslint").ESLint;
   let eslintPluginSecurity: any;
-  let parserPath: string;
+  let tsParser: any;
+  let fixupPluginRules: ((plugin: any) => any) | null = null;
   try {
     const eslintModule = await import("eslint");
     ESLintCtor = eslintModule.ESLint;
     const securityModule = await import("eslint-plugin-security");
     eslintPluginSecurity = (securityModule as any).default ?? securityModule;
-    parserPath = TYPESCRIPT_ESLINT_PARSER();
+    const parserModule = await import("@typescript-eslint/parser");
+    tsParser = (parserModule as any).default ?? parserModule;
+    const compatModule = await import("@eslint/compat");
+    fixupPluginRules = (compatModule as any).fixupPluginRules ?? (compatModule as any).default?.fixupPluginRules ?? null;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `eslint scanner unavailable. Install dependencies (eslint, eslint-plugin-security, @typescript-eslint/parser, @typescript-eslint/eslint-plugin). ${message}`
+      `eslint scanner unavailable. Install dependencies (eslint, eslint-plugin-security, @typescript-eslint/parser, @typescript-eslint/eslint-plugin, @eslint/compat). ${message}`
     );
   }
 
-  const eslint = new ESLintCtor({
-    useEslintrc: false,
-    errorOnUnmatchedPattern: false,
-    resolvePluginsRelativeTo: ESLINT_PLUGIN_ROOT,
-    overrideConfig: {
-      ignorePatterns
-    },
-    baseConfig: {
-      ...(eslintPluginSecurity as any).configs?.recommended,
-      parser: parserPath,
-      plugins: ["@typescript-eslint", "security"],
-      env: { es2021: true, node: true },
-      parserOptions: {
-        ecmaVersion: "latest",
-        sourceType: "module",
-        ecmaFeatures: { jsx: true }
-      }
-    },
-    cwd: scanRoot
-  });
+  const securityPlugin = fixupPluginRules ? fixupPluginRules(eslintPluginSecurity) : eslintPluginSecurity;
+  const recommendedRules = (eslintPluginSecurity as any).configs?.recommended?.rules ?? {};
+  const { configPath, legacyDetected } = findEslintConfig(scanRoot);
+  if (legacyDetected && !configPath) {
+    console.warn(
+      "[hadrix] Detected legacy ESLint config; ignoring it in favor of built-in security rules."
+    );
+  }
+
+  const eslint = configPath
+    ? new ESLintCtor({
+        cwd: scanRoot,
+        overrideConfigFile: configPath,
+        errorOnUnmatchedPattern: false
+      })
+    : new ESLintCtor({
+        cwd: scanRoot,
+        overrideConfigFile: true,
+        errorOnUnmatchedPattern: false,
+        overrideConfig: [
+          {
+            files: extensions.map((ext) => `**/*${ext}`),
+            ignores: ignorePatterns,
+            languageOptions: {
+              parser: tsParser,
+              ecmaVersion: "latest",
+              sourceType: "module",
+              parserOptions: {
+                ecmaFeatures: { jsx: true }
+              }
+            },
+        plugins: {
+          security: securityPlugin
+        },
+            rules: {
+              ...recommendedRules
+            }
+          }
+        ]
+      });
 
   const filePatterns = extensions.map((ext) => `**/*${ext}`);
   const results = await eslint.lintFiles(filePatterns);
