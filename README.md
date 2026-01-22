@@ -18,8 +18,6 @@ HADRIX_API_KEY=... \
 npm run dev -- scan /path/to/repo
 ```
 
-Use `--format json` for JSON output.
-
 ## Run without installing globally
 
 From the Hadrix repo:
@@ -94,6 +92,12 @@ HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vectorlite.dylib
 ```
 
 If the override cannot be loaded, Hadrix silently falls back to portable mode.
+
+## CLI options
+
+- `--format json` (or `--json`) outputs machine-readable JSON and disables the spinner.
+- `--repo-path <path>` scopes a monorepo scan to a subdirectory.
+- `--no-repo-path-inference` disables monorepo repoPath inference.
 
 ## Architecture
 
