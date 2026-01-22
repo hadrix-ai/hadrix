@@ -59,6 +59,19 @@ function formatDuration(durationMs: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
+async function promptYesNo(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(`${question} (y/N) `);
+  rl.close();
+  return ["y", "yes"].includes(answer.trim().toLowerCase());
+}
+
+function isMissingScannersError(message: string): boolean {
+  return message.includes("Missing required static scanners:");
+}
+
 program
   .name("hadrix")
   .description("Hadrix local security scan")
@@ -93,6 +106,26 @@ program
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
+    const logger = (message: string) => {
+      if (format === "json") return;
+      if (spinner) {
+        statusMessage = message;
+        spinner.update(formatStatus(statusMessage));
+        return;
+      }
+      console.error(message);
+    };
+
+    let attemptedSetup = false;
+    const runScanOnce = async () =>
+      await runScan({
+        projectRoot,
+        configPath: options.config,
+        repoPath: options.repoPath,
+        inferRepoPath: options.repoPathInference,
+        logger
+      });
+
     try {
       if (spinner) {
         spinner.start(formatStatus(statusMessage));
@@ -100,21 +133,37 @@ program
           spinner.update(formatStatus(statusMessage));
         }, 1000);
       }
-      const result = await runScan({
-        projectRoot,
-        configPath: options.config,
-        repoPath: options.repoPath,
-        inferRepoPath: options.repoPathInference,
-        logger: (message) => {
-          if (format === "json") return;
-          if (spinner) {
-            statusMessage = message;
-            spinner.update(formatStatus(statusMessage));
-            return;
-          }
-          console.error(message);
+
+      let result;
+      try {
+        result = await runScanOnce();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const shouldPrompt =
+          isMissingScannersError(message) && !attemptedSetup && format !== "json";
+        if (!shouldPrompt) {
+          throw err;
         }
-      });
+        spinner?.stop();
+        if (elapsedTimer) {
+          clearInterval(elapsedTimer);
+          elapsedTimer = null;
+        }
+        attemptedSetup = true;
+        const ok = await promptYesNo("Static scanners missing. Run 'hadrix setup' now?");
+        if (!ok) {
+          throw err;
+        }
+        await runSetup({ autoYes: false, logger: (msg) => console.log(msg) });
+        if (spinner) {
+          spinner.start(formatStatus(statusMessage));
+          elapsedTimer = setInterval(() => {
+            spinner.update(formatStatus(statusMessage));
+          }, 1000);
+        }
+        result = await runScanOnce();
+      }
+
       if (elapsedTimer) {
         clearInterval(elapsedTimer);
         elapsedTimer = null;
