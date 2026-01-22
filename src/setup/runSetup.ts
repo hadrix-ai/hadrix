@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdirSync, renameSync, chmodSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, renameSync, chmodSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { createRequire } from "node:module";
@@ -29,6 +29,53 @@ interface InstallResult {
 
 function log(logger: ((message: string) => void) | undefined, message: string) {
   logger?.(message);
+}
+
+function isEslintAvailable(): boolean {
+  try {
+    require.resolve("eslint");
+    require.resolve("eslint-plugin-security");
+    require.resolve("@typescript-eslint/parser");
+    require.resolve("@typescript-eslint/eslint-plugin");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isHadrixRepo(cwd: string): boolean {
+  try {
+    const raw = readFileSync(path.join(cwd, "package.json"), "utf-8");
+    const pkg = JSON.parse(raw) as { name?: string };
+    return pkg?.name === "hadrix";
+  } catch {
+    return false;
+  }
+}
+
+async function installEslintDeps(logger?: (message: string) => void): Promise<InstallResult> {
+  if (isEslintAvailable()) {
+    log(logger, "eslint already available (node_modules).");
+    return { tool: "eslint", installed: true, path: "node_modules" };
+  }
+
+  const cwd = process.cwd();
+  if (!isHadrixRepo(cwd)) {
+    throw new Error(
+      "eslint dependencies missing. Run setup from the Hadrix CLI repo or reinstall the CLI."
+    );
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn("npm", ["install", "--no-fund", "--no-audit"], { stdio: "inherit", cwd });
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`npm exited ${code}`))));
+  });
+
+  if (!isEslintAvailable()) {
+    throw new Error("eslint dependencies still missing after npm install.");
+  }
+
+  return { tool: "eslint", installed: true, path: "node_modules" };
 }
 
 function getPlatformKey(): string {
@@ -194,7 +241,25 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   const autoYes = options.autoYes ?? false;
   const results: InstallResult[] = [];
 
-  log(logger, "Hadrix setup: installing required external static scanners.");
+  log(logger, "Hadrix setup: installing required static scanners.");
+
+  if (!isEslintAvailable()) {
+    const ok = await promptYesNo("Install eslint scanner dependencies (npm)?", autoYes);
+    if (!ok) {
+      results.push({ tool: "eslint", installed: false });
+    } else {
+      try {
+        const result = await installEslintDeps(logger);
+        results.push(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(logger, `Failed to install eslint dependencies: ${message}`);
+        results.push({ tool: "eslint", installed: false });
+      }
+    }
+  } else {
+    results.push({ tool: "eslint", installed: true, path: "node_modules" });
+  }
 
   const tools: Array<{
     name: "semgrep" | "gitleaks" | "osv-scanner";

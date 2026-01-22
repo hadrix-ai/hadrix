@@ -60,13 +60,14 @@ You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
 
 ## Static scanners
 
-Hadrix requires three local scanners and will refuse to run without them:
+Hadrix requires local scanners and will refuse to run without them:
 
+- eslint (installed via npm dependencies)
 - semgrep
 - gitleaks
 - osv-scanner
 
-Run `hadrix setup` to install them interactively. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
+Run `hadrix setup` to install them interactively (eslint is installed via npm when you install Hadrix). Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
 
 ## Vector search modes
 

@@ -4,8 +4,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { ESLint } from "eslint";
-import eslintPluginSecurity from "eslint-plugin-security";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
 
@@ -17,7 +15,7 @@ interface ToolPaths {
 
 const require = createRequire(import.meta.url);
 const ESLINT_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const TYPESCRIPT_ESLINT_PARSER = require.resolve("@typescript-eslint/parser");
+const TYPESCRIPT_ESLINT_PARSER = () => require.resolve("@typescript-eslint/parser");
 
 export function getToolsDir(): string {
   return path.join(os.homedir(), ".hadrix", "tools");
@@ -141,7 +139,23 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
     .map((pattern) => pattern.trim())
     .filter(Boolean);
 
-  const eslint = new ESLint({
+  let ESLintCtor: typeof import("eslint").ESLint;
+  let eslintPluginSecurity: any;
+  let parserPath: string;
+  try {
+    const eslintModule = await import("eslint");
+    ESLintCtor = eslintModule.ESLint;
+    const securityModule = await import("eslint-plugin-security");
+    eslintPluginSecurity = (securityModule as any).default ?? securityModule;
+    parserPath = TYPESCRIPT_ESLINT_PARSER();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `eslint scanner unavailable. Install dependencies (eslint, eslint-plugin-security, @typescript-eslint/parser, @typescript-eslint/eslint-plugin). ${message}`
+    );
+  }
+
+  const eslint = new ESLintCtor({
     useEslintrc: false,
     errorOnUnmatchedPattern: false,
     resolvePluginsRelativeTo: ESLINT_PLUGIN_ROOT,
@@ -150,7 +164,7 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
     },
     baseConfig: {
       ...(eslintPluginSecurity as any).configs?.recommended,
-      parser: TYPESCRIPT_ESLINT_PARSER,
+      parser: parserPath,
       plugins: ["@typescript-eslint", "security"],
       env: { es2021: true, node: true },
       parserOptions: {
