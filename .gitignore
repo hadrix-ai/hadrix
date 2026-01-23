@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .hadrix/
+.hadrix-eval-fixtures/
+.hadrix-evals/
 
 .DS_Store
 *.log

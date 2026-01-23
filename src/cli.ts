@@ -271,6 +271,7 @@ program
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const evalStart = Date.now();
     let statusMessage = "Running evals...";
+    const deferredLogs: string[] = [];
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
@@ -279,6 +280,10 @@ program
     const logger = (message: string) => {
       if (output === "json") return;
       if (spinner) {
+        if (message.startsWith("Dedupe report saved to") || message.length > 120) {
+          deferredLogs.push(message);
+          return;
+        }
         statusMessage = message;
         spinner.update(formatStatus(statusMessage));
         return;
@@ -324,6 +329,11 @@ program
         elapsedTimer = null;
       }
       spinner?.stop();
+      if (deferredLogs.length) {
+        for (const line of deferredLogs) {
+          console.log(line);
+        }
+      }
 
       await writeEvalArtifacts(result, outDir).catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -344,6 +354,11 @@ program
         elapsedTimer = null;
       }
       spinner?.stop();
+      if (deferredLogs.length) {
+        for (const line of deferredLogs) {
+          console.log(line);
+        }
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error(pc.red(`Error: ${message}`));
       process.exitCode = 2;
