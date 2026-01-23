@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { getToolsDir, resolveToolPath } from "../scan/staticScanners.js";
+import { getJellyInstallDir, resolveJellyPath } from "../scan/jelly.js";
 
 const require = createRequire(import.meta.url);
 const tar = require("tar") as typeof import("tar");
@@ -13,7 +14,8 @@ const AdmZip = require("adm-zip") as typeof import("adm-zip");
 const VERSIONS = {
   gitleaks: "8.18.1",
   osvScanner: "1.9.2",
-  semgrep: "1.83.0"
+  semgrep: "1.83.0",
+  jelly: "0.12.0"
 };
 
 interface SetupOptions {
@@ -25,6 +27,7 @@ interface InstallResult {
   tool: string;
   installed: boolean;
   path?: string;
+  optional?: boolean;
 }
 
 function log(logger: ((message: string) => void) | undefined, message: string) {
@@ -225,6 +228,27 @@ async function installSemgrep(logger?: (message: string) => void): Promise<Insta
   return { tool: "semgrep", installed: true, path: semgrepPath };
 }
 
+async function installJelly(logger?: (message: string) => void): Promise<InstallResult> {
+  const jellyDir = getJellyInstallDir();
+  mkdirSync(jellyDir, { recursive: true });
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(
+      "npm",
+      ["install", "--no-fund", "--no-audit", "--no-save", `@cs-au-dk/jelly@${VERSIONS.jelly}`],
+      { stdio: "inherit", cwd: jellyDir }
+    );
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`npm exited ${code}`))));
+  });
+
+  const jellyPath = resolveJellyPath();
+  if (!jellyPath) {
+    throw new Error("jelly install failed; binary not found.");
+  }
+  log(logger, `Installed jelly to ${jellyPath}`);
+  return { tool: "jelly", installed: true, path: jellyPath, optional: true };
+}
+
 async function promptYesNo(question: string, autoYes: boolean): Promise<boolean> {
   if (autoYes) return true;
   if (!process.stdin.isTTY) {
@@ -291,6 +315,26 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
       const message = err instanceof Error ? err.message : String(err);
       log(logger, `Failed to install ${tool.name}: ${message}`);
       results.push({ tool: tool.name, installed: false });
+    }
+  }
+
+  const existingJelly = resolveJellyPath();
+  if (existingJelly) {
+    log(logger, `jelly already available at ${existingJelly}`);
+    results.push({ tool: "jelly", installed: true, path: existingJelly, optional: true });
+  } else {
+    const ok = await promptYesNo("Install jelly call graph analyzer (optional)?", autoYes);
+    if (!ok) {
+      results.push({ tool: "jelly", installed: false, optional: true });
+    } else {
+      try {
+        const result = await installJelly(logger);
+        results.push(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(logger, `Failed to install jelly: ${message}`);
+        results.push({ tool: "jelly", installed: false, optional: true });
+      }
     }
   }
 

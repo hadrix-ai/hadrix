@@ -1,20 +1,33 @@
 import { statSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import { loadConfig } from "../config/loadConfig.js";
 import { discoverFiles } from "../fs/discover.js";
 import { chunkFile, hashFile, toRelative } from "../chunking/chunker.js";
+import { securityChunkFile } from "../chunking/securityChunker.js";
+import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
 import { embedTexts } from "../providers/embedding.js";
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
+import { attachJellyAnchors, computeJellyAnchors } from "./jellyAnchors.js";
+import { buildFindingIdentityKey } from "./dedupeKey.js";
+import {
+  dedupeFindings,
+  dedupeRepositoryFindingsAgainstExisting,
+  filterFindings,
+  normalizeRepositoryFinding
+} from "./postProcessing.js";
+import type { AnchorIndex, JellyAnchorComputation } from "./jellyAnchors.js";
 import type {
   CoreFinding,
   ExistingScanFinding,
   Finding,
+  RepositoryFileSample,
   RepositoryScanFinding,
   ScanResult,
   StaticFinding
@@ -27,6 +40,7 @@ export interface RunScanOptions {
   repoPath?: string | null;
   inferRepoPath?: boolean;
   skipStatic?: boolean;
+  skipJellyAnchors?: boolean;
   existingFindings?: ExistingScanFinding[];
   repoFullName?: string | null;
   repositoryId?: string | null;
@@ -40,6 +54,9 @@ type ChunkRow = {
   chunk_index: number;
   start_line: number;
   end_line: number;
+  content: string;
+  chunk_format?: string | null;
+  overlap_group_id?: string | null;
 };
 
 function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
@@ -64,6 +81,30 @@ function normalizePath(value: string): string {
     .replace(/^\.?\/*/, "")
     .replace(/\/+/g, "/")
     .replace(/\/+$/, "");
+}
+
+function buildSemgrepSastHintMap(staticFindings: StaticFinding[]): Map<string, SastFindingHint[]> {
+  const hintsByFile = new Map<string, SastFindingHint[]>();
+  for (const finding of staticFindings) {
+    if (finding.tool !== "semgrep") continue;
+    const filepath = normalizePath(finding.filepath);
+    if (!filepath) continue;
+    if (!Number.isFinite(finding.startLine) || finding.startLine <= 0) continue;
+    const hint: SastFindingHint = {
+      filepath,
+      startLine: Math.trunc(finding.startLine),
+      endLine: Number.isFinite(finding.endLine) ? Math.trunc(finding.endLine) : undefined,
+      ruleId: finding.ruleId,
+      message: finding.message
+    };
+    const existing = hintsByFile.get(filepath);
+    if (existing) {
+      existing.push(hint);
+    } else {
+      hintsByFile.set(filepath, [hint]);
+    }
+  }
+  return hintsByFile;
 }
 
 function normalizeLineNumber(value: unknown, fallback: number): number {
@@ -178,6 +219,196 @@ function mergeStringArrays(...lists: string[][]): string[] {
   return Array.from(merged);
 }
 
+function applyFindingIdentityKey<T extends { details?: Record<string, unknown> | null }>(
+  finding: T,
+  fallbackRepoPath?: string | null
+): T {
+  const details = { ...toRecord(finding.details) };
+  const identityKey = buildFindingIdentityKey(finding as any, {
+    fallbackRepoPath: fallbackRepoPath ?? null
+  });
+  if (identityKey) {
+    details.dedupeKey = identityKey;
+    details.identityKey = identityKey;
+  }
+  return { ...finding, details };
+}
+
+type DedupeReport = {
+  totalFindings: number;
+  uniqueByLocation: number;
+  exactDuplicates: number;
+  mergedCount: number;
+  duplicatesBySource: Record<string, number>;
+  duplicatesByRule: Record<string, number>;
+  duplicatesByCategory: Record<string, number>;
+  missingAnchorPercent: number;
+  missingOverlapPercent: number;
+};
+
+function parseLineNumberForReport(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return Math.trunc(parsed);
+    }
+  }
+  return null;
+}
+
+function buildLocationKeyForReport(finding: {
+  location?: Record<string, unknown> | null;
+  details?: Record<string, unknown> | null;
+}): string {
+  const location = toRecord(finding.location);
+  const details = toRecord(finding.details);
+  const repoPathRaw = location.repoPath ?? location.repo_path ?? details.repoPath ?? details.repo_path;
+  const repoPath = normalizeRepoPath(typeof repoPathRaw === "string" ? repoPathRaw : "");
+  const filepathRaw =
+    (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  let filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
+  if (repoPath && filepath && !filepath.startsWith(`${repoPath}/`) && filepath !== repoPath) {
+    filepath = `${repoPath}/${filepath}`.replace(/\/+/g, "/");
+  }
+  if (!filepath) return "";
+
+  const startLine = parseLineNumberForReport(
+    location.startLine ?? location.start_line ?? location.line ?? location.start
+  );
+  const endLine = parseLineNumberForReport(
+    location.endLine ?? location.end_line ?? location.lineEnd ?? location.end
+  );
+  const chunkIndex = parseChunkIndex(
+    (location as any).chunkIndex ?? (location as any).chunk_index
+  );
+  let anchor = "unknown";
+  if (startLine !== null || endLine !== null) {
+    const start = startLine ?? endLine ?? 0;
+    let end = endLine ?? start;
+    if (end < start) end = start;
+    anchor = `lines:${start}-${end}`;
+  } else if (chunkIndex !== null) {
+    anchor = `chunk:${chunkIndex}`;
+  }
+
+  return `${filepath}|${anchor}`;
+}
+
+function formatCountMap(values: Record<string, number>): string {
+  return Object.entries(values)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([key, count]) => `${key}: ${count}`)
+    .join(", ");
+}
+
+function buildDedupeReport(rawFindings: CoreFinding[], finalCount: number): DedupeReport {
+  const totalFindings = rawFindings.length;
+  const byLocation = new Map<string, CoreFinding[]>();
+  const byExact = new Map<string, CoreFinding[]>();
+  let missingAnchors = 0;
+  let missingOverlap = 0;
+
+  for (const finding of rawFindings) {
+    const locationKey = buildLocationKeyForReport(finding);
+    if (locationKey) {
+      const existing = byLocation.get(locationKey);
+      if (existing) {
+        existing.push(finding);
+      } else {
+        byLocation.set(locationKey, [finding]);
+      }
+      const summary = typeof finding.summary === "string" ? finding.summary.trim() : "";
+      if (summary) {
+        const exactKey = `${locationKey}|${summary}`;
+        const exactExisting = byExact.get(exactKey);
+        if (exactExisting) {
+          exactExisting.push(finding);
+        } else {
+          byExact.set(exactKey, [finding]);
+        }
+      }
+    }
+
+    const details = toRecord(finding.details);
+    const anchor =
+      details.anchorNodeId ?? details.anchor_node_id ?? details.anchorId ?? details.anchor_id;
+    const overlap =
+      details.overlapGroupId ??
+      details.overlap_group_id ??
+      details.overlapId ??
+      details.overlap_id;
+    if (typeof anchor !== "string" || !anchor.trim()) missingAnchors += 1;
+    if (typeof overlap !== "string" || !overlap.trim()) missingOverlap += 1;
+  }
+
+  let exactDuplicates = 0;
+  const duplicatesBySource: Record<string, number> = {};
+  const duplicatesByRule: Record<string, number> = {};
+  const duplicatesByCategory: Record<string, number> = {};
+
+  for (const group of byExact.values()) {
+    if (group.length <= 1) continue;
+    exactDuplicates += group.length - 1;
+    for (let i = 1; i < group.length; i += 1) {
+      const finding = group[i]!;
+      const source = finding.source ?? "unknown";
+      duplicatesBySource[source] = (duplicatesBySource[source] ?? 0) + 1;
+      const details = toRecord(finding.details);
+      const ruleIdRaw =
+        details.ruleId ??
+        details.rule_id ??
+        details.ruleID ??
+        details.findingType ??
+        details.finding_type;
+      const ruleId = typeof ruleIdRaw === "string" ? ruleIdRaw.trim() : "";
+      if (ruleId) {
+        duplicatesByRule[ruleId] = (duplicatesByRule[ruleId] ?? 0) + 1;
+      }
+      const categoryRaw = finding.category ?? details.category ?? details.findingCategory ?? details.finding_category;
+      const category = typeof categoryRaw === "string" ? categoryRaw.trim() : "";
+      if (category) {
+        duplicatesByCategory[category] = (duplicatesByCategory[category] ?? 0) + 1;
+      }
+    }
+  }
+
+  const mergedCount = Math.max(0, totalFindings - finalCount);
+  const missingAnchorPercent = totalFindings ? (missingAnchors / totalFindings) * 100 : 0;
+  const missingOverlapPercent = totalFindings ? (missingOverlap / totalFindings) * 100 : 0;
+
+  return {
+    totalFindings,
+    uniqueByLocation: byLocation.size,
+    exactDuplicates,
+    mergedCount,
+    duplicatesBySource,
+    duplicatesByRule,
+    duplicatesByCategory,
+    missingAnchorPercent,
+    missingOverlapPercent
+  };
+}
+
+async function writeDedupeReport(
+  stateDir: string,
+  report: DedupeReport,
+  log: (message: string) => void
+): Promise<void> {
+  const dir = path.join(stateDir, "reports");
+  await mkdir(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `dedupe-report-${timestamp}.json`;
+  const filePath = path.join(dir, filename);
+  await writeFile(filePath, JSON.stringify(report, null, 2), "utf-8");
+  const relative = path.relative(process.cwd(), filePath);
+  log(
+    `Dedupe report saved to ${relative && !relative.startsWith("..") ? relative : filePath}.`
+  );
+}
+
 function normalizeLocation(
   location: Record<string, unknown> | null,
   fallbackPath: string,
@@ -256,6 +487,15 @@ function toExistingFindings(
       location.repoPath = normalizedRepoPath;
     }
     const source = `static_${finding.tool}`;
+    const details: Record<string, unknown> = {
+      ...toRecord(finding.details),
+      tool: source,
+      ruleId: finding.ruleId,
+      snippet: finding.snippet ?? null
+    };
+    if (repoFullName) details.repoFullName = repoFullName;
+    if (normalizedRepoPath) details.repoPath = normalizedRepoPath;
+    if (repositoryId) details.repositoryId = repositoryId;
     return {
       repositoryId: repositoryId ?? undefined,
       repositoryFullName: repoFullName ?? undefined,
@@ -264,10 +504,7 @@ function toExistingFindings(
       severity: finding.severity,
       summary: finding.message,
       location,
-      details: {
-        tool: source,
-        ruleId: finding.ruleId
-      }
+      details
     };
   });
 }
@@ -294,6 +531,70 @@ function normalizeExistingFindings(
   });
 }
 
+function normalizeStaticTool(value: unknown): StaticFinding["tool"] | null {
+  if (typeof value !== "string") return null;
+  let normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.startsWith("static_")) {
+    normalized = normalized.slice("static_".length);
+  }
+  if (normalized === "osv") normalized = "osv-scanner";
+  if (normalized === "semgrep") return "semgrep";
+  if (normalized === "gitleaks") return "gitleaks";
+  if (normalized === "osv-scanner") return "osv-scanner";
+  if (normalized === "eslint") return "eslint";
+  return null;
+}
+
+function toStaticFindingFromExisting(finding: ExistingScanFinding): StaticFinding | null {
+  const location = toRecord(finding.location);
+  const filepathRaw =
+    (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  if (typeof filepathRaw !== "string" || !filepathRaw.trim()) {
+    return null;
+  }
+  const filepath = normalizePath(filepathRaw);
+  const startLine = normalizeLineNumber(
+    location.startLine ?? location.start_line ?? location.line ?? location.start,
+    1
+  );
+  const endLine = normalizeLineNumber(
+    location.endLine ?? location.end_line ?? location.lineEnd ?? location.end,
+    startLine
+  );
+  const details = toRecord(finding.details);
+  const toolValue =
+    typeof details.tool === "string"
+      ? details.tool
+      : typeof finding.source === "string"
+        ? finding.source
+        : "";
+  const tool = normalizeStaticTool(toolValue) ?? "semgrep";
+  const ruleIdRaw =
+    details.ruleId ?? details.rule_id ?? details.ruleID ?? finding.type ?? "";
+  const ruleId =
+    typeof ruleIdRaw === "string" && ruleIdRaw.trim() ? ruleIdRaw.trim() : "unknown_rule";
+  const snippet = typeof details.snippet === "string" ? details.snippet : undefined;
+  const severity = finding.severity ?? "low";
+  return {
+    tool,
+    ruleId,
+    message: finding.summary,
+    severity: severity as StaticFinding["severity"],
+    filepath,
+    startLine,
+    endLine: endLine < startLine ? startLine : endLine,
+    snippet,
+    details: Object.keys(details).length ? details : undefined
+  };
+}
+
+function toStaticFindingsFromExisting(findings: ExistingScanFinding[]): StaticFinding[] {
+  return findings
+    .map((finding) => toStaticFindingFromExisting(finding))
+    .filter((finding): finding is StaticFinding => Boolean(finding));
+}
+
 function toCoreStaticFindings(params: {
   findings: StaticFinding[];
   repoFullName?: string | null;
@@ -318,6 +619,7 @@ function toCoreStaticFindings(params: {
       chunkId: chunk?.id ?? null
     });
     const details: Record<string, unknown> = {
+      ...toRecord(finding.details),
       ruleId: finding.ruleId,
       tool: source,
       snippet: finding.snippet ?? null
@@ -548,18 +850,78 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       ? options.commitSha.trim()
       : null;
 
-  const staticFindings = options.skipStatic
+  const rawStaticFindings = options.skipStatic
     ? []
     : await runStaticScanners(config, scanRoot, log);
   log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
 
+  const jellyAnchorsEnabled =
+    config.flags.enableJellyAnchors && !(options.skipJellyAnchors ?? false);
+  let jellyResult: JellyAnchorComputation | null = null;
+  let jellyIndex: AnchorIndex | null = null;
+  if (jellyAnchorsEnabled) {
+    log("Computing jelly anchors...");
+    jellyResult = await computeJellyAnchors({
+      repoRoot,
+      scanRoot,
+      commitSha
+    });
+    jellyIndex = jellyResult.index;
+    if (jellyIndex) {
+      log(
+        `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
+      );
+    } else {
+      const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
+      log(`Jelly anchors unavailable${reason}.`);
+    }
+  } else if (config.flags.enableJellyAnchors && options.skipJellyAnchors) {
+    log("Jelly anchors skipped by CLI flag.");
+  }
+
+  const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);
+
+  let staticExistingFindings = toExistingFindings(
+    rawStaticFindings,
+    repoPath,
+    repoFullName,
+    repositoryId
+  );
+  if (jellyIndex) {
+    const applied = attachJellyAnchors(staticExistingFindings, jellyIndex);
+    if (applied.anchored > 0) {
+      log(`Jelly anchors applied to static findings (${applied.anchored}/${applied.total}).`);
+    }
+  }
+  staticExistingFindings = staticExistingFindings.map((finding) =>
+    applyFindingIdentityKey(finding, repoPath)
+  );
+
+  const { kept: filteredStaticExisting, dropped: staticFilteredDropped } = filterFindings(
+    staticExistingFindings
+  );
+  if (staticFilteredDropped > 0) {
+    log(`Filtered ${staticFilteredDropped} static findings.`);
+  }
+
+  const reportStaticFindings = toStaticFindingsFromExisting(filteredStaticExisting);
+  const { findings: dedupedStaticExisting, dropped: staticDedupeDropped } = dedupeFindings(
+    filteredStaticExisting
+  );
+  if (staticDedupeDropped > 0) {
+    log(`Deduped ${staticDedupeDropped} static findings.`);
+  }
+
+  const staticFindings = toStaticFindingsFromExisting(dedupedStaticExisting);
+
+  const normalizedExistingFindings = normalizeExistingFindings(options.existingFindings, {
+    repoFullName,
+    repositoryId,
+    repoPath
+  }).map((finding) => applyFindingIdentityKey(finding, repoPath));
   const existingFindings = [
-    ...toExistingFindings(staticFindings, repoPath, repoFullName, repositoryId),
-    ...normalizeExistingFindings(options.existingFindings, {
-      repoFullName,
-      repositoryId,
-      repoPath
-    })
+    ...dedupedStaticExisting,
+    ...normalizedExistingFindings
   ];
 
   const files = await discoverFiles({
@@ -576,12 +938,17 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     vectorMaxElements: config.vector.maxElements,
     logger: log
   });
+  const desiredChunkFormat = config.flags.enableSecurityChunking ? "security_semantic" : "line_window";
+  if (config.flags.enableSecurityChunking) {
+    log("Security chunking enabled.");
+  }
 
   const newEmbeddings: Array<{ chunkId: number; content: string }> = [];
 
   try {
     for (const file of files) {
       const relPath = toRelative(config.projectRoot, file);
+      const normalizedRelPath = normalizePath(relPath);
       let fileHash: string;
       let stats: ReturnType<typeof statSync>;
       try {
@@ -591,8 +958,9 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         continue;
       }
       const existing = db.getFileByPath(relPath);
+      const existingFormat = existing ? db.getChunkFormatForFile(existing.id) : null;
 
-      if (existing && existing.hash === fileHash) {
+      if (existing && existing.hash === fileHash && existingFormat === desiredChunkFormat) {
         continue;
       }
 
@@ -605,11 +973,26 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
       db.deleteChunksForFile(fileRow.id);
 
-      const chunks = chunkFile(file, {
-        maxChars: config.chunking.maxChars,
-        overlapChars: config.chunking.overlapChars,
-        idPath: relPath
-      });
+      let chunks = config.flags.enableSecurityChunking
+        ? securityChunkFile({
+            filePath: file,
+            idPath: relPath,
+            repoPath,
+            sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
+          })
+        : chunkFile(file, {
+            maxChars: config.chunking.maxChars,
+            overlapChars: config.chunking.overlapChars,
+            idPath: relPath
+          });
+      if (config.flags.enableSecurityChunking && chunks.length === 0) {
+        log(`Security chunking produced no chunks for ${relPath}; falling back to line window.`);
+        chunks = chunkFile(file, {
+          maxChars: config.chunking.maxChars,
+          overlapChars: config.chunking.overlapChars,
+          idPath: relPath
+        });
+      }
 
       const inserted = db.insertChunks(
         fileRow.id,
@@ -620,7 +1003,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           startLine: chunk.startLine,
           endLine: chunk.endLine,
           content: chunk.content,
-          contentHash: chunk.contentHash
+          contentHash: chunk.contentHash,
+          chunkFormat: chunk.chunkFormat ?? "line_window",
+          securityHeader: chunk.securityHeader ?? null,
+          primarySymbol: chunk.primarySymbol ?? null,
+          entryPoint: chunk.entryPoint ?? null,
+          executionRole: chunk.executionRole ?? null,
+          sinks: chunk.sinks ?? null,
+          overlapGroupId: chunk.overlapGroupId ?? null,
+          dedupeKey: chunk.dedupeKey ?? null
         }))
       );
 
@@ -663,8 +1054,13 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         )
       : allChunks;
     const scannedChunks = scopedChunks.length;
+    const llmSource = `llm_${config.llm.provider}_repository_scan`;
+    const llmCompositeSource = `llm_${config.llm.provider}_repository_composite_scan`;
     let llmFindings: RepositoryScanFinding[] = [];
+    let reportLlmFindings: RepositoryScanFinding[] = [];
     let compositeFindings: RepositoryScanFinding[] = [];
+    let fileSamples: RepositoryFileSample[] = [];
+    let repositoryDescriptor: { fullName: string; repoPaths: string[] } | null = null;
 
     if (scopedChunks.length > 0) {
       let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
@@ -703,14 +1099,16 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       }
 
       log("Heuristic analysis and chunk sampling...");
-      const fileSamples = buildRepositoryFileSamples(
+      fileSamples = buildRepositoryFileSamples(
         scopedChunks.map((chunk) =>
           toLocalChunk({
             filepath: chunk.filepath,
             chunk_index: chunk.chunk_index,
             start_line: chunk.start_line,
             end_line: chunk.end_line,
-            content: chunk.content
+            content: chunk.content,
+            chunk_format: chunk.chunk_format,
+            overlap_group_id: chunk.overlap_group_id ?? null
           })
         ),
         {
@@ -721,7 +1119,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       );
 
       if (fileSamples.length > 0) {
-        const repository = {
+        repositoryDescriptor = {
           fullName: repoFullName,
           repoPaths: repoPath ? [repoPath] : []
         };
@@ -729,25 +1127,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         log("LLM scan (map pass)...");
         llmFindings = await scanRepository({
           config,
-          repository,
+          repository: repositoryDescriptor,
           files: fileSamples,
           existingFindings
         });
-
-        if (llmFindings.length || existingFindings.length) {
-          log("LLM scan (composite pass)...");
-          compositeFindings = await scanRepositoryComposites({
-            config,
-            repository,
-            files: fileSamples,
-            existingFindings,
-            priorFindings: llmFindings
-          });
-        }
       }
     }
 
-    if (llmFindings.length > 0 || compositeFindings.length > 0) {
+    if (llmFindings.length > 0) {
+      llmFindings = llmFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
       llmFindings = llmFindings.map((finding) =>
         enrichRepositoryFinding(finding, {
           repoFullName,
@@ -756,6 +1144,58 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           commitSha
         })
       );
+    }
+
+    if (jellyIndex && llmFindings.length > 0) {
+      const appliedLlm = attachJellyAnchors(llmFindings, jellyIndex);
+      if (appliedLlm.anchored > 0) {
+        log(`Jelly anchors applied to LLM findings (${appliedLlm.anchored}/${appliedLlm.total}).`);
+      }
+    }
+
+    if (llmFindings.length > 0) {
+      const normalizedLlmFindings = llmFindings.map(normalizeRepositoryFinding);
+      const { kept: filteredLlmFindings, dropped: filteredLlmDropped } = filterFindings(
+        normalizedLlmFindings
+      );
+      if (filteredLlmDropped > 0) {
+        log(`Filtered ${filteredLlmDropped} LLM findings.`);
+      }
+      reportLlmFindings = filteredLlmFindings;
+
+      const { findings: dedupedLlmFindings, dropped: dedupeLlmDropped } = dedupeFindings(
+        filteredLlmFindings,
+        llmSource
+      );
+      if (dedupeLlmDropped > 0) {
+        log(`Deduped ${dedupeLlmDropped} LLM findings.`);
+      }
+
+      const { findings: dedupedAgainstStatic, dropped: dedupeAgainstStaticDropped } =
+        dedupeRepositoryFindingsAgainstExisting(dedupedLlmFindings, dedupedStaticExisting);
+      if (dedupeAgainstStaticDropped > 0) {
+        log(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
+      }
+      llmFindings = dedupedAgainstStatic;
+    }
+
+    if (
+      fileSamples.length > 0 &&
+      repositoryDescriptor &&
+      (llmFindings.length || existingFindings.length)
+    ) {
+      log("LLM scan (composite pass)...");
+      compositeFindings = await scanRepositoryComposites({
+        config,
+        repository: repositoryDescriptor,
+        files: fileSamples,
+        existingFindings,
+        priorFindings: llmFindings
+      });
+    }
+
+    if (compositeFindings.length > 0) {
+      compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
       compositeFindings = compositeFindings.map((finding) =>
         enrichRepositoryFinding(finding, {
           repoFullName,
@@ -764,6 +1204,19 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           commitSha
         })
       );
+      compositeFindings = compositeFindings.map(normalizeRepositoryFinding);
+    }
+
+    if (jellyIndex && compositeFindings.length > 0) {
+      const appliedComposite = attachJellyAnchors(compositeFindings, jellyIndex);
+      if (appliedComposite.anchored > 0) {
+        log(
+          `Jelly anchors applied to composite findings (${appliedComposite.anchored}/${appliedComposite.total}).`
+        );
+      }
+    }
+    if (compositeFindings.length > 0) {
+      compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
     }
 
     const combinedFindings =
@@ -774,18 +1227,19 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     const llmOutput = combinedFindings.map((finding) =>
       toRepositoryFinding(finding, fallbackPath, repoPath)
     );
-
-    const llmSource = `llm_${config.llm.provider}_repository_scan`;
-    const llmCompositeSource = `llm_${config.llm.provider}_repository_composite_scan`;
+    const coreStaticFindings = toCoreStaticFindings({
+      findings: staticFindings,
+      repoFullName,
+      repositoryId,
+      repoPath,
+      commitSha,
+      chunks: scopedChunks
+    });
+    if (jellyIndex) {
+      attachJellyAnchors(coreStaticFindings, jellyIndex);
+    }
     const coreFindings = [
-      ...toCoreStaticFindings({
-        findings: staticFindings,
-        repoFullName,
-        repositoryId,
-        repoPath,
-        commitSha,
-        chunks: scopedChunks
-      }),
+      ...coreStaticFindings,
       ...toCoreRepositoryFindings({
         findings: llmFindings,
         type: "repository",
@@ -807,6 +1261,57 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       commitSha,
       chunks: scopedChunks
     });
+
+    const reportRawFindings = [
+      ...toCoreStaticFindings({
+        findings: reportStaticFindings,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      }),
+      ...toCoreRepositoryFindings({
+        findings: reportLlmFindings,
+        type: "repository",
+        source: llmSource,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      }),
+      ...toCoreRepositoryFindings({
+        findings: compositeFindings,
+        type: "repository_composite",
+        source: llmCompositeSource,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      })
+    ];
+    const finalFindingCount = staticFindings.length + combinedFindings.length;
+    const dedupeReport = buildDedupeReport(reportRawFindings, finalFindingCount);
+    log(
+      `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
+    );
+    if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
+      log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
+    }
+    if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
+      log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
+    }
+    if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
+      log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
+    }
+    try {
+      await writeDedupeReport(config.stateDir, dedupeReport, log);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`Failed to persist dedupe report: ${message}`);
+    }
 
     return {
       findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],

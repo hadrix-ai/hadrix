@@ -149,6 +149,22 @@ function mapSeverity(tool: StaticFinding["tool"], raw: string | number | undefin
   return "high";
 }
 
+function severityRank(value: Severity): number {
+  switch (value) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    case "info":
+    default:
+      return 0;
+  }
+}
+
 async function spawnCapture(command: string, args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const proc = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
@@ -165,6 +181,15 @@ async function spawnCapture(command: string, args: string[], cwd: string): Promi
   });
 }
 
+function stripEslintPluginConfigs(plugin: any): any {
+  if (!plugin || typeof plugin !== "object") return plugin;
+  const copy = { ...plugin };
+  if ("configs" in copy) {
+    delete (copy as { configs?: unknown }).configs;
+  }
+  return copy;
+}
+
 async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
   if (!config.staticScanners.eslint.enabled) return [];
 
@@ -178,13 +203,13 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
     .map((pattern) => pattern.trim())
     .filter(Boolean);
 
-  let ESLintCtor: typeof import("eslint").ESLint;
+  let ESLintCtor: any;
   let eslintPluginSecurity: any;
   let tsParser: any;
   let fixupPluginRules: ((plugin: any) => any) | null = null;
   try {
     const eslintModule = await import("eslint");
-    ESLintCtor = eslintModule.ESLint;
+    ESLintCtor = await (eslintModule as any).loadESLint({ useFlatConfig: true, cwd: scanRoot });
     const securityModule = await import("eslint-plugin-security");
     eslintPluginSecurity = (securityModule as any).default ?? securityModule;
     const parserModule = await import("@typescript-eslint/parser");
@@ -194,11 +219,12 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `eslint scanner unavailable. Install dependencies (eslint, eslint-plugin-security, @typescript-eslint/parser, @typescript-eslint/eslint-plugin, @eslint/compat). ${message}`
+      `eslint scanner unavailable. Install dependencies (eslint, eslint-plugin-security, @typescript-eslint/parser, @typescript-eslint/eslint-plugin, @eslint/compat, path-type). ${message}`
     );
   }
 
-  const securityPlugin = fixupPluginRules ? fixupPluginRules(eslintPluginSecurity) : eslintPluginSecurity;
+  const securityPluginRaw = fixupPluginRules ? fixupPluginRules(eslintPluginSecurity) : eslintPluginSecurity;
+  const securityPlugin = stripEslintPluginConfigs(securityPluginRaw);
   const recommendedRules = (eslintPluginSecurity as any).configs?.recommended?.rules ?? {};
   const { configPath, legacyDetected } = findEslintConfig(scanRoot);
   if (legacyDetected && !configPath) {
@@ -229,9 +255,9 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
                 ecmaFeatures: { jsx: true }
               }
             },
-        plugins: {
-          security: securityPlugin
-        },
+            plugins: {
+              security: securityPlugin
+            },
             rules: {
               ...recommendedRules
             }
@@ -421,6 +447,17 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
   const json = JSON.parse(result.stdout);
   const findings: StaticFinding[] = [];
   const results = Array.isArray(json?.results) ? json.results : [];
+  const grouped = new Map<
+    string,
+    {
+      filepath: string;
+      packageName: string;
+      packageVersion: string;
+      ecosystem: string;
+      advisories: Array<{ id: string; summary: string; severity: Severity; aliases?: string[] }>;
+      severity: Severity;
+    }
+  >();
 
   for (const entry of results) {
     const sourcePath = entry.source?.path;
@@ -436,23 +473,58 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
       const vulnerabilities = Array.isArray(pkg.vulnerabilities) ? pkg.vulnerabilities : [];
 
       for (const vuln of vulnerabilities) {
+        const key = `${filepath}|${ecosystem}|${packageName}|${packageVersion}`;
+        let group = grouped.get(key);
+        if (!group) {
+          group = {
+            filepath,
+            packageName,
+            packageVersion,
+            ecosystem,
+            advisories: [],
+            severity: "info"
+          };
+          grouped.set(key, group);
+        }
         const vulnId = vuln.id ?? "unknown";
         const summary = vuln.summary ?? "Vulnerability detected";
-        const severity = extractCvssSeverity(vuln);
-        const snippet = `Vulnerable package: ${packageName}@${packageVersion} (${ecosystem})`;
-
-        findings.push({
-          tool: "osv-scanner",
-          ruleId: vulnId,
-          message: `${summary} in ${packageName}@${packageVersion}`,
-          severity: mapSeverity("osv-scanner", severity),
-          filepath,
-          startLine: 0,
-          endLine: 0,
-          snippet
-        });
+        const severity = mapSeverity("osv-scanner", extractCvssSeverity(vuln));
+        const aliases = Array.isArray(vuln.aliases)
+          ? vuln.aliases.filter((alias: unknown) => typeof alias === "string")
+          : undefined;
+        group.advisories.push({ id: vulnId, summary, severity, aliases });
+        if (severityRank(severity) > severityRank(group.severity)) {
+          group.severity = severity;
+        }
       }
     }
+  }
+
+  for (const group of grouped.values()) {
+    const snippet = `Vulnerable package: ${group.packageName}@${group.packageVersion} (${group.ecosystem})`;
+    const advisoryCount = group.advisories.length;
+    const message =
+      advisoryCount === 1
+        ? `${group.advisories[0]!.summary} in ${group.packageName}@${group.packageVersion}`
+        : `${advisoryCount} vulnerabilities in ${group.packageName}@${group.packageVersion}`;
+    const ruleId = `osv:${group.ecosystem}:${group.packageName}@${group.packageVersion}`;
+
+    findings.push({
+      tool: "osv-scanner",
+      ruleId,
+      message,
+      severity: group.severity,
+      filepath: group.filepath,
+      startLine: 0,
+      endLine: 0,
+      snippet,
+      details: {
+        packageName: group.packageName,
+        packageVersion: group.packageVersion,
+        ecosystem: group.ecosystem,
+        advisories: group.advisories
+      }
+    });
   }
 
   return findings;

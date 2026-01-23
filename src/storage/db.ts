@@ -3,6 +3,8 @@ import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import Database from "better-sqlite3";
 
+const CURRENT_SCHEMA_VERSION = 2;
+
 export interface DbOptions {
   stateDir: string;
   extensionPath?: string | null;
@@ -17,6 +19,24 @@ export interface FileRow {
   hash: string;
   mtimeMs: number;
   size: number;
+}
+
+export interface ChunkRow {
+  id: number;
+  chunk_uid: string;
+  filepath: string;
+  chunk_index: number;
+  start_line: number;
+  end_line: number;
+  content: string;
+  chunk_format: string | null;
+  security_header: string | null;
+  primary_symbol: string | null;
+  entry_point: string | null;
+  execution_role: string | null;
+  sinks: string | null;
+  overlap_group_id: string | null;
+  dedupe_key: string | null;
 }
 
 export class HadrixDb {
@@ -62,6 +82,14 @@ export class HadrixDb {
         end_line INTEGER NOT NULL,
         content TEXT NOT NULL,
         content_hash TEXT NOT NULL,
+        chunk_format TEXT,
+        security_header TEXT,
+        primary_symbol TEXT,
+        entry_point TEXT,
+        execution_role TEXT,
+        sinks TEXT,
+        overlap_group_id TEXT,
+        dedupe_key TEXT,
         created_at TEXT NOT NULL
       );
     `);
@@ -72,6 +100,8 @@ export class HadrixDb {
         value TEXT NOT NULL
       );
     `);
+
+    this.runMigrations();
 
     const existingDims = this.getMeta("embedding_dimensions");
     if (existingDims && Number(existingDims) !== this.vectorDimensions) {
@@ -98,6 +128,44 @@ export class HadrixDb {
     }
 
     this.setMeta("embedding_dimensions", String(this.vectorDimensions));
+  }
+
+  private runMigrations() {
+    const rawVersion = this.getMeta("schema_version");
+    const parsed = rawVersion ? Number(rawVersion) : 0;
+    let version = Number.isFinite(parsed) ? parsed : 0;
+
+    if (version < CURRENT_SCHEMA_VERSION) {
+      this.ensureChunkMetadataColumns();
+      version = CURRENT_SCHEMA_VERSION;
+    }
+
+    if (!rawVersion || version !== Number(rawVersion)) {
+      this.setMeta("schema_version", String(version));
+    }
+  }
+
+  private ensureChunkMetadataColumns() {
+    const columns = [
+      { name: "chunk_format", type: "TEXT" },
+      { name: "security_header", type: "TEXT" },
+      { name: "primary_symbol", type: "TEXT" },
+      { name: "entry_point", type: "TEXT" },
+      { name: "execution_role", type: "TEXT" },
+      { name: "sinks", type: "TEXT" },
+      { name: "overlap_group_id", type: "TEXT" },
+      { name: "dedupe_key", type: "TEXT" }
+    ];
+
+    for (const column of columns) {
+      if (this.tableHasColumn("chunks", column.name)) continue;
+      this.db.exec(`ALTER TABLE chunks ADD COLUMN ${column.name} ${column.type}`);
+    }
+  }
+
+  private tableHasColumn(table: string, column: string): boolean {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return rows.some((row) => row.name === column);
   }
 
   private setMeta(key: string, value: string) {
@@ -127,6 +195,22 @@ export class HadrixDb {
       buffer.byteOffset + buffer.byteLength
     );
     return new Float32Array(slice);
+  }
+
+  private normalizeOptionalString(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private serializeOptionalJson(value: unknown): string | null {
+    if (value == null) return null;
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return null;
+    }
   }
 
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -314,6 +398,21 @@ export class HadrixDb {
     return row ?? null;
   }
 
+  getChunkFormatForFile(fileId: number): string | null {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) as count, MIN(COALESCE(chunk_format, 'line_window')) as minFormat, MAX(COALESCE(chunk_format, 'line_window')) as maxFormat FROM chunks WHERE file_id = ?"
+      )
+      .get(fileId) as { count: number; minFormat: string | null; maxFormat: string | null } | undefined;
+    if (!row || row.count === 0) {
+      return null;
+    }
+    if (row.minFormat && row.minFormat === row.maxFormat) {
+      return row.minFormat;
+    }
+    return null;
+  }
+
   deleteChunksForFile(fileId: number) {
     const rows = this.db
       .prepare("SELECT id FROM chunks WHERE file_id = ?")
@@ -335,16 +434,39 @@ export class HadrixDb {
   insertChunks(
     fileId: number,
     filepath: string,
-    chunks: Array<{ chunkUid: string; chunkIndex: number; startLine: number; endLine: number; content: string; contentHash: string }>
+    chunks: Array<{
+      chunkUid: string;
+      chunkIndex: number;
+      startLine: number;
+      endLine: number;
+      content: string;
+      contentHash: string;
+      chunkFormat?: string | null;
+      securityHeader?: unknown;
+      primarySymbol?: string | null;
+      entryPoint?: string | null;
+      executionRole?: string | null;
+      sinks?: unknown;
+      overlapGroupId?: string | null;
+      dedupeKey?: string | null;
+    }>
   ): Array<{ id: number; chunkUid: string }> {
     const insertChunk = this.db.prepare(
-      "INSERT INTO chunks (file_id, chunk_uid, filepath, chunk_index, start_line, end_line, content, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+      "INSERT INTO chunks (file_id, chunk_uid, filepath, chunk_index, start_line, end_line, content, content_hash, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
     );
 
     const inserted: Array<{ id: number; chunkUid: string }> = [];
 
     const tx = this.db.transaction(() => {
       for (const chunk of chunks) {
+        const chunkFormat = this.normalizeOptionalString(chunk.chunkFormat);
+        const securityHeader = this.serializeOptionalJson(chunk.securityHeader);
+        const primarySymbol = this.normalizeOptionalString(chunk.primarySymbol);
+        const entryPoint = this.normalizeOptionalString(chunk.entryPoint);
+        const executionRole = this.normalizeOptionalString(chunk.executionRole);
+        const sinks = this.serializeOptionalJson(chunk.sinks);
+        const overlapGroupId = this.normalizeOptionalString(chunk.overlapGroupId);
+        const dedupeKey = this.normalizeOptionalString(chunk.dedupeKey);
         const result = insertChunk.run(
           fileId,
           chunk.chunkUid,
@@ -353,7 +475,15 @@ export class HadrixDb {
           chunk.startLine,
           chunk.endLine,
           chunk.content,
-          chunk.contentHash
+          chunk.contentHash,
+          chunkFormat,
+          securityHeader,
+          primarySymbol,
+          entryPoint,
+          executionRole,
+          sinks,
+          overlapGroupId,
+          dedupeKey
         );
         inserted.push({ id: Number(result.lastInsertRowid), chunkUid: chunk.chunkUid });
       }
@@ -378,20 +508,20 @@ export class HadrixDb {
     tx();
   }
 
-  getChunksForFile(fileId: number): Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }> {
+  getChunksForFile(fileId: number): ChunkRow[] {
     return this.db
       .prepare(
-        "SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index FROM chunks WHERE file_id = ? ORDER BY chunk_index"
+        "SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key FROM chunks WHERE file_id = ? ORDER BY chunk_index"
       )
-      .all(fileId) as Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }>;
+      .all(fileId) as ChunkRow[];
   }
 
-  getAllChunks(): Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }> {
+  getAllChunks(): ChunkRow[] {
     return this.db
       .prepare(
-        "SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index FROM chunks ORDER BY filepath, chunk_index"
+        "SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key FROM chunks ORDER BY filepath, chunk_index"
       )
-      .all() as Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }>;
+      .all() as ChunkRow[];
   }
 
   querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
@@ -421,14 +551,14 @@ export class HadrixDb {
     return scored.slice(0, limit);
   }
 
-  getChunksByIds(ids: number[]): Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }> {
+  getChunksByIds(ids: number[]): ChunkRow[] {
     if (!ids.length) return [];
     const placeholder = ids.map(() => "?").join(",");
     return this.db
       .prepare(
-        `SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index FROM chunks WHERE id IN (${placeholder})`
+        `SELECT id, chunk_uid, filepath, start_line, end_line, content, chunk_index, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key FROM chunks WHERE id IN (${placeholder})`
       )
-      .all(...ids) as Array<{ id: number; chunk_uid: string; filepath: string; start_line: number; end_line: number; content: string; chunk_index: number }>;
+      .all(...ids) as ChunkRow[];
   }
 
   close() {

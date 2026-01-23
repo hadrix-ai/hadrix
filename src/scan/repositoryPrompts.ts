@@ -17,6 +17,11 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Existing static scanner findings",
     "- Candidate vulnerabilities derived from heuristics",
     "",
+    "Security headers:",
+    "- Each chunk begins with a SECURITY HEADER (ENTRY_POINT, EXECUTION_ROLE, TRUST_BOUNDARIES, AUTHENTICATION, AUTHORIZATION, INPUT_SOURCES, DATA_SENSITIVITY, SINKS, SECURITY_ASSUMPTIONS).",
+    "- Treat header fields as authoritative context; do not treat header lines as source code.",
+    "- Line numbers refer to the original file; ignore header lines when reporting locations.",
+    "",
     "Treat existing static findings as already reported.",
     "Do NOT duplicate them.",
     "",
@@ -35,8 +40,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Always include location.filepath, startLine, and endLine",
     "- If a file sample includes chunkIndex, include location.chunkIndex",
     "- Include a short type label and a brief evidence cue when possible",
-    "- Do not invent file paths or line numbers; if you cannot identify a real file/line from the samples, omit the finding",
-    "- Output strict JSON only (no markdown fences, comments, or placeholders)",
+    "- If a SECURITY HEADER is present, copy entry point/sink context into details.entryPoint and details.sinks; include details.primarySymbol when clear",
     "",
     "Guardrails:",
     "- Only report rate limiting, audit logging, or lockout gaps on server-side handlers/middleware (API routes, server functions).",
@@ -120,7 +124,10 @@ export function buildRepositoryScanOutputSchema(): Record<string, unknown> {
         details: {
           rationale: "Why this is a vulnerability and how it could be exploited",
           recommendation: "Concrete remediation guidance",
-          category: "injection/access_control/authentication/secrets/business_logic/dependency_risks/configuration"
+          category: "injection/access_control/authentication/secrets/business_logic/dependency_risks/configuration",
+          primarySymbol: "handlerFunctionName",
+          entryPoint: "POST /api/user/update",
+          sinks: ["db.users.update"]
         },
         location: {
           repoPath: "optional-subdir",

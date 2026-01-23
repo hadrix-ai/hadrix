@@ -57,7 +57,8 @@ export function chunkFile(filePath: string, options: ChunkOptions): Chunk[] {
       startLine,
       endLine,
       content,
-      contentHash
+      contentHash,
+      chunkFormat: "line_window"
     });
 
     if (endIndex >= lines.length) break;

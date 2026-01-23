@@ -39,6 +39,10 @@ export interface HadrixConfig {
     includeExtensions: string[];
     exclude: string[];
   };
+  flags: {
+    enableSecurityChunking: boolean;
+    enableJellyAnchors: boolean;
+  };
   vector: {
     extension: "vectorlite";
     extensionPath?: string | null;
@@ -152,6 +156,14 @@ function parseJsonEnv(name: string): Record<string, string> {
   }
 }
 
+function parseLooseBoolean(value: string): boolean {
+  return !["false", "0", "no", "off"].includes(value.trim().toLowerCase());
+}
+
+function parseStrictBoolean(value: string): boolean {
+  return value.trim().toLowerCase() === "true";
+}
+
 function defaultBaseUrl(provider: Provider): string {
   if (provider === "openai") return "https://api.openai.com";
   return "https://generativelanguage.googleapis.com";
@@ -247,6 +259,21 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     ...parseJsonEnv("HADRIX_API_HEADERS")
   };
 
+  const rawSecurityChunking =
+    readEnv("ENABLE_SECURITY_CHUNKING") ||
+    readEnv("HADRIX_ENABLE_SECURITY_CHUNKING");
+  const rawJellyAnchors =
+    readEnv("ENABLE_JELLY_ANCHORS") ||
+    readEnv("HADRIX_ENABLE_JELLY_ANCHORS");
+  const enableSecurityChunking =
+    rawSecurityChunking != null
+      ? parseLooseBoolean(rawSecurityChunking)
+      : configFile.flags?.enableSecurityChunking ?? false;
+  const enableJellyAnchors =
+    rawJellyAnchors != null
+      ? parseStrictBoolean(rawJellyAnchors)
+      : configFile.flags?.enableJellyAnchors ?? false;
+
   const embeddingsModelRaw =
     readEnv("HADRIX_EMBEDDINGS_MODEL") || configFile.embeddings?.model || defaultEmbeddingModel(embeddingsProvider);
   const llmModelRaw =
@@ -308,6 +335,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       maxFileSizeBytes: configFile.chunking?.maxFileSizeBytes ?? 200 * 1024,
       includeExtensions: configFile.chunking?.includeExtensions ?? DEFAULT_INCLUDE_EXTENSIONS,
       exclude: configFile.chunking?.exclude ?? DEFAULT_EXCLUDES
+    },
+    flags: {
+      enableSecurityChunking,
+      enableJellyAnchors
     },
     vector: {
       extension: "vectorlite",

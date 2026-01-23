@@ -33,6 +33,7 @@
     "eslint-plugin-security": "^2.1.0",
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.1",
+    "path-type": "^4.0.0",
     "picocolors": "^1.0.0",
     "tar": "^7.5.4",
     "typescript": "^5.4.0"

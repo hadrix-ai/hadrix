@@ -1,4 +1,5 @@
 import type { RepositoryFileSample } from "../types.js";
+import { splitSecurityHeader } from "./securityHeader.js";
 
 type LocalChunk = {
   filepath: string;
@@ -6,6 +7,8 @@ type LocalChunk = {
   startLine: number;
   endLine: number;
   content: string;
+  chunkFormat?: string | null;
+  overlapGroupId?: string | null;
 };
 
 export interface SampleSelectionOptions {
@@ -75,6 +78,90 @@ function matchesAnyPattern(content: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(content));
 }
 
+function isSecurityChunk(chunk: LocalChunk): boolean {
+  return chunk.chunkFormat === "security_semantic";
+}
+
+function stripSecurityHeader(content: string): string {
+  if (!content) {
+    return "";
+  }
+  const { body } = splitSecurityHeader(content);
+  return body;
+}
+
+function buildSecurityChunkIndex(chunks: LocalChunk[]): Map<string, LocalChunk[]> {
+  const index = new Map<string, LocalChunk[]>();
+  for (const chunk of chunks) {
+    if (!chunk.filepath || !isSecurityChunk(chunk)) continue;
+    if (!index.has(chunk.filepath)) {
+      index.set(chunk.filepath, []);
+    }
+    index.get(chunk.filepath)!.push(chunk);
+  }
+  for (const list of index.values()) {
+    list.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }
+  return index;
+}
+
+function pickOverlappingChunk(source: LocalChunk, candidates: LocalChunk[]): LocalChunk | null {
+  const start = source.startLine;
+  const end = source.endLine;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+  let best: { chunk: LocalChunk; overlap: number } | null = null;
+  for (const candidate of candidates) {
+    const overlap = Math.min(end, candidate.endLine) - Math.max(start, candidate.startLine) + 1;
+    if (overlap <= 0) continue;
+    if (!best || overlap > best.overlap) {
+      best = { chunk: candidate, overlap };
+    }
+  }
+  return best?.chunk ?? null;
+}
+
+function alignPreferredChunks(preferred: LocalChunk[], allChunks: LocalChunk[]): LocalChunk[] {
+  if (!preferred.length) {
+    return preferred;
+  }
+  const securityByFile = buildSecurityChunkIndex(allChunks);
+  if (!securityByFile.size) {
+    return preferred;
+  }
+  return preferred.map((chunk) => {
+    if (!chunk.filepath || isSecurityChunk(chunk)) {
+      return chunk;
+    }
+    const candidates = securityByFile.get(chunk.filepath);
+    if (!candidates || candidates.length === 0) {
+      return chunk;
+    }
+    return pickOverlappingChunk(chunk, candidates) ?? candidates[0];
+  });
+}
+
+function preferSecurityChunks(chunks: LocalChunk[]): LocalChunk[] {
+  if (!chunks.length) {
+    return chunks;
+  }
+  const securityFiles = new Set<string>();
+  for (const chunk of chunks) {
+    if (chunk.filepath && isSecurityChunk(chunk)) {
+      securityFiles.add(chunk.filepath);
+    }
+  }
+  if (!securityFiles.size) {
+    return chunks;
+  }
+  return chunks.filter((chunk) => {
+    if (!chunk.filepath) return false;
+    if (!securityFiles.has(chunk.filepath)) return true;
+    return isSecurityChunk(chunk);
+  });
+}
+
 function scoreChunk(chunk: LocalChunk): number {
   const path = chunk.filepath.toLowerCase();
   let score = 0;
@@ -94,7 +181,7 @@ function scoreChunk(chunk: LocalChunk): number {
     score -= 10;
   }
 
-  const content = chunk.content ?? "";
+  const content = stripSecurityHeader(chunk.content ?? "");
   if (content) {
     if (matchesAnyPattern(content, CHUNK_ENDPOINT_PATTERNS)) {
       score += 4;
@@ -243,6 +330,25 @@ function pickExtraChunksForHighRiskFiles(
   allChunks: LocalChunk[],
   maxExtraChunks: number
 ): LocalChunk[] {
+  const scoresByPath = new Map<string, number>();
+  for (const chunk of selected) {
+    if (!chunk.filepath) continue;
+    const score = scoreChunk(chunk);
+    if (score < HIGH_RISK_CHUNK_SCORE) continue;
+    const current = scoresByPath.get(chunk.filepath) ?? Number.NEGATIVE_INFINITY;
+    if (score > current) {
+      scoresByPath.set(chunk.filepath, score);
+    }
+  }
+  if (scoresByPath.size === 0) {
+    return [];
+  }
+
+  const ranked = Array.from(scoresByPath.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([filepath]) => filepath);
+  const targets = ranked.slice(0, Math.max(0, maxExtraChunks));
+
   const chunksByFile = new Map<string, LocalChunk[]>();
   for (const chunk of allChunks) {
     if (!chunk.filepath || !chunk.content) continue;
@@ -257,11 +363,9 @@ function pickExtraChunksForHighRiskFiles(
   }
 
   const extras: LocalChunk[] = [];
-  for (const chunk of selected) {
+  for (const filepath of targets) {
     if (extras.length >= maxExtraChunks) break;
-    const score = scoreChunk(chunk);
-    if (score < HIGH_RISK_CHUNK_SCORE) continue;
-    const list = chunksByFile.get(chunk.filepath) ?? [];
+    const list = chunksByFile.get(filepath) ?? [];
     const extra = list.find((candidate) => candidate.chunkIndex > 0);
     if (extra) {
       extras.push(extra);
@@ -296,9 +400,15 @@ export function buildRepositoryFileSamples(
   allChunks: LocalChunk[],
   options: SampleSelectionOptions
 ): RepositoryFileSample[] {
-  const filtered = allChunks
-    .map((chunk) => ({ ...chunk, filepath: normalizePath(chunk.filepath) }))
-    .filter((chunk) => chunk.filepath && !shouldIgnoreSamplePath(chunk.filepath));
+  const normalized = allChunks.map((chunk) => ({
+    ...chunk,
+    filepath: normalizePath(chunk.filepath),
+    chunkFormat: chunk.chunkFormat ?? null
+  }));
+
+  const filtered = preferSecurityChunks(
+    normalized.filter((chunk) => chunk.filepath && !shouldIgnoreSamplePath(chunk.filepath))
+  );
 
   if (!filtered.length) {
     return [];
@@ -319,10 +429,12 @@ export function buildRepositoryFileSamples(
 
   const preferred = (options.preferredChunks ?? []).map((chunk) => ({
     ...chunk,
-    filepath: normalizePath(chunk.filepath)
+    filepath: normalizePath(chunk.filepath),
+    chunkFormat: chunk.chunkFormat ?? null
   }));
+  const alignedPreferred = preferSecurityChunks(alignPreferredChunks(preferred, filtered));
 
-  const combined = mergeChunkSelection(expanded, preferred);
+  const combined = mergeChunkSelection(expanded, alignedPreferred);
   const capped = capChunks(combined, maxFiles, maxChunksPerFile);
 
   return capped.map((chunk) => ({
@@ -331,7 +443,8 @@ export function buildRepositoryFileSamples(
     startLine: chunk.startLine,
     endLine: chunk.endLine,
     chunkIndex: chunk.chunkIndex,
-    truncated: chunk.chunkIndex > 0
+    truncated: chunk.chunkIndex > 0,
+    overlapGroupId: chunk.overlapGroupId ?? null
   }));
 }
 
@@ -341,13 +454,17 @@ export function toLocalChunk(record: {
   start_line: number;
   end_line: number;
   content: string;
+  chunk_format?: string | null;
+  overlap_group_id?: string | null;
 }): LocalChunk {
   return {
     filepath: record.filepath,
     chunkIndex: record.chunk_index,
     startLine: record.start_line,
     endLine: record.end_line,
-    content: record.content
+    content: record.content,
+    chunkFormat: record.chunk_format ?? null,
+    overlapGroupId: record.overlap_group_id ?? null
   };
 }
 

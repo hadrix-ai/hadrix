@@ -23,6 +23,7 @@ import {
   type FileRoleAssignment,
   REQUIRED_CONTROLS
 } from "./repositoryHeuristics.js";
+import { buildFindingIdentityKey, extractFindingIdentityType } from "./dedupeKey.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -223,7 +224,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     ]);
 
     try {
-      return parseFindings(response, input.repository, {
+      const parsed = parseFindings(response, input.repository, {
         requireFilepath: true,
         defaultLocation: {
           filepath: file.path,
@@ -232,6 +233,14 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           chunkIndex: file.chunkIndex
         }
       });
+      const overlapGroupId = file.overlapGroupId ?? null;
+      if (overlapGroupId) {
+        return parsed.map((finding) => ({
+          ...finding,
+          details: { ...toRecord(finding.details), overlapGroupId }
+        }));
+      }
+      return parsed;
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
@@ -932,10 +941,8 @@ export function reduceRepositoryFindings(findings: RepositoryScanFinding[]): Rep
 }
 
 function repositoryFindingFingerprint(finding: RepositoryScanFinding): string | null {
-  return buildLocationFingerprint({
-    location: toRecord(finding.location),
-    typeKey: normalizeFindingTypeKey(finding)
-  });
+  const key = buildFindingIdentityKey(finding);
+  return key || null;
 }
 
 function mergeRepositoryFindings(
@@ -1020,16 +1027,14 @@ function normalizeFindingType(value: unknown): string | null {
 }
 
 function normalizeFindingTypeKey(finding: RepositoryScanFinding): string {
-  const details = toRecord(finding.details);
-  return normalizeFindingTypeKeyFromValues(finding.type, details);
+  return extractFindingIdentityType(finding);
 }
 
 function normalizeFindingTypeKeyFromValues(typeValue: unknown, details: Record<string, unknown>): string {
-  const type =
-    normalizeFindingType(typeValue) ??
-    normalizeFindingType(details.type) ??
-    normalizeFindingType(details.category);
-  return type ? type.toLowerCase() : "";
+  return extractFindingIdentityType({
+    type: typeof typeValue === "string" ? typeValue : null,
+    details
+  });
 }
 
 function summaryTokenSet(value: string): Set<string> {
@@ -1194,12 +1199,7 @@ function pickExistingFindings(findings: ExistingScanFinding[], maxFindings: numb
 }
 
 function existingFindingFingerprint(finding: ExistingScanFinding): string {
-  return (
-    buildLocationFingerprint({
-      location: toRecord(finding.location),
-      typeKey: normalizeFindingTypeKeyFromValues(finding.type, toRecord(finding.details))
-    }) ?? ""
-  );
+  return buildFindingIdentityKey(finding) || "";
 }
 
 function sanitizeExistingFinding(finding: ExistingScanFinding): ExistingScanFinding {
@@ -1267,47 +1267,6 @@ function sanitizePriorFinding(finding: RepositoryScanFinding): RepositoryScanFin
     location: filepath || startLine || endLine ? { filepath, startLine, endLine } : null,
     details
   };
-}
-
-function buildLocationFingerprint(args: {
-  location: Record<string, unknown> | null;
-  typeKey: string;
-}): string | null {
-  const typeKey = args.typeKey.trim().toLowerCase();
-  if (!typeKey || !args.location) {
-    return null;
-  }
-
-  const normalizedLocation = normalizeFindingLocation(args.location);
-  if (!normalizedLocation) {
-    return null;
-  }
-
-  const filepathRaw = normalizedLocation.filepath as unknown;
-  const filepath = typeof filepathRaw === "string" ? normalizePath(filepathRaw) : "";
-  if (!filepath) {
-    return null;
-  }
-
-  const startLine = normalizeLineNumber(normalizedLocation.startLine);
-  const endLine = normalizeLineNumber(normalizedLocation.endLine);
-  const chunkIndex = normalizeChunkIndex((normalizedLocation as any).chunkIndex);
-  let anchor: string | null = null;
-  if (startLine || endLine) {
-    const start = startLine ?? endLine ?? 0;
-    let end = endLine ?? start;
-    if (end < start) {
-      end = start;
-    }
-    anchor = `lines:${start}-${end}`;
-  } else if (chunkIndex !== null) {
-    anchor = `chunk:${chunkIndex}`;
-  }
-  if (!anchor) {
-    return null;
-  }
-
-  return `${filepath}|${anchor}|${typeKey}`;
 }
 
 function toRecord(value: unknown): Record<string, unknown> {

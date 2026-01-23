@@ -109,6 +109,7 @@ program
   .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
   .option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots")
   .option("--skip-static", "Skip running static scanners")
+  .option("--skip-jelly-anchors", "Skip jelly call graph anchors")
   .option("--existing-findings <path>", "Existing findings JSON array or file path")
   .option("--repo-full-name <name>", "Repository full name for metadata")
   .option("--repo-id <id>", "Repository id for metadata")
@@ -122,6 +123,7 @@ program
       repoPath?: string;
       repoPathInference?: boolean;
       skipStatic?: boolean;
+      skipJellyAnchors?: boolean;
       existingFindings?: string;
       repoFullName?: string;
       repoId?: string;
@@ -166,6 +168,7 @@ program
           repoPath: options.repoPath,
           inferRepoPath: options.repoPathInference,
           skipStatic: options.skipStatic ?? false,
+          skipJellyAnchors: options.skipJellyAnchors ?? false,
           existingFindings,
           repoFullName: options.repoFullName,
           repositoryId: options.repoId,
@@ -241,7 +244,7 @@ program
         autoYes: options.yes ?? false,
         logger: (message) => console.log(message)
       });
-      const failed = results.filter((result) => !result.installed);
+      const failed = results.filter((result) => !result.installed && !result.optional);
       if (failed.length) {
         console.error(
           pc.red(`Setup incomplete. Missing: ${failed.map((r) => r.tool).join(", ")}.`)

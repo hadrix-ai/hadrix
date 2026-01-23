@@ -1,5 +1,27 @@
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
+export type SecurityHeader = {
+  entry_point: {
+    type: string;
+    identifier: string;
+  };
+  execution_role: string;
+  trust_boundaries: string[];
+  authentication: {
+    enforced: string;
+    mechanism: string;
+    location?: string;
+  };
+  authorization: {
+    enforced: string;
+    model: string;
+  };
+  input_sources: string[];
+  data_sensitivity: string[];
+  sinks: string[];
+  security_assumptions: string[];
+};
+
 export interface Finding {
   id: string;
   title: string;
@@ -26,6 +48,7 @@ export interface StaticFinding {
   startLine: number;
   endLine: number;
   snippet?: string;
+  details?: Record<string, unknown>;
 }
 
 export interface RepositoryFileSample {
@@ -35,6 +58,7 @@ export interface RepositoryFileSample {
   chunkIndex: number;
   content: string;
   truncated?: boolean;
+  overlapGroupId?: string | null;
 }
 
 export interface RepositoryScanFinding {
@@ -85,6 +109,14 @@ export interface Chunk {
   endLine: number;
   content: string;
   contentHash: string;
+  chunkFormat?: string | null;
+  securityHeader?: SecurityHeader | null;
+  primarySymbol?: string | null;
+  entryPoint?: string | null;
+  executionRole?: string | null;
+  sinks?: string[] | null;
+  overlapGroupId?: string | null;
+  dedupeKey?: string | null;
 }
 
 export interface ScanResult {
