@@ -5,6 +5,7 @@ import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
 import type { CoreFinding, ScanResult } from "../types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
+import { createOpenAiSummaryComparator } from "./openAiComparator.js";
 import { ALL_EVAL_SPECS } from "./specs.js";
 import type {
   EvalFinding,
@@ -387,6 +388,7 @@ export function formatEvalsSummaryMarkdown(result: RunEvalsResult): string {
 export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsResult> {
   const start = Date.now();
   const logger = options.logger ?? (() => {});
+  const comparator = createOpenAiSummaryComparator();
   const specsToRun = ALL_EVAL_SPECS.filter((spec) => matchesSpec(spec, options.specId));
   if (specsToRun.length === 0) {
     throw new Error(`No eval specs matched: ${options.specId ?? "(all)"}`);
@@ -442,6 +444,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
       const evalResponse = await evaluateRepoSpec({
         spec: { ...spec, groups: runnableGroups },
         actual: evalFindings,
+        comparator,
         groupId: null,
         summaryMatchThreshold: options.summaryMatchThreshold,
         comparisonConcurrency: options.comparisonConcurrency,

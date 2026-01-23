@@ -74,6 +74,10 @@ git clone https://github.com/hadrix-ai/hadrix-evals-nextjs .hadrix-eval-fixtures
 HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix evals
 ```
 
+Evals always use the OpenAI comparator for matching, using the same env as the scan LLM:
+- `HADRIX_LLM_API_KEY` (or `OPENAI_API_KEY`) must be set for eval comparisons.
+- Defaults to model `gpt-4o-mini`. If `HADRIX_LLM_PROVIDER=openai`, the comparator uses `HADRIX_LLM_MODEL` by default.
+
 Optional flags:
 
 - `--spec <id>` / `--group <id>` to run a subset. Available specs:
