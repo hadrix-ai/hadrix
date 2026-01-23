@@ -659,6 +659,88 @@ function selectRepoPathForFile(filepath: string, repoPaths: string[]): string {
   return match;
 }
 
+function normalizeRepoPaths(repoPaths?: string[] | null): string[] {
+  if (!repoPaths || repoPaths.length === 0) {
+    return [];
+  }
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const repoPath of repoPaths) {
+    if (typeof repoPath !== "string") continue;
+    const cleaned = normalizePath(repoPath);
+    if (!cleaned || seen.has(cleaned)) {
+      continue;
+    }
+    seen.add(cleaned);
+    normalized.push(cleaned);
+  }
+  return normalized;
+}
+
+function selectRepoPathForFinding(
+  repoPaths: string[],
+  filepath: string,
+  rawRepoPath: unknown
+): string | null {
+  if (repoPaths.length === 0) {
+    return null;
+  }
+  if (repoPaths.length === 1) {
+    return repoPaths[0];
+  }
+
+  if (typeof rawRepoPath === "string") {
+    const normalized = normalizePath(rawRepoPath);
+    if (normalized && repoPaths.includes(normalized)) {
+      return normalized;
+    }
+  }
+
+  if (filepath) {
+    const match = selectRepoPathForFile(filepath, repoPaths);
+    return match || null;
+  }
+
+  return null;
+}
+
+function sanitizeFindingRepoPath(
+  location: Record<string, unknown> | null,
+  details: Record<string, unknown>,
+  repoPaths?: string[] | null
+): Record<string, unknown> | null {
+  const normalizedRepoPaths = normalizeRepoPaths(repoPaths);
+  const rawRepoPath =
+    location?.repoPath ??
+    (location as any)?.repo_path ??
+    details.repoPath ??
+    details.repo_path;
+  const filepath = typeof location?.filepath === "string" ? location.filepath : "";
+  const selectedRepoPath = selectRepoPathForFinding(
+    normalizedRepoPaths,
+    filepath,
+    rawRepoPath
+  );
+
+  if (selectedRepoPath) {
+    if (location) {
+      location.repoPath = selectedRepoPath;
+      delete (location as any).repo_path;
+    }
+    details.repoPath = selectedRepoPath;
+    delete (details as any).repo_path;
+  } else {
+    if (location) {
+      delete (location as any).repoPath;
+      delete (location as any).repo_path;
+    }
+    delete (details as any).repoPath;
+    delete (details as any).repo_path;
+  }
+
+  return location;
+}
+
 function parseFindings(
   raw: string,
   repository: RepositoryDescriptor,
@@ -702,6 +784,11 @@ function parseFindings(
     }
 
     const details = toRecord(item?.details);
+    const sanitizedLocation = sanitizeFindingRepoPath(
+      normalizedLocation,
+      details,
+      repository.repoPaths
+    );
     const type = normalizeFindingType(item?.type ?? details.type ?? details.category);
     const evidence = mergeStringArrays(
       normalizeEvidence(details.evidence),
@@ -722,7 +809,7 @@ function parseFindings(
       summary,
       evidence: evidence.length > 0 ? evidence : undefined,
       details,
-      location: normalizedLocation
+      location: sanitizedLocation
     });
   }
   return findings;
@@ -755,13 +842,90 @@ function extractJson(raw: string): any {
 }
 
 function safeParseJson(raw: string): any {
+  const cleaned = stripJsonComments(raw);
   try {
-    const cleaned = stripJsonComments(raw);
     return JSON.parse(cleaned);
   } catch (err) {
+    const recovered = recoverFindingsArray(cleaned);
+    if (recovered) {
+      return recovered;
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`LLM returned invalid JSON: ${message}`);
   }
+}
+
+function recoverFindingsArray(raw: string): any[] | null {
+  const text = raw.trim();
+  if (!text) {
+    return null;
+  }
+
+  // Recover complete objects from a truncated findings array.
+  let inString = false;
+  let escape = false;
+  let arrayStarted = false;
+  let objectDepth = 0;
+  let objectStart = -1;
+  const recovered: any[] = [];
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i] ?? "";
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+
+    if (!arrayStarted) {
+      if (char === "[") {
+        arrayStarted = true;
+      }
+      continue;
+    }
+
+    if (char === "{") {
+      if (objectDepth === 0) {
+        objectStart = i;
+      }
+      objectDepth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      if (objectDepth > 0) {
+        objectDepth -= 1;
+        if (objectDepth === 0 && objectStart !== -1) {
+          const candidate = text.slice(objectStart, i + 1).trim();
+          if (candidate) {
+            try {
+              recovered.push(JSON.parse(candidate));
+            } catch {
+              // Ignore malformed objects and keep earlier recovered findings.
+            }
+          }
+          objectStart = -1;
+        }
+      }
+      continue;
+    }
+
+    if (char === "]" && objectDepth === 0) {
+      break;
+    }
+  }
+
+  return recovered.length ? recovered : null;
 }
 
 function stripJsonComments(input: string): string {
@@ -818,9 +982,8 @@ function applyLocationFallback(
     return location;
   }
   const merged: Record<string, unknown> = { ...(location ?? {}) };
-  if (!hasLocationFilepath(merged)) {
-    merged.filepath = normalizePath(fallback.filepath);
-  }
+  // Always prefer the sampled file path; ignore any LLM-provided filepath.
+  merged.filepath = normalizePath(fallback.filepath);
   if (!hasLocationLineInfo(merged) && typeof fallback.startLine === "number") {
     merged.startLine = fallback.startLine;
   }

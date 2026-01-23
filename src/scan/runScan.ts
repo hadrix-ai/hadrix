@@ -1219,10 +1219,20 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
     }
 
-    const combinedFindings =
+    let combinedFindings =
       llmFindings.length || compositeFindings.length
         ? reduceRepositoryFindings([...llmFindings, ...compositeFindings])
         : [];
+    if (combinedFindings.length > 0) {
+      const { findings: dedupedCombined, dropped: dedupeCombinedDropped } = dedupeFindings(
+        combinedFindings,
+        llmSource
+      );
+      if (dedupeCombinedDropped > 0) {
+        log(`Deduped ${dedupeCombinedDropped} combined LLM findings.`);
+      }
+      combinedFindings = dedupedCombined;
+    }
     const fallbackPath = "(repository)";
     const llmOutput = combinedFindings.map((finding) =>
       toRepositoryFinding(finding, fallbackPath, repoPath)
