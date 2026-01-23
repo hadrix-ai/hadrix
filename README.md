@@ -56,6 +56,39 @@ hadrix scan /path/to/monorepo --no-repo-path-inference
 
 You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
 
+## Running evals locally
+
+Hadrix can run the same eval suites used in CI, but using the local CLI scan logic.
+
+1) Clone the fixture repos into a local directory (default: `./.hadrix-eval-fixtures`):
+
+```bash
+mkdir -p .hadrix-eval-fixtures
+git clone https://github.com/hadrix-ai/hadrix-evals-react-supabase .hadrix-eval-fixtures/hadrix-evals-react-supabase
+git clone https://github.com/hadrix-ai/hadrix-evals-nextjs .hadrix-eval-fixtures/hadrix-evals-nextjs
+```
+
+2) Run the evals:
+
+```bash
+HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix evals
+```
+
+Optional flags:
+
+- `--spec <id>` / `--group <id>` to run a subset. Available specs:
+  - `hadrix-evals-react-supabase`
+  - `hadrix-evals-nextjs`
+- `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
+- `--repo <path>` to run a single spec against a specific repo path (requires `--spec`).
+- `--json` for machine-readable output.
+
+Artifacts are written to `./.hadrix-evals` by default:
+- `results.json` (full eval output)
+- `summary.md` (human-readable summary)
+
+Note: datastore/RLS eval groups are present in the suite but always skipped by the CLI.
+
 ## Static scanners
 
 Hadrix runs ESLint security rules for JS/TS and uses these scanners:

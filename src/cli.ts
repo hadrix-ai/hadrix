@@ -6,6 +6,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
+import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
 import { runSetup } from "./setup/runSetup.js";
 import type { ExistingScanFinding } from "./types.js";
 
@@ -222,6 +223,121 @@ program
       }
 
       process.exitCode = result.findings.length ? 1 : 0;
+    } catch (err) {
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      spinner?.stop();
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(pc.red(`Error: ${message}`));
+      process.exitCode = 2;
+    }
+  });
+
+program
+  .command("evals [fixturesDir]")
+  .description("Run Hadrix eval suites locally against fixture repos")
+  .option("--fixtures <path>", "Directory containing eval fixture repos")
+  .option("--spec <id>", "Eval spec id or repo full name")
+  .option("--group <id>", "Eval group id")
+  .option("--repo <path>", "Path to a fixture repo (requires --spec)")
+  .option("--config <path>", "Path to hadrix.config.json (relative to repo root)")
+  .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
+  .option("--no-repo-path-inference", "Disable repoPath inference for eval scans")
+  .option("--threshold <num>", "Summary match threshold (0-1)")
+  .option("--short-circuit <num>", "Short-circuit threshold (0-1)")
+  .option("--concurrency <num>", "Comparator concurrency")
+  .option("--out-dir <path>", "Directory for eval artifacts (default .hadrix-evals)")
+  .option("--json", "Output JSON instead of text")
+  .option("--skip-static", "Skip static scanners")
+  .action(async (fixturesDir: string | undefined, options: {
+    fixtures?: string;
+    spec?: string;
+    group?: string;
+    repo?: string;
+    config?: string;
+    repoPath?: string;
+    repoPathInference?: boolean;
+    threshold?: string;
+    shortCircuit?: string;
+    concurrency?: string;
+    outDir?: string;
+    json?: boolean;
+    skipStatic?: boolean;
+  }) => {
+    const output = options.json ? "json" : "text";
+    const useSpinner = output !== "json" && process.stderr.isTTY;
+    const spinner = useSpinner ? new Spinner(process.stderr) : null;
+    const evalStart = Date.now();
+    let statusMessage = "Running evals...";
+
+    const formatElapsed = () => formatDuration(Date.now() - evalStart);
+    const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
+    let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+
+    const logger = (message: string) => {
+      if (output === "json") return;
+      if (spinner) {
+        statusMessage = message;
+        spinner.update(formatStatus(statusMessage));
+        return;
+      }
+      console.error(message);
+    };
+
+    const parseNumber = (value?: string): number | undefined => {
+      if (!value) return undefined;
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return undefined;
+      return parsed;
+    };
+
+    const fixtures = fixturesDir ?? options.fixtures;
+    const outDir = options.outDir ? path.resolve(process.cwd(), options.outDir) : path.resolve(process.cwd(), ".hadrix-evals");
+
+    try {
+      if (spinner) {
+        spinner.start(formatStatus(statusMessage));
+        elapsedTimer = setInterval(() => {
+          spinner.update(formatStatus(statusMessage));
+        }, 1000);
+      }
+      const result = await runEvals({
+        fixturesDir: fixtures ?? null,
+        specId: options.spec ?? null,
+        groupId: options.group ?? null,
+        repo: options.repo ?? null,
+        configPath: options.config ?? null,
+        repoPath: options.repoPath ?? null,
+        inferRepoPath: options.repoPathInference,
+        summaryMatchThreshold: parseNumber(options.threshold),
+        shortCircuitThreshold: parseNumber(options.shortCircuit),
+        comparisonConcurrency: parseNumber(options.concurrency),
+        output,
+        skipStatic: options.skipStatic,
+        logger,
+      });
+
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      spinner?.stop();
+
+      await writeEvalArtifacts(result, outDir).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger(`Failed to write eval artifacts: ${message}`);
+      });
+
+      if (output === "json") {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatEvalsText(result));
+        console.log(`\\nArtifacts written to ${outDir}`);
+      }
+
+      process.exitCode = result.pass ? 0 : 1;
     } catch (err) {
       if (elapsedTimer) {
         clearInterval(elapsedTimer);
