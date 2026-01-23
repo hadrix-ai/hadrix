@@ -11,7 +11,14 @@ import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
-import type { ExistingScanFinding, Finding, RepositoryScanFinding, ScanResult, StaticFinding } from "../types.js";
+import type {
+  CoreFinding,
+  ExistingScanFinding,
+  Finding,
+  RepositoryScanFinding,
+  ScanResult,
+  StaticFinding
+} from "../types.js";
 
 export interface RunScanOptions {
   projectRoot: string;
@@ -19,8 +26,21 @@ export interface RunScanOptions {
   overrides?: Partial<HadrixConfig>;
   repoPath?: string | null;
   inferRepoPath?: boolean;
+  skipStatic?: boolean;
+  existingFindings?: ExistingScanFinding[];
+  repoFullName?: string | null;
+  repositoryId?: string | null;
+  commitSha?: string | null;
   logger?: (message: string) => void;
 }
+
+type ChunkRow = {
+  id: number;
+  filepath: string;
+  chunk_index: number;
+  start_line: number;
+  end_line: number;
+};
 
 function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
   if (vector.length !== expectedDims) {
@@ -57,6 +77,74 @@ function normalizeLineNumber(value: unknown, fallback: number): number {
     }
   }
   return fallback;
+}
+
+function parseChunkIndex(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.trunc(parsed);
+    }
+  }
+  return null;
+}
+
+function findChunkForLine(chunks: ChunkRow[], filepath: string, line: number): ChunkRow | null {
+  const normalized = normalizePath(filepath);
+  if (!normalized) return null;
+  for (const chunk of chunks) {
+    if (normalizePath(chunk.filepath) !== normalized) continue;
+    if (chunk.start_line <= line && line <= chunk.end_line) {
+      return chunk;
+    }
+  }
+  return null;
+}
+
+function findChunkForIndex(
+  chunks: ChunkRow[],
+  filepath: string,
+  chunkIndex: number
+): ChunkRow | null {
+  const normalized = normalizePath(filepath);
+  if (!normalized) return null;
+  for (const chunk of chunks) {
+    if (normalizePath(chunk.filepath) !== normalized) continue;
+    if (chunk.chunk_index === chunkIndex) {
+      return chunk;
+    }
+  }
+  return null;
+}
+
+function extractLocationFilepath(location: Record<string, unknown>): string {
+  const raw = (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  return typeof raw === "string" ? raw : "";
+}
+
+function buildCoreLocation(params: {
+  filepath?: string | null;
+  startLine?: number | null;
+  endLine?: number | null;
+  repoPath?: string | null;
+  repoFullName?: string | null;
+  commitSha?: string | null;
+  chunkIndex?: number | null;
+  chunkId?: number | null;
+}): Record<string, unknown> | null {
+  const location: Record<string, unknown> = {};
+  if (params.filepath) location.filepath = params.filepath;
+  if (typeof params.startLine === "number") location.startLine = params.startLine;
+  if (typeof params.endLine === "number") location.endLine = params.endLine;
+  if (params.repoPath) location.repoPath = params.repoPath;
+  if (params.repoFullName) location.repoFullName = params.repoFullName;
+  if (params.commitSha) location.commitSha = params.commitSha;
+  if (typeof params.chunkIndex === "number") location.chunkIndex = params.chunkIndex;
+  if (typeof params.chunkId === "number") location.chunkId = params.chunkId;
+  return Object.keys(location).length ? location : null;
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -150,7 +238,12 @@ function resolveScanRoot(
   return { scanRoot: repoRoot, repoPath: null, missing: normalized };
 }
 
-function toExistingFindings(staticFindings: StaticFinding[], repoPath?: string | null): ExistingScanFinding[] {
+function toExistingFindings(
+  staticFindings: StaticFinding[],
+  repoPath?: string | null,
+  repoFullName?: string | null,
+  repositoryId?: string | null
+): ExistingScanFinding[] {
   const normalizedRepoPath = normalizeRepoPath(repoPath ?? "");
   return staticFindings.map((finding) => {
     const filepath = normalizePath(finding.filepath);
@@ -162,18 +255,222 @@ function toExistingFindings(staticFindings: StaticFinding[], repoPath?: string |
     if (normalizedRepoPath && (filepath === normalizedRepoPath || filepath.startsWith(`${normalizedRepoPath}/`))) {
       location.repoPath = normalizedRepoPath;
     }
+    const source = `static_${finding.tool}`;
     return {
+      repositoryId: repositoryId ?? undefined,
+      repositoryFullName: repoFullName ?? undefined,
       type: null,
-      source: finding.tool,
+      source,
       severity: finding.severity,
       summary: finding.message,
       location,
       details: {
-        tool: finding.tool,
+        tool: source,
         ruleId: finding.ruleId
       }
     };
   });
+}
+
+function normalizeExistingFindings(
+  findings: ExistingScanFinding[] | undefined,
+  params: { repoFullName?: string | null; repositoryId?: string | null; repoPath?: string | null }
+): ExistingScanFinding[] {
+  if (!findings || findings.length === 0) {
+    return [];
+  }
+  return findings.map((finding) => {
+    const location = toRecord(finding.location);
+    const nextLocation: Record<string, unknown> = { ...location };
+    if (params.repoPath && nextLocation.repoPath == null && (nextLocation as any).repo_path == null) {
+      nextLocation.repoPath = params.repoPath;
+    }
+    return {
+      ...finding,
+      repositoryId: finding.repositoryId ?? params.repositoryId ?? undefined,
+      repositoryFullName: finding.repositoryFullName ?? params.repoFullName ?? undefined,
+      location: Object.keys(nextLocation).length ? nextLocation : finding.location ?? null
+    };
+  });
+}
+
+function toCoreStaticFindings(params: {
+  findings: StaticFinding[];
+  repoFullName?: string | null;
+  repositoryId?: string | null;
+  repoPath?: string | null;
+  commitSha?: string | null;
+  chunks: ChunkRow[];
+}): CoreFinding[] {
+  const normalizedRepoPath = normalizeRepoPath(params.repoPath ?? "");
+  return params.findings.map((finding) => {
+    const source = `static_${finding.tool}`;
+    const filepath = normalizePath(finding.filepath);
+    const chunk = findChunkForLine(params.chunks, filepath, finding.startLine);
+    const location = buildCoreLocation({
+      filepath,
+      startLine: finding.startLine,
+      endLine: finding.endLine,
+      repoPath: normalizedRepoPath || undefined,
+      repoFullName: params.repoFullName ?? undefined,
+      commitSha: params.commitSha ?? undefined,
+      chunkIndex: chunk?.chunk_index ?? null,
+      chunkId: chunk?.id ?? null
+    });
+    const details: Record<string, unknown> = {
+      ruleId: finding.ruleId,
+      tool: source,
+      snippet: finding.snippet ?? null
+    };
+    if (params.repoFullName) details.repoFullName = params.repoFullName;
+    if (normalizedRepoPath) details.repoPath = normalizedRepoPath;
+    if (params.commitSha) details.commitSha = params.commitSha;
+    if (params.repositoryId) details.repositoryId = params.repositoryId;
+    return {
+      type: "static",
+      source,
+      severity: finding.severity,
+      summary: finding.message,
+      location,
+      details
+    };
+  });
+}
+
+function toCoreRepositoryFinding(params: {
+  finding: RepositoryScanFinding;
+  type: CoreFinding["type"];
+  source: string;
+  repoFullName?: string | null;
+  repositoryId?: string | null;
+  repoPath?: string | null;
+  commitSha?: string | null;
+  chunks: ChunkRow[];
+}): CoreFinding {
+  const details = { ...toRecord(params.finding.details) };
+  const locationRecord = toRecord(params.finding.location);
+  const rawFilepath = extractLocationFilepath(locationRecord);
+  const normalizedRepoPath = normalizeRepoPath(params.repoPath ?? "");
+  const normalizedLocation = rawFilepath
+    ? normalizeLocation(locationRecord, rawFilepath, normalizedRepoPath || undefined)
+    : null;
+  const chunkIndex =
+    parseChunkIndex((locationRecord as any).chunkIndex ?? (locationRecord as any).chunk_index) ??
+    null;
+  const filepath = normalizedLocation?.filepath ?? (rawFilepath ? normalizePath(rawFilepath) : "");
+  let chunk: ChunkRow | null = null;
+  if (filepath && typeof chunkIndex === "number") {
+    chunk = findChunkForIndex(params.chunks, filepath, chunkIndex);
+  }
+  if (!chunk && filepath && typeof normalizedLocation?.startLine === "number") {
+    chunk = findChunkForLine(params.chunks, filepath, normalizedLocation.startLine);
+  }
+
+  const repositoryId =
+    params.repositoryId ??
+    params.finding.repositoryId ??
+    (typeof details.repositoryId === "string" ? details.repositoryId : undefined);
+  const repositoryFullName =
+    params.repoFullName ??
+    params.finding.repositoryFullName ??
+    (typeof details.repositoryFullName === "string" ? details.repositoryFullName : undefined);
+
+  if (params.finding.type) {
+    if (typeof details.findingType !== "string") details.findingType = params.finding.type;
+    if (typeof details.type !== "string") details.type = params.finding.type;
+    if (!details.ruleId) details.ruleId = params.finding.type;
+  }
+
+  const evidence = mergeStringArrays(
+    toStringArray(params.finding.evidence),
+    toStringArray(details.evidence)
+  );
+  if (evidence.length > 0 && (!details.evidence || typeof details.evidence === "string" || Array.isArray(details.evidence))) {
+    details.evidence = evidence;
+  }
+
+  if (repositoryId) details.repositoryId = repositoryId;
+  if (repositoryFullName) {
+    details.repoFullName = repositoryFullName;
+    details.repositoryFullName = repositoryFullName;
+  }
+  if (normalizedRepoPath) details.repoPath = normalizedRepoPath;
+  if (params.commitSha) details.commitSha = params.commitSha;
+
+  const location = buildCoreLocation({
+    filepath: filepath || undefined,
+    startLine: normalizedLocation?.startLine ?? null,
+    endLine: normalizedLocation?.endLine ?? null,
+    repoPath: normalizedRepoPath || undefined,
+    repoFullName: repositoryFullName ?? params.repoFullName ?? undefined,
+    commitSha: params.commitSha ?? undefined,
+    chunkIndex: chunk?.chunk_index ?? chunkIndex,
+    chunkId: chunk?.id ?? null
+  });
+
+  const category = typeof details.category === "string" ? details.category : null;
+
+  return {
+    type: params.type,
+    source: params.source,
+    severity: params.finding.severity,
+    summary: params.finding.summary,
+    category,
+    location,
+    details
+  };
+}
+
+function toCoreRepositoryFindings(params: {
+  findings: RepositoryScanFinding[];
+  type: CoreFinding["type"];
+  source: string;
+  repoFullName?: string | null;
+  repositoryId?: string | null;
+  repoPath?: string | null;
+  commitSha?: string | null;
+  chunks: ChunkRow[];
+}): CoreFinding[] {
+  return params.findings.map((finding) =>
+    toCoreRepositoryFinding({
+      finding,
+      type: params.type,
+      source: params.source,
+      repoFullName: params.repoFullName,
+      repositoryId: params.repositoryId,
+      repoPath: params.repoPath,
+      commitSha: params.commitSha,
+      chunks: params.chunks
+    })
+  );
+}
+
+function enrichRepositoryFinding(
+  finding: RepositoryScanFinding,
+  params: { repoFullName?: string | null; repositoryId?: string | null; repoPath?: string | null; commitSha?: string | null }
+): RepositoryScanFinding {
+  const details = { ...toRecord(finding.details) };
+  const repoFullName = params.repoFullName ?? finding.repositoryFullName ?? undefined;
+  const repositoryId = params.repositoryId ?? finding.repositoryId ?? undefined;
+  if (repoFullName) {
+    details.repoFullName = details.repoFullName ?? repoFullName;
+    details.repositoryFullName = details.repositoryFullName ?? repoFullName;
+  }
+  if (repositoryId) {
+    details.repositoryId = details.repositoryId ?? repositoryId;
+  }
+  if (params.repoPath) {
+    details.repoPath = details.repoPath ?? params.repoPath;
+  }
+  if (params.commitSha) {
+    details.commitSha = details.commitSha ?? params.commitSha;
+  }
+  return {
+    ...finding,
+    repositoryId: repositoryId ?? undefined,
+    repositoryFullName: repoFullName ?? undefined,
+    details
+  };
 }
 
 function toRepositoryFinding(
@@ -238,8 +535,32 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const scanRoot = resolved.scanRoot;
   repoPath = resolved.repoPath;
 
-  const staticFindings = await runStaticScanners(config, scanRoot, log);
-  log("Static scanners complete.");
+  const repoFullName =
+    typeof options.repoFullName === "string" && options.repoFullName.trim()
+      ? options.repoFullName.trim()
+      : path.basename(config.projectRoot) || "local-repo";
+  const repositoryId =
+    typeof options.repositoryId === "string" && options.repositoryId.trim()
+      ? options.repositoryId.trim()
+      : null;
+  const commitSha =
+    typeof options.commitSha === "string" && options.commitSha.trim()
+      ? options.commitSha.trim()
+      : null;
+
+  const staticFindings = options.skipStatic
+    ? []
+    : await runStaticScanners(config, scanRoot, log);
+  log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
+
+  const existingFindings = [
+    ...toExistingFindings(staticFindings, repoPath, repoFullName, repositoryId),
+    ...normalizeExistingFindings(options.existingFindings, {
+      repoFullName,
+      repositoryId,
+      repoPath
+    })
+  ];
 
   const files = await discoverFiles({
     root: scanRoot,
@@ -342,116 +663,162 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         )
       : allChunks;
     const scannedChunks = scopedChunks.length;
+    let llmFindings: RepositoryScanFinding[] = [];
+    let compositeFindings: RepositoryScanFinding[] = [];
 
-    if (!scopedChunks.length) {
-      return {
-        findings: toStaticFindings(staticFindings, repoPath),
-        scannedFiles: files.length,
-        scannedChunks,
-        durationMs: Date.now() - start
-      };
-    }
+    if (scopedChunks.length > 0) {
+      let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
+      if (config.sampling.queries.length) {
+        log("Retrieving top-k chunks...");
+        const queryEmbeddings = await embedTexts(config, config.sampling.queries);
+        const candidates = new Map<number, number>();
 
-    let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
-    if (config.sampling.queries.length) {
-      log("Retrieving top-k chunks...");
-      const queryEmbeddings = await embedTexts(config, config.sampling.queries);
-      const candidates = new Map<number, number>();
-
-      for (const vector of queryEmbeddings) {
-        const results = db.querySimilar(
-          embeddingToBuffer(vector, config.embeddings.dimensions),
-          config.sampling.topKPerQuery
-        );
-        for (const result of results) {
-          const existing = candidates.get(result.chunkId);
-          if (existing === undefined || result.distance < existing) {
-            candidates.set(result.chunkId, result.distance);
+        for (const vector of queryEmbeddings) {
+          const results = db.querySimilar(
+            embeddingToBuffer(vector, config.embeddings.dimensions),
+            config.sampling.topKPerQuery
+          );
+          for (const result of results) {
+            const existing = candidates.get(result.chunkId);
+            if (existing === undefined || result.distance < existing) {
+              candidates.set(result.chunkId, result.distance);
+            }
           }
         }
+
+        const orderedIds = [...candidates.entries()]
+          .sort((a, b) => a[1] - b[1])
+          .map(([id]) => id);
+
+        const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
+        const rows = db.getChunksByIds(limitedIds);
+        const rowById = new Map(rows.map((row) => [row.id, row]));
+        preferredChunks = limitedIds
+          .map((id) => rowById.get(id))
+          .filter(Boolean)
+          .filter((row) =>
+            repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
+          )
+          .map((row) => toLocalChunk(row!));
       }
 
-      const orderedIds = [...candidates.entries()]
-        .sort((a, b) => a[1] - b[1])
-        .map(([id]) => id);
+      log("Heuristic analysis and chunk sampling...");
+      const fileSamples = buildRepositoryFileSamples(
+        scopedChunks.map((chunk) =>
+          toLocalChunk({
+            filepath: chunk.filepath,
+            chunk_index: chunk.chunk_index,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            content: chunk.content
+          })
+        ),
+        {
+          maxFiles: config.sampling.maxChunks,
+          maxChunksPerFile: config.sampling.maxChunksPerFile,
+          preferredChunks
+        }
+      );
 
-      const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
-      const rows = db.getChunksByIds(limitedIds);
-      const rowById = new Map(rows.map((row) => [row.id, row]));
-      preferredChunks = limitedIds
-        .map((id) => rowById.get(id))
-        .filter(Boolean)
-        .filter((row) =>
-          repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
-        )
-        .map((row) => toLocalChunk(row!));
+      if (fileSamples.length > 0) {
+        const repository = {
+          fullName: repoFullName,
+          repoPaths: repoPath ? [repoPath] : []
+        };
+
+        log("LLM scan (map pass)...");
+        llmFindings = await scanRepository({
+          config,
+          repository,
+          files: fileSamples,
+          existingFindings
+        });
+
+        if (llmFindings.length || existingFindings.length) {
+          log("LLM scan (composite pass)...");
+          compositeFindings = await scanRepositoryComposites({
+            config,
+            repository,
+            files: fileSamples,
+            existingFindings,
+            priorFindings: llmFindings
+          });
+        }
+      }
     }
 
-    log("Heuristic analysis and chunk sampling...");
-    const fileSamples = buildRepositoryFileSamples(
-      scopedChunks.map((chunk) =>
-        toLocalChunk({
-          filepath: chunk.filepath,
-          chunk_index: chunk.chunk_index,
-          start_line: chunk.start_line,
-          end_line: chunk.end_line,
-          content: chunk.content
+    if (llmFindings.length > 0 || compositeFindings.length > 0) {
+      llmFindings = llmFindings.map((finding) =>
+        enrichRepositoryFinding(finding, {
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha
         })
-      ),
-      {
-        maxFiles: config.sampling.maxChunks,
-        maxChunksPerFile: config.sampling.maxChunksPerFile,
-        preferredChunks
-      }
-    );
-
-    if (!fileSamples.length) {
-      return {
-        findings: toStaticFindings(staticFindings, repoPath),
-        scannedFiles: files.length,
-        scannedChunks,
-        durationMs: Date.now() - start
-      };
+      );
+      compositeFindings = compositeFindings.map((finding) =>
+        enrichRepositoryFinding(finding, {
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha
+        })
+      );
     }
 
-    const repository = {
-      fullName: path.basename(config.projectRoot) || "local-repo",
-      repoPaths: repoPath ? [repoPath] : []
-    };
-
-    const existingFindings = toExistingFindings(staticFindings, repoPath);
-
-    log("LLM scan (map pass)...");
-    const llmFindings = await scanRepository({
-      config,
-      repository,
-      files: fileSamples,
-      existingFindings
-    });
-
-    let compositeFindings: RepositoryScanFinding[] = [];
-    if (llmFindings.length || existingFindings.length) {
-      log("LLM scan (composite pass)...");
-      compositeFindings = await scanRepositoryComposites({
-        config,
-        repository,
-        files: fileSamples,
-        existingFindings,
-        priorFindings: llmFindings
-      });
-    }
-
-    const combinedFindings = reduceRepositoryFindings([...llmFindings, ...compositeFindings]);
+    const combinedFindings =
+      llmFindings.length || compositeFindings.length
+        ? reduceRepositoryFindings([...llmFindings, ...compositeFindings])
+        : [];
     const fallbackPath = "(repository)";
     const llmOutput = combinedFindings.map((finding) =>
       toRepositoryFinding(finding, fallbackPath, repoPath)
     );
 
+    const llmSource = `llm_${config.llm.provider}_repository_scan`;
+    const llmCompositeSource = `llm_${config.llm.provider}_repository_composite_scan`;
+    const coreFindings = [
+      ...toCoreStaticFindings({
+        findings: staticFindings,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      }),
+      ...toCoreRepositoryFindings({
+        findings: llmFindings,
+        type: "repository",
+        source: llmSource,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      })
+    ];
+    const coreCompositeFindings = toCoreRepositoryFindings({
+      findings: compositeFindings,
+      type: "repository_composite",
+      source: llmCompositeSource,
+      repoFullName,
+      repositoryId,
+      repoPath,
+      commitSha,
+      chunks: scopedChunks
+    });
+
     return {
       findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],
       scannedFiles: files.length,
       scannedChunks,
-      durationMs: Date.now() - start
+      durationMs: Date.now() - start,
+      staticFindings,
+      repositoryFindings: llmFindings,
+      compositeFindings,
+      existingFindings,
+      coreFindings,
+      coreCompositeFindings
     };
   } finally {
     db.close();

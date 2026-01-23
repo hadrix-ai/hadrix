@@ -1082,7 +1082,7 @@ function normalizeSeverity(value: unknown): Severity {
     case "info":
     case "informational":
     case "note":
-      return "low";
+      return str === "info" || str === "informational" || str === "note" ? "info" : "low";
     case "medium":
     case "moderate":
     case "sev2":

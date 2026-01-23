@@ -24,24 +24,24 @@
   },
   "dependencies": {
     "@eslint/compat": "^1.3.2",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "adm-zip": "^0.5.12",
     "better-sqlite3": "^9.4.0",
     "commander": "^11.0.0",
-    "eslint": "^9.0.0",
-    "eslint-plugin-security": "^2.1.1",
+    "eslint": "^8.57.0",
+    "eslint-plugin-security": "^2.1.0",
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.1",
     "picocolors": "^1.0.0",
-    "tar": "^7.5.4"
+    "tar": "^7.5.4",
+    "typescript": "^5.4.0"
   },
   "optionalDependencies": {
     "vectorlite": "^0.2.0"
   },
   "devDependencies": {
     "tsup": "^8.0.1",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "tsx": "^4.7.0"
   }
 }

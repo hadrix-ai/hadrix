@@ -10,7 +10,7 @@ export interface PromptChunk {
   content: string;
 }
 
-const SEVERITIES: Severity[] = ["low", "medium", "high", "critical"];
+const SEVERITIES: Severity[] = ["info", "low", "medium", "high", "critical"];
 
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -91,7 +91,7 @@ export function buildScanMessages(chunks: PromptChunk[], staticFindingsSummary?:
     "Only cite evidence from the chunks.",
     "You are also given existing static scanner findings; do not repeat them.",
     "Return JSON array of findings with fields:",
-    "title, severity (low|medium|high|critical), description,",
+    "title, severity (info|low|medium|high|critical), description,",
     "location { filepath, startLine, endLine }, evidence, remediation, chunkId."
   ].join(" ");
 

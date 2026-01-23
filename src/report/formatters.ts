@@ -1,5 +1,5 @@
 import pc from "picocolors";
-import type { Finding, ScanResult } from "../types.js";
+import type { CoreScanResult, Finding, ScanResult } from "../types.js";
 
 function severityLabel(severity: Finding["severity"]): string {
   switch (severity) {
@@ -9,6 +9,8 @@ function severityLabel(severity: Finding["severity"]): string {
       return pc.red("HIGH");
     case "medium":
       return pc.yellow("MEDIUM");
+    case "info":
+      return pc.blue("INFO");
     case "low":
     default:
       return pc.green("LOW");
@@ -43,5 +45,25 @@ export function formatFindingsText(findings: Finding[]): string {
 }
 
 export function formatScanResultJson(result: ScanResult): string {
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify(
+    {
+      findings: result.findings,
+      scannedFiles: result.scannedFiles,
+      scannedChunks: result.scannedChunks,
+      durationMs: result.durationMs
+    },
+    null,
+    2
+  );
+}
+
+export function formatScanResultCoreJson(result: ScanResult): string {
+  const core: CoreScanResult = {
+    findings: result.coreFindings ?? [],
+    compositeFindings: result.coreCompositeFindings ?? [],
+    scannedFiles: result.scannedFiles,
+    scannedChunks: result.scannedChunks,
+    durationMs: result.durationMs
+  };
+  return JSON.stringify(core, null, 2);
 }

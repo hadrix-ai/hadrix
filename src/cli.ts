@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import { runScan } from "./scan/runScan.js";
-import { formatFindingsText, formatScanResultJson } from "./report/formatters.js";
+import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { runSetup } from "./setup/runSetup.js";
+import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
 
@@ -48,6 +51,26 @@ class Spinner {
   }
 }
 
+async function loadExistingFindings(input?: string): Promise<ExistingScanFinding[] | undefined> {
+  if (!input) return undefined;
+  const candidatePath = path.resolve(process.cwd(), input);
+  const raw = existsSync(candidatePath) ? await readFile(candidatePath, "utf-8") : input;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`existing findings JSON invalid: ${message}`);
+  }
+  if (Array.isArray(parsed)) {
+    return parsed as ExistingScanFinding[];
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).findings)) {
+    return (parsed as any).findings as ExistingScanFinding[];
+  }
+  throw new Error("existing findings must be a JSON array or { findings: [...] }.");
+}
+
 function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs <= 0) return "0s";
   const totalSeconds = durationMs / 1000;
@@ -81,10 +104,15 @@ program
   .command("scan [target]")
   .description("Scan a project directory")
   .option("-c, --config <path>", "Path to hadrix.config.json")
-  .option("-f, --format <format>", "Output format (text|json)")
+  .option("-f, --format <format>", "Output format (text|json|core-json)")
   .option("--json", "Shortcut for --format json")
   .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
   .option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots")
+  .option("--skip-static", "Skip running static scanners")
+  .option("--existing-findings <path>", "Existing findings JSON array or file path")
+  .option("--repo-full-name <name>", "Repository full name for metadata")
+  .option("--repo-id <id>", "Repository id for metadata")
+  .option("--commit-sha <sha>", "Commit SHA for metadata")
   .action(async (
     target: string | undefined,
     options: {
@@ -93,11 +121,17 @@ program
       json?: boolean;
       repoPath?: string;
       repoPathInference?: boolean;
+      skipStatic?: boolean;
+      existingFindings?: string;
+      repoFullName?: string;
+      repoId?: string;
+      commitSha?: string;
     }
   ) => {
     const projectRoot = path.resolve(process.cwd(), target ?? ".");
     const format = options.json ? "json" : options.format ?? "text";
-    const useSpinner = format !== "json" && process.stderr.isTTY;
+    const isJsonOutput = format === "json" || format === "core-json";
+    const useSpinner = !isJsonOutput && process.stderr.isTTY;
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const scanStart = Date.now();
     let statusMessage = "Running scan...";
@@ -107,7 +141,7 @@ program
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
     const logger = (message: string) => {
-      if (format === "json") return;
+      if (isJsonOutput) return;
       if (spinner) {
         statusMessage = message;
         spinner.update(formatStatus(statusMessage));
@@ -116,16 +150,6 @@ program
       console.error(message);
     };
 
-    let attemptedSetup = false;
-    const runScanOnce = async () =>
-      await runScan({
-        projectRoot,
-        configPath: options.config,
-        repoPath: options.repoPath,
-        inferRepoPath: options.repoPathInference,
-        logger
-      });
-
     try {
       if (spinner) {
         spinner.start(formatStatus(statusMessage));
@@ -133,6 +157,21 @@ program
           spinner.update(formatStatus(statusMessage));
         }, 1000);
       }
+      const existingFindings = await loadExistingFindings(options.existingFindings);
+      let attemptedSetup = false;
+      const runScanOnce = async () =>
+        await runScan({
+          projectRoot,
+          configPath: options.config,
+          repoPath: options.repoPath,
+          inferRepoPath: options.repoPathInference,
+          skipStatic: options.skipStatic ?? false,
+          existingFindings,
+          repoFullName: options.repoFullName,
+          repositoryId: options.repoId,
+          commitSha: options.commitSha,
+          logger
+        });
 
       let result;
       try {
@@ -140,7 +179,7 @@ program
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const shouldPrompt =
-          isMissingScannersError(message) && !attemptedSetup && format !== "json";
+          isMissingScannersError(message) && !attemptedSetup && !isJsonOutput;
         if (!shouldPrompt) {
           throw err;
         }
@@ -172,6 +211,8 @@ program
 
       if (format === "json") {
         console.log(formatScanResultJson(result));
+      } else if (format === "core-json") {
+        console.log(formatScanResultCoreJson(result));
       } else {
         console.log(formatFindingsText(result.findings));
         console.log(`\nScan completed in ${formatDuration(result.durationMs)}.`);

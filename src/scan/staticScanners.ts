@@ -131,13 +131,14 @@ function mapSeverity(tool: StaticFinding["tool"], raw: string | number | undefin
   if (tool === "eslint") {
     if (raw === 2) return "high";
     if (raw === 1) return "medium";
-    return "low";
+    return "info";
   }
   const value = (typeof raw === "string" ? raw : "").toLowerCase();
   if (tool === "semgrep") {
     if (value === "error") return "high";
     if (value === "warning") return "medium";
-    if (value === "info") return "low";
+    if (value === "info") return "info";
+    return "info";
   }
   if (tool === "osv-scanner") {
     if (value === "critical") return "critical";

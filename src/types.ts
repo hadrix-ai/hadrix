@@ -1,4 +1,4 @@
-export type Severity = "low" | "medium" | "high" | "critical";
+export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface Finding {
   id: string;
@@ -49,12 +49,32 @@ export interface RepositoryScanFinding {
 }
 
 export interface ExistingScanFinding {
+  repositoryId?: string;
+  repositoryFullName?: string;
   type?: string | null;
   source?: string | null;
   severity?: Severity | null;
   summary: string;
   location?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
+}
+
+export interface CoreFinding {
+  type: "static" | "repository" | "repository_composite";
+  source: string;
+  severity: Severity;
+  summary: string;
+  category?: string | null;
+  location?: Record<string, unknown> | null;
+  details: Record<string, unknown>;
+}
+
+export interface CoreScanResult {
+  findings: CoreFinding[];
+  compositeFindings: CoreFinding[];
+  scannedFiles: number;
+  scannedChunks: number;
+  durationMs: number;
 }
 
 export interface Chunk {
@@ -72,4 +92,10 @@ export interface ScanResult {
   scannedFiles: number;
   scannedChunks: number;
   durationMs: number;
+  staticFindings?: StaticFinding[];
+  repositoryFindings?: RepositoryScanFinding[];
+  compositeFindings?: RepositoryScanFinding[];
+  existingFindings?: ExistingScanFinding[];
+  coreFindings?: CoreFinding[];
+  coreCompositeFindings?: CoreFinding[];
 }

@@ -58,14 +58,14 @@ You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
 
 ## Static scanners
 
-Hadrix requires local scanners and will refuse to run without them:
+Hadrix runs ESLint security rules for JS/TS and uses these scanners:
 
 - eslint (installed via npm dependencies)
 - semgrep
 - gitleaks
 - osv-scanner
 
-Run `hadrix setup` to install them interactively (eslint is installed via npm when you install Hadrix). Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
+ESLint security rules are bundled with the CLI; no extra setup required. Run `hadrix setup` to install the external scanners (semgrep, gitleaks, osv-scanner) interactively. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
 
 ## Vector search modes
 
@@ -104,7 +104,7 @@ If the override cannot be loaded, Hadrix silently falls back to portable mode.
 ```text
 hadrix scan
   |
-  +--> Static scanners (semgrep, gitleaks, osv-scanner)
+  +--> Static scanners (eslint, semgrep, gitleaks, osv-scanner)
   |       |
   |       +--> existing findings ------------------------------+
   |                                                            |
