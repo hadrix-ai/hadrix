@@ -308,5 +308,181 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "configuration",
     description: "Login flows lack client-side backoff or throttling signals.",
     candidateTypes: ["frontend_login_rate_limit"]
+  },
+  {
+    id: "session_fixation",
+    title: "Session fixation",
+    category: "authentication",
+    description: "Session identifiers are reused across authentication changes or logins.",
+    requiredControls: ["secure_token_handling"],
+    guidance: [
+      "Regenerate session IDs on login, privilege changes, and logout.",
+      "Invalidate pre-auth sessions instead of reusing them."
+    ]
+  },
+  {
+    id: "weak_password_hashing",
+    title: "Weak password hashing",
+    category: "authentication",
+    description: "Passwords are hashed with fast or deprecated algorithms without adaptive hashing.",
+    requiredControls: ["secure_token_handling"],
+    guidance: [
+      "Use bcrypt, Argon2id, or scrypt with per-user salts and adequate cost.",
+      "Avoid MD5, SHA-1, or SHA-256 for password storage."
+    ]
+  },
+  {
+    id: "weak_encryption",
+    title: "Weak or deprecated encryption",
+    category: "authentication",
+    description: "Data is encrypted or signed with deprecated algorithms or insecure modes.",
+    requiredControls: ["secure_token_handling"],
+    guidance: [
+      "Use AES-GCM or ChaCha20-Poly1305 with random nonces.",
+      "Avoid ECB mode, DES, MD5, or SHA-1 for security use cases."
+    ]
+  },
+  {
+    id: "mass_assignment",
+    title: "Mass assignment of user-controlled fields",
+    category: "business_logic",
+    description: "Endpoints bind entire request bodies to models without field allowlists.",
+    requiredControls: ["authorization:ownership_or_membership"],
+    guidance: [
+      "Allowlist writable fields or map through DTOs.",
+      "Never accept role, ownership, pricing, or status fields from clients."
+    ]
+  },
+  {
+    id: "excessive_data_exposure",
+    title: "Excessive data exposure in API responses",
+    category: "business_logic",
+    description: "API responses include internal or sensitive fields instead of a safe DTO.",
+    requiredControls: ["authorization:ownership_or_membership"],
+    guidance: [
+      "Return DTOs/allowlisted fields instead of full ORM objects.",
+      "Strip secrets and internal metadata from responses."
+    ]
+  },
+  {
+    id: "path_traversal",
+    title: "Path traversal",
+    category: "injection",
+    description: "User-controlled file paths access files outside allowed directories.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Normalize paths and enforce base directory allowlists.",
+      "Reject '..', absolute paths, or encoded traversal sequences."
+    ]
+  },
+  {
+    id: "unrestricted_file_upload",
+    title: "Unrestricted file upload",
+    category: "configuration",
+    description: "Uploads accept arbitrary files or filenames without validation.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Validate extension, MIME type, and size before storing.",
+      "Store with server-generated names outside executable paths."
+    ]
+  },
+  {
+    id: "nosql_injection",
+    title: "NoSQL injection",
+    category: "injection",
+    description: "NoSQL queries are built from untrusted input without allowlisting.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Use typed query builders and allowlist operators/fields.",
+      "Reject operator objects like $where or $gt from client input."
+    ]
+  },
+  {
+    id: "ldap_injection",
+    title: "LDAP injection",
+    category: "injection",
+    description: "LDAP filters include unescaped user input.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Escape LDAP special characters in filters.",
+      "Prefer bind-based auth instead of filter matching."
+    ]
+  },
+  {
+    id: "xpath_injection",
+    title: "XPath injection",
+    category: "injection",
+    description: "XPath expressions include unescaped user input.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Use parameterized XPath APIs or strict input allowlists.",
+      "Escape quotes and special XPath characters."
+    ]
+  },
+  {
+    id: "template_injection",
+    title: "Template injection (SSTI)",
+    category: "injection",
+    description: "Templates render untrusted input in server-side template engines.",
+    requiredControls: ["input_validation"],
+    guidance: [
+      "Do not render user-supplied templates or expressions.",
+      "Escape user input and disable dangerous template features."
+    ]
+  },
+  {
+    id: "log_injection",
+    title: "Log injection",
+    category: "configuration",
+    description: "Untrusted input is written to logs without sanitization.",
+    requiredControls: ["output_sanitization"],
+    guidance: [
+      "Sanitize newlines and control characters in log fields.",
+      "Prefer structured logging with explicit fields."
+    ]
+  },
+  {
+    id: "insecure_temp_files",
+    title: "Insecure temporary file usage",
+    category: "configuration",
+    description: "Temporary files are created with predictable names or lax permissions.",
+    requiredControls: ["least_privilege"],
+    guidance: [
+      "Use secure temp APIs (mkstemp) with restrictive permissions.",
+      "Avoid predictable temp filenames and world-writable dirs."
+    ]
+  },
+  {
+    id: "verbose_error_messages",
+    title: "Verbose error messages",
+    category: "configuration",
+    description: "Responses expose stack traces or internal error details.",
+    requiredControls: ["authentication"],
+    guidance: [
+      "Return generic errors to clients and log details internally.",
+      "Avoid exposing stack traces, file paths, or SQL queries."
+    ]
+  },
+  {
+    id: "debug_mode_in_production",
+    title: "Debug mode enabled in production",
+    category: "configuration",
+    description: "Debug tooling or endpoints are enabled outside development.",
+    requiredControls: ["authentication"],
+    guidance: [
+      "Disable debug flags and routes in production builds.",
+      "Gate debug tooling behind explicit environment checks."
+    ]
+  },
+  {
+    id: "missing_security_headers",
+    title: "Missing security headers",
+    category: "configuration",
+    description: "Responses omit critical headers like CSP, HSTS, or X-Frame-Options.",
+    requiredControls: ["authentication"],
+    guidance: [
+      "Set CSP, HSTS, X-Frame-Options, and X-Content-Type-Options.",
+      "Apply headers via default middleware for all responses."
+    ]
   }
 ];
