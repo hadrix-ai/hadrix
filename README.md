@@ -130,12 +130,29 @@ HADRIX_VECTOR_EXTENSION_PATH=/absolute/path/to/vectorlite.dylib
 
 If the override cannot be loaded, Hadrix silently falls back to portable mode.
 
+## Debug logging
+
+Use debug logging to trace rule-pass tasks and dedupe/merge behavior. Output is JSONL (one JSON object per line).
+
+```bash
+hadrix scan /path/to/repo --debug
+```
+
+By default logs are written under `.hadrix/logs` with a timestamped filename like
+`scan-debug-2024-05-01T12-34-56-789Z.jsonl`. To control the path:
+
+```bash
+hadrix scan /path/to/repo --debug-log ./scan-debug.jsonl
+```
+
 ## CLI options
 
 - `--format json` (or `--json`) outputs machine-readable JSON and disables the spinner.
 - `--repo-path <path>` scopes a monorepo scan to a subdirectory.
 - `--no-repo-path-inference` disables monorepo repoPath inference.
 - `--skip-jelly-anchors` skips jelly call-graph anchors for this run.
+- `--debug` enables debug logging to a file.
+- `--debug-log <path>` sets the debug log file path (implies `--debug`).
 
 ## Feature flags
 
