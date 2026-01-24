@@ -1,3 +1,5 @@
+import type { RuleScanDefinition } from "./repositoryRuleCatalog.js";
+
 type RepositoryForScan = {
   fullName: string;
   defaultBranch?: string | null;
@@ -6,8 +8,7 @@ type RepositoryForScan = {
   repoPaths?: string[] | null;
 };
 
-export function buildRepositoryScanSystemPrompt(): string {
-  return [
+const BASE_SCAN_PROMPT = [
     "You are a senior application security engineer reviewing a real production repository.",
     "",
     "You are given:",
@@ -26,11 +27,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "Do NOT duplicate them.",
     "",
     "Your task is to identify NEW, high-impact vulnerabilities -- especially those caused by missing or incomplete security controls.",
-    "",
-    "For each file:",
-    "- Use its assigned role(s) to determine which security controls are REQUIRED",
-    "- Explicitly evaluate whether each required control is present or missing",
-    "- Missing required controls SHOULD be reported as findings",
+    "Use file roles, requiredControls, and scope metadata as authoritative context for applicability.",
     "",
     "You MUST reason about trust boundaries:",
     "- Assume all client input, headers, JWT claims, and frontend state are attacker-controlled",
@@ -46,6 +43,18 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Only report rate limiting, audit logging, or lockout gaps on server-side handlers/middleware (API routes, server functions).",
     "- Do not flag UI components or client SDK initialization for backend-only controls.",
     "- Do not cite package.json, lockfiles, or other non-executable config files as evidence for runtime vulnerabilities.",
+    "",
+    "Candidate findings provided are heuristic signals; if evidence supports them, prefer emitting them.",
+    "You MAY infer vulnerabilities from the ABSENCE of expected checks.",
+    "Do not require exploit code.",
+    "",
+    "Return findings strictly in the JSON schema provided.",
+    "Prefer fewer, higher-signal findings; include additional findings only when strongly supported by evidence."
+  ].join("\n");
+
+export function buildRepositoryScanSystemPrompt(): string {
+  return [
+    BASE_SCAN_PROMPT,
     "",
     "Explicitly look for:",
     "- IDOR (object fetched by ID without ownership or tenant validation)",
@@ -76,12 +85,28 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Pagination: limit/range/offset or cursor applied to list queries",
     "- Timeouts: explicit timeout/abort controller for external calls or subprocesses",
     "",
-    "Candidate findings provided are heuristic signals; if evidence supports them, prefer emitting them.",
-    "You MAY infer vulnerabilities from the ABSENCE of expected checks.",
-    "Do not require exploit code.",
+    "For each file:",
+    "- Use its assigned role(s) to determine which security controls are REQUIRED",
+    "- Explicitly evaluate whether each required control is present or missing",
+    "- Missing required controls SHOULD be reported as findings"
+  ].join("\n");
+}
+
+export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): string {
+  const ruleCard = formatRuleCard(rule);
+  return [
+    BASE_SCAN_PROMPT,
     "",
-    "Return findings strictly in the JSON schema provided.",
-    "Prefer fewer, higher-signal findings; include additional findings only when strongly supported by evidence."
+    "This scan is rule-scoped.",
+    "You may ONLY report findings for the rule below.",
+    "If evidence is insufficient or the rule does not apply, return an empty findings array.",
+    "Use requiredControls and candidateFindings for each file to determine applicability.",
+    "",
+    ruleCard,
+    "",
+    "Output requirements:",
+    "- Set finding.type to the rule id.",
+    "- Set details.ruleId to the rule id."
   ].join("\n");
 }
 
@@ -125,6 +150,7 @@ export function buildRepositoryScanOutputSchema(): Record<string, unknown> {
           rationale: "Why this is a vulnerability and how it could be exploited",
           recommendation: "Concrete remediation guidance",
           category: "injection/access_control/authentication/secrets/business_logic/dependency_risks/configuration",
+          ruleId: "missing_rate_limiting",
           primarySymbol: "handlerFunctionName",
           entryPoint: "POST /api/user/update",
           sinks: ["db.users.update"]
@@ -172,6 +198,25 @@ export function buildRepositoryContextPrompt(
   }
 
   return parts.join("\n");
+}
+
+function formatRuleCard(rule: RuleScanDefinition): string {
+  const lines: string[] = [
+    "Rule card:",
+    `- id: ${rule.id}`,
+    `- title: ${rule.title}`,
+    `- category: ${rule.category}`
+  ];
+  if (rule.description) {
+    lines.push(`- description: ${rule.description}`);
+  }
+  if (rule.guidance && rule.guidance.length > 0) {
+    lines.push("- guidance:");
+    for (const tip of rule.guidance) {
+      lines.push(`  - ${tip}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function extractStackTags(metadata: Record<string, unknown>): string[] {

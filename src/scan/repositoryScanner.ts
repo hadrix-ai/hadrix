@@ -12,15 +12,24 @@ import {
   buildRepositoryCompositeSystemPrompt,
   buildRepositoryContextPrompt,
   buildRepositoryScanOutputSchema,
-  buildRepositoryScanSystemPrompt
+  buildRepositoryRuleSystemPrompt
 } from "./repositoryPrompts.js";
+import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./repositoryRuleCatalog.js";
 import {
   buildCandidateFindings,
   deriveFileRoleAssignments,
+  deriveFileScopeAssignments,
+  evaluateCandidateGate,
+  evaluateControlGate,
+  filterRequiredControls,
   summarizeFileRoles,
   type CandidateFinding,
   type FileRole,
   type FileRoleAssignment,
+  type FileScope,
+  type FileScopeEvidence,
+  type RuleGateCheck,
+  type RuleGateMismatch,
   REQUIRED_CONTROLS
 } from "./repositoryHeuristics.js";
 import { buildFindingIdentityKey, extractFindingIdentityType } from "./dedupeKey.js";
@@ -53,12 +62,38 @@ type FileInsight = {
   roles: FileRole[];
   requiredControls: string[];
   candidateFindings: CandidateFinding[];
+  scope?: FileScope;
+  scopeEvidence?: FileScopeEvidence;
 };
 
 type RepoInsights = {
   fileInsights: Map<string, FileInsight>;
   roleSummary: Record<string, number>;
   candidates: CandidateFinding[];
+};
+
+type ResolvedFileContext = {
+  roles: FileRole[];
+  requiredControls: string[];
+  candidateFindings: CandidateFinding[];
+  scope?: FileScope;
+  scopeEvidence?: FileScopeEvidence;
+};
+
+type RuleScanTask = {
+  rule: RuleScanDefinition;
+  file: RepositoryFileSample;
+  fileContext: ResolvedFileContext;
+  systemPrompt: string;
+  roleSummary: Record<string, number>;
+  existingFindings: ExistingScanFinding[];
+};
+
+type ScopeGateAction = "allow" | "suppress" | "downgrade";
+
+type ScopeGateDecision = {
+  action: ScopeGateAction;
+  reasons: RuleGateMismatch[];
 };
 
 const DEFAULT_MAP_CONCURRENCY = 4;
@@ -159,33 +194,48 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   }
 
   const outputSchema = buildRepositoryScanOutputSchema();
-  const systemPrompt = buildRepositoryScanSystemPrompt();
   const systemContext = buildRepositoryContextPrompt([input.repository]);
-  const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
-
   const insights = buildFileInsights(input.files);
   const existingFindings = pickExistingFindings(
     input.existingFindings,
     DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO
   );
 
-  const tasks = input.files.map((file) => ({
-    file,
-    fileInsight: insights.fileInsights.get(file.path),
-    roleSummary: insights.roleSummary,
-    existingFindings
-  }));
+  const rulePrompts = new Map<string, string>();
+  for (const rule of REPOSITORY_SCAN_RULES) {
+    const systemPrompt = buildRepositoryRuleSystemPrompt(rule);
+    const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
+    rulePrompts.set(rule.id, combinedSystemPrompt);
+  }
+
+  const tasks: RuleScanTask[] = [];
+  for (const file of input.files) {
+    const fileInsight = insights.fileInsights.get(file.path);
+    const fileContext = resolveFileContext(file, fileInsight);
+    for (const rule of REPOSITORY_SCAN_RULES) {
+      if (!ruleAppliesToFile(rule, fileContext)) {
+        continue;
+      }
+      const systemPrompt = rulePrompts.get(rule.id);
+      if (!systemPrompt) {
+        continue;
+      }
+      tasks.push({
+        rule,
+        file,
+        fileContext,
+        systemPrompt,
+        roleSummary: insights.roleSummary,
+        existingFindings
+      });
+    }
+  }
 
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
   const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
-    const { file, fileInsight, roleSummary, existingFindings: existing } = task;
-    const fallbackAssignments = fileInsight ? null : deriveFileRoleAssignments([file]);
-    const fallbackAssignment = fallbackAssignments?.[0];
-    const roles = fileInsight?.roles ?? fallbackAssignment?.roles ?? [];
-    const requiredControls = fileInsight?.requiredControls ?? fallbackAssignment?.requiredControls ?? [];
-    const candidateFindings =
-      fileInsight?.candidateFindings ??
-      (fallbackAssignments ? buildCandidateFindings([file], fallbackAssignments) : []);
+    const { rule, file, fileContext, roleSummary, existingFindings: existing } = task;
+    const ruleRequiredControls = filterControlsForRule(rule, fileContext);
+    const ruleCandidateFindings = filterCandidateFindingsForRule(rule, fileContext);
 
     const filePayload = {
       path: file.path,
@@ -194,8 +244,10 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       chunkIndex: file.chunkIndex,
       truncated: file.truncated ?? false,
       content: file.content,
-      roles: roles.length ? roles : undefined,
-      requiredControls: requiredControls.length ? requiredControls : undefined
+      roles: fileContext.roles.length ? fileContext.roles : undefined,
+      requiredControls: ruleRequiredControls.length ? ruleRequiredControls : undefined,
+      scope: fileContext.scope ?? undefined,
+      scopeEvidence: fileContext.scopeEvidence ?? undefined
     };
 
     const payload = {
@@ -210,16 +262,15 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           repoRoles: input.repository.repoRoles,
           existingFindings: existing.length ? existing : undefined,
           fileRoleSummary: Object.keys(roleSummary).length ? roleSummary : undefined,
-          candidateFindings: candidateFindings.length ? candidateFindings : undefined,
+          candidateFindings: ruleCandidateFindings.length ? ruleCandidateFindings : undefined,
           files: [filePayload]
         }
       ],
-      focus:
-        "Identify missing or incomplete security controls (authz, tenant isolation, rate limiting, audit logging, timeouts) and other high-impact vulnerabilities."
+      focus: `Rule scan: ${rule.id} (${rule.title})`
     };
 
     const response = await runChatCompletion(input.config, [
-      { role: "system", content: combinedSystemPrompt },
+      { role: "system", content: task.systemPrompt },
       { role: "user", content: JSON.stringify(payload, null, 2) }
     ]);
 
@@ -233,18 +284,25 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           chunkIndex: file.chunkIndex
         }
       });
+      const scoped = enforceRuleFindings(parsed, rule.id);
+      const gateDecision = evaluateRuleScopeGateDecision(
+        rule,
+        fileContext.scope,
+        fileContext.scopeEvidence
+      );
+      const gated = applyScopeGateToFindings(scoped, gateDecision);
       const overlapGroupId = file.overlapGroupId ?? null;
       if (overlapGroupId) {
-        return parsed.map((finding) => ({
+        return gated.map((finding) => ({
           ...finding,
           details: { ...toRecord(finding.details), overlapGroupId }
         }));
       }
-      return parsed;
+      return gated;
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
-        "llm-map",
+        `llm-map-${rule.id}`,
         response
       );
       const message = err instanceof Error ? err.message : String(err);
@@ -316,7 +374,8 @@ export async function scanRepositoryComposites(
   ]);
 
   try {
-    return parseFindings(response, input.repository, { requireFilepath: false });
+    const parsed = parseFindings(response, input.repository, { requireFilepath: false });
+    return applyCompositeScopeGates(parsed, input.files);
   } catch (err) {
     const savedPath = await writeLlmDebugArtifact(
       input.config,
@@ -355,6 +414,253 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
+function resolveFileContext(
+  file: RepositoryFileSample,
+  fileInsight: FileInsight | undefined
+): ResolvedFileContext {
+  const fallbackAssignments = fileInsight ? null : deriveFileRoleAssignments([file]);
+  const fallbackAssignment = fallbackAssignments?.[0];
+  const fallbackScopeAssignments = fileInsight ? null : deriveFileScopeAssignments([file]);
+  const fallbackScope = fallbackScopeAssignments?.[0];
+  const roles = fileInsight?.roles ?? fallbackAssignment?.roles ?? [];
+  const requiredControls =
+    fileInsight?.requiredControls ??
+    filterRequiredControls(
+      fallbackAssignment?.requiredControls ?? [],
+      fallbackScope?.scope,
+      fallbackScope?.evidence
+    );
+  const candidateFindings =
+    fileInsight?.candidateFindings ??
+    (fallbackAssignments
+      ? buildCandidateFindings([file], fallbackAssignments, fallbackScopeAssignments ?? undefined)
+      : []);
+
+  return {
+    roles,
+    requiredControls,
+    candidateFindings,
+    scope: fileInsight?.scope ?? fallbackScope?.scope,
+    scopeEvidence: fileInsight?.scopeEvidence ?? fallbackScope?.evidence
+  };
+}
+
+function ruleAppliesToFile(rule: RuleScanDefinition, fileContext: ResolvedFileContext): boolean {
+  const requiredControls = rule.requiredControls ?? [];
+  const candidateTypes = rule.candidateTypes ?? [];
+  const matchesRequired =
+    requiredControls.length > 0 &&
+    requiredControls.some((control) => fileContext.requiredControls.includes(control));
+  const matchesCandidate =
+    candidateTypes.length > 0 &&
+    fileContext.candidateFindings.some((candidate) => candidateTypes.includes(candidate.type));
+  return matchesRequired || matchesCandidate;
+}
+
+function filterControlsForRule(
+  rule: RuleScanDefinition,
+  fileContext: ResolvedFileContext
+): string[] {
+  const requiredControls = rule.requiredControls ?? [];
+  if (requiredControls.length === 0) {
+    return [];
+  }
+  return fileContext.requiredControls.filter((control) => requiredControls.includes(control));
+}
+
+function filterCandidateFindingsForRule(
+  rule: RuleScanDefinition,
+  fileContext: ResolvedFileContext
+): CandidateFinding[] {
+  const candidateTypes = rule.candidateTypes ?? [];
+  if (candidateTypes.length === 0) {
+    return [];
+  }
+  return fileContext.candidateFindings.filter((candidate) =>
+    candidateTypes.includes(candidate.type)
+  );
+}
+
+function enforceRuleFindings(
+  findings: RepositoryScanFinding[],
+  ruleId: string
+): RepositoryScanFinding[] {
+  const expectedType = extractFindingIdentityType({ type: ruleId });
+  return findings.flatMap((finding) => {
+    const details = toRecord(finding.details);
+    const actualType = extractFindingIdentityType({ type: finding.type ?? null, details });
+    if (actualType && expectedType && actualType !== expectedType) {
+      return [];
+    }
+    return [
+      {
+        ...finding,
+        type: finding.type ?? ruleId,
+        details: { ...details, ruleId: details.ruleId ?? ruleId }
+      }
+    ];
+  });
+}
+
+function evaluateRuleScopeGateDecision(
+  rule: RuleScanDefinition,
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined
+): ScopeGateDecision {
+  const gateChecks: RuleGateCheck[] = [];
+
+  for (const control of rule.requiredControls ?? []) {
+    const check = evaluateControlGate(control, scope, evidence);
+    if (check) {
+      gateChecks.push(check);
+    }
+  }
+
+  for (const candidateType of rule.candidateTypes ?? []) {
+    const check = evaluateCandidateGate(candidateType, scope, evidence);
+    if (check) {
+      gateChecks.push(check);
+    }
+  }
+
+  if (gateChecks.length === 0 || gateChecks.some((check) => check.allowed)) {
+    return { action: "allow", reasons: [] };
+  }
+
+  const mismatches = new Set<RuleGateMismatch>();
+  for (const check of gateChecks) {
+    for (const mismatch of check.mismatches) {
+      mismatches.add(mismatch);
+    }
+  }
+  if (mismatches.size === 0) {
+    return { action: "allow", reasons: [] };
+  }
+
+  const scopeValue = scope ?? "unknown";
+  const scopeUnknown = scopeValue === "unknown";
+  const hasScopeMismatch = mismatches.has("scope");
+  const hasEndpointMismatch = mismatches.has("endpoint") || mismatches.has("shared");
+  const reasons = Array.from(mismatches);
+
+  if (hasEndpointMismatch || (hasScopeMismatch && !scopeUnknown)) {
+    return { action: "suppress", reasons };
+  }
+  return { action: "downgrade", reasons };
+}
+
+function applyScopeGateToFinding(
+  finding: RepositoryScanFinding,
+  decision: ScopeGateDecision
+): RepositoryScanFinding | null {
+  if (decision.action === "allow") {
+    return finding;
+  }
+  if (decision.action === "suppress") {
+    return null;
+  }
+
+  const details = { ...toRecord(finding.details) };
+  details.lowConfidence = true;
+  details.scopeGate = {
+    action: "downgraded",
+    reasons: decision.reasons
+  };
+
+  return {
+    ...finding,
+    severity: "info",
+    details
+  };
+}
+
+function applyScopeGateToFindings(
+  findings: RepositoryScanFinding[],
+  decision: ScopeGateDecision
+): RepositoryScanFinding[] {
+  if (decision.action === "allow") {
+    return findings;
+  }
+  const gated: RepositoryScanFinding[] = [];
+  for (const finding of findings) {
+    const next = applyScopeGateToFinding(finding, decision);
+    if (next) {
+      gated.push(next);
+    }
+  }
+  return gated;
+}
+
+function extractRuleIdForGate(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const candidates = [
+    finding.type,
+    details.ruleId,
+    details.rule_id,
+    details.ruleID,
+    details.findingType,
+    details.finding_type,
+    details.type
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return "";
+}
+
+function applyCompositeScopeGates(
+  findings: RepositoryScanFinding[],
+  files: RepositoryFileSample[]
+): RepositoryScanFinding[] {
+  if (findings.length === 0 || files.length === 0) {
+    return findings;
+  }
+
+  const scopeAssignments = deriveFileScopeAssignments(files);
+  if (scopeAssignments.length === 0) {
+    return findings;
+  }
+
+  const scopeByPath = new Map(
+    scopeAssignments.map((assignment) => [normalizePath(assignment.path), assignment])
+  );
+  const rulesById = new Map(REPOSITORY_SCAN_RULES.map((rule) => [rule.id, rule]));
+  const gated: RepositoryScanFinding[] = [];
+
+  for (const finding of findings) {
+    const ruleId = extractRuleIdForGate(finding);
+    const rule = ruleId ? rulesById.get(ruleId) : null;
+    if (!rule) {
+      gated.push(finding);
+      continue;
+    }
+
+    const filepath = extractFindingPath(finding);
+    if (!filepath) {
+      gated.push(finding);
+      continue;
+    }
+
+    const assignment = scopeByPath.get(normalizePath(filepath));
+    if (!assignment) {
+      gated.push(finding);
+      continue;
+    }
+
+    const decision = evaluateRuleScopeGateDecision(rule, assignment.scope, assignment.evidence);
+    const next = applyScopeGateToFinding(finding, decision);
+    if (next) {
+      gated.push(next);
+    }
+  }
+
+  return gated;
+}
+
 function buildFileInsights(files: RepositoryFileSample[]): RepoInsights {
   const fileInsights = new Map<string, FileInsight>();
   if (!files || files.length === 0) {
@@ -362,6 +668,10 @@ function buildFileInsights(files: RepositoryFileSample[]): RepoInsights {
   }
 
   const assignments = deriveFileRoleAssignments(files);
+  const scopeAssignments = deriveFileScopeAssignments(files);
+  const scopeByPath = new Map(
+    scopeAssignments.map((assignment) => [normalizePath(assignment.path), assignment])
+  );
   const rolesByPath = new Map<string, Set<FileRole>>();
   const controlsByPath = new Map<string, Set<string>>();
 
@@ -390,11 +700,23 @@ function buildFileInsights(files: RepositoryFileSample[]): RepoInsights {
   for (const [path, roleSet] of rolesByPath) {
     const roles = Array.from(roleSet);
     const requiredControls = Array.from(controlsByPath.get(path) ?? new Set<string>());
-    unionAssignments.push({ path, roles, requiredControls });
-    fileInsights.set(path, { roles, requiredControls, candidateFindings: [] });
+    const scopeAssignment = scopeByPath.get(path);
+    const scopedControls = filterRequiredControls(
+      requiredControls,
+      scopeAssignment?.scope,
+      scopeAssignment?.evidence
+    );
+    unionAssignments.push({ path, roles, requiredControls: scopedControls });
+    fileInsights.set(path, {
+      roles,
+      requiredControls: scopedControls,
+      candidateFindings: [],
+      scope: scopeAssignment?.scope,
+      scopeEvidence: scopeAssignment?.evidence
+    });
   }
 
-  const candidates = buildCandidateFindings(files, unionAssignments);
+  const candidates = buildCandidateFindings(files, unionAssignments, scopeAssignments);
   const candidatesByPath = new Map<string, CandidateFinding[]>();
   for (const candidate of candidates) {
     const candidatePath =

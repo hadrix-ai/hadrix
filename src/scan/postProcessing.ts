@@ -117,6 +117,19 @@ function normalizeRepoFullName(value: unknown): string {
   return value.trim();
 }
 
+function isRepositorySummaryFinding(finding: FindingLike): boolean {
+  const location = toRecord(finding.location);
+  const filepathRaw = (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  if (typeof filepathRaw !== "string") {
+    return true;
+  }
+  const normalized = normalizeFilepath(filepathRaw);
+  if (!normalized) {
+    return true;
+  }
+  return normalized.toLowerCase() === REPOSITORY_SUMMARY_PATH;
+}
+
 function extractRepoFullNameFromFinding(finding: {
   location?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
@@ -206,6 +219,7 @@ const SUMMARY_STOP_WORDS = new Set([
   "should"
 ]);
 const SUMMARY_SIMILARITY_THRESHOLD = 0.8;
+const REPOSITORY_SUMMARY_PATH = "(repository)";
 const DEDUPE_KIND_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
   missing_rate_limit: "rate_limiting",
@@ -426,6 +440,15 @@ function areFindingsSemanticallySimilar(a: FindingLike, b: FindingLike): boolean
   const kindB = normalizeFindingKind(extractFindingKind(b));
   if (kindA && kindB && kindA === kindB) return true;
   return summarySimilarity(a, b) >= SUMMARY_SIMILARITY_THRESHOLD;
+}
+
+function isRepositorySummaryDuplicate(summary: FindingLike, candidate: FindingLike): boolean {
+  const repoSummary = extractRepoFullNameFromFinding(summary);
+  const repoCandidate = extractRepoFullNameFromFinding(candidate);
+  if (repoSummary && repoCandidate && repoSummary !== repoCandidate) {
+    return false;
+  }
+  return areFindingsSemanticallySimilar(summary, candidate);
 }
 
 function locationsExactMatch(a: FindingLike, b: FindingLike): boolean {
@@ -762,6 +785,37 @@ export function filterFindings<T extends FindingLike>(
   return { kept, dropped };
 }
 
+export function dropRepositorySummaryDuplicates<T extends FindingLike>(
+  findings: T[]
+): { findings: T[]; dropped: number } {
+  if (findings.length === 0) {
+    return { findings, dropped: 0 };
+  }
+  const fileFindings = findings.filter((finding) => !isRepositorySummaryFinding(finding));
+  if (fileFindings.length === 0) {
+    return { findings, dropped: 0 };
+  }
+
+  const kept: T[] = [];
+  let dropped = 0;
+  for (const finding of findings) {
+    if (!isRepositorySummaryFinding(finding)) {
+      kept.push(finding);
+      continue;
+    }
+    const duplicate = fileFindings.some((candidate) =>
+      isRepositorySummaryDuplicate(finding, candidate)
+    );
+    if (duplicate) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(finding);
+  }
+
+  return { findings: kept, dropped };
+}
+
 export function dedupeFindings<T extends FindingLike>(
   findings: T[],
   sourceFallback?: string
@@ -827,8 +881,11 @@ export function dedupeRepositoryFindingsAgainstExisting(
       continue;
     }
 
+    const isSummary = isRepositorySummaryFinding(finding);
     const isDuplicate = candidates.some((existing) =>
-      isLikelyDuplicateFinding(finding, existing)
+      isSummary
+        ? isRepositorySummaryDuplicate(finding, existing)
+        : isLikelyDuplicateFinding(finding, existing)
     );
     if (isDuplicate) {
       dropped += 1;

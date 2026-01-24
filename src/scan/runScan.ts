@@ -19,6 +19,7 @@ import { buildFindingIdentityKey } from "./dedupeKey.js";
 import {
   dedupeFindings,
   dedupeRepositoryFindingsAgainstExisting,
+  dropRepositorySummaryDuplicates,
   filterFindings,
   normalizeRepositoryFinding
 } from "./postProcessing.js";
@@ -1124,7 +1125,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           repoPaths: repoPath ? [repoPath] : []
         };
 
-        log("LLM scan (map pass)...");
+        log("LLM scan (rule pass)...");
         llmFindings = await scanRepository({
           config,
           repository: repositoryDescriptor,
@@ -1176,7 +1177,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       if (dedupeAgainstStaticDropped > 0) {
         log(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
       }
-      llmFindings = dedupedAgainstStatic;
+      const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
+        dropRepositorySummaryDuplicates(dedupedAgainstStatic);
+      if (summaryDropped > 0) {
+        log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+      }
+      llmFindings = dedupedSummaryFindings;
     }
 
     if (
@@ -1224,6 +1230,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         ? reduceRepositoryFindings([...llmFindings, ...compositeFindings])
         : [];
     if (combinedFindings.length > 0) {
+      const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
+        dropRepositorySummaryDuplicates(combinedFindings);
+      if (summaryDropped > 0) {
+        log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+      }
+      combinedFindings = dedupedSummaryFindings;
       const { findings: dedupedCombined, dropped: dedupeCombinedDropped } = dedupeFindings(
         combinedFindings,
         llmSource

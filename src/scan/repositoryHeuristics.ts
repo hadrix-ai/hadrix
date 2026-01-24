@@ -1,4 +1,5 @@
 import type { RepositoryFileSample } from "../types.js";
+import { splitSecurityHeader } from "./securityHeader.js";
 
 export type FileRole =
   | "ADMIN_ENDPOINT"
@@ -35,6 +36,64 @@ export type CandidateFinding = {
   filepath?: string;
   evidence: CandidateEvidence[];
   relatedFileRoles?: FileRole[];
+};
+
+export type FileScope =
+  | "frontend_ui"
+  | "frontend_util"
+  | "backend_endpoint"
+  | "backend_shared"
+  | "config_metadata"
+  | "docs_tests"
+  | "unknown";
+
+export type FileScopeEvidence = {
+  isEndpoint: boolean;
+  isShared: boolean;
+  isConfig: boolean;
+  entryPointHints: string[];
+  sinks: string[];
+  sensitiveActionHints: string[];
+  fromSecurityHeader: boolean;
+};
+
+export type FileScopeAssignment = {
+  path: string;
+  scope: FileScope;
+  evidence: FileScopeEvidence;
+};
+
+export type FileScopeClassification = {
+  scope: FileScope;
+  evidence: FileScopeEvidence;
+};
+
+export type RuleEvidenceGate = {
+  endpointContext?: boolean;
+  sharedContext?: boolean;
+  sensitiveAction?: boolean;
+  destructiveAction?: boolean;
+  sinkTypes?: string[];
+};
+
+export type RuleScopeGate = {
+  allowedScopes: FileScope[];
+  requiresEvidence?: RuleEvidenceGate;
+};
+
+export type RuleGateMismatch =
+  | "scope"
+  | "endpoint"
+  | "shared"
+  | "sensitive"
+  | "destructive"
+  | "sink"
+  | "evidence";
+
+export type RuleGateCheck = {
+  allowed: boolean;
+  scope: FileScope;
+  mismatches: RuleGateMismatch[];
 };
 
 export const REQUIRED_CONTROLS: Record<FileRole, string[]> = {
@@ -94,6 +153,59 @@ const BACKGROUND_PATH_HINTS = [
   "/schedules/",
   "/background/"
 ];
+const FRONTEND_UI_EXTENSIONS = new Set([
+  "tsx",
+  "jsx",
+  "vue",
+  "svelte",
+  "astro",
+  "html",
+  "css",
+  "scss",
+  "less"
+]);
+const FRONTEND_UI_PATH_HINTS = ["/pages/", "/app/", "/components/", "/ui/", "/views/", "/src/app/"];
+const FRONTEND_UTIL_PATH_HINTS = ["/utils/", "/lib/", "/hooks/", "/services/", "/store/"];
+const BACKEND_ENDPOINT_PATH_HINTS = ["/api/", "/functions/", "/routes/", "/edge/"];
+const BACKEND_SHARED_PATH_HINTS = [
+  "/_shared/",
+  "/shared/",
+  "/lib/",
+  "/libs/",
+  "/utils/",
+  "/helpers/",
+  "/middleware/",
+  "/middlewares/"
+];
+const DOC_EXTENSIONS = new Set(["md", "mdx", "rst", "adoc", "txt"]);
+const DOC_BASENAMES = new Set([
+  "readme.md",
+  "readme.mdx",
+  "license",
+  "license.md",
+  "changelog.md",
+  "contributing.md"
+]);
+const DOC_PATH_HINTS = ["/docs/", "/doc/", "/documentation/"];
+const TEST_PATH_HINTS = ["/__tests__/", "/__test__/", "/tests/", "/test/", "/spec/", "/specs/", "/cypress/"];
+const TEST_FILE_PATTERNS = [/\.spec\.[tj]sx?$/, /\.test\.[tj]sx?$/];
+const CONFIG_EXTENSIONS = new Set(["json", "yaml", "yml", "toml", "env", "ini"]);
+const CONFIG_BASENAMES = new Set([
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "deno.json",
+  "deno.jsonc",
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  ".editorconfig"
+]);
 
 const RATE_LIMIT_PATTERNS = [
   /rate[_-]?limit/i,
@@ -252,6 +364,26 @@ const DESTRUCTIVE_PATTERNS = [
   /\bdisable\b/i,
   /\bsuspend\b/i,
   /\.delete\(/i
+];
+
+const AUTH_ACTION_HINT_PATTERNS = [
+  /\blogin\b/i,
+  /\bsignin\b/i,
+  /\bsignup\b/i,
+  /\bregister\b/i,
+  /\btoken\b/i,
+  /\bpassword\b/i,
+  /\breset\b/i,
+  /\binvite\b/i
+];
+
+const DESTRUCTIVE_ACTION_HINT_PATTERNS = [
+  /\bdelete\b/i,
+  /\bremove\b/i,
+  /\bdestroy\b/i,
+  /\brevoke\b/i,
+  /\bdisable\b/i,
+  /\bsuspend\b/i
 ];
 
 const AUDIT_PATTERNS = [
@@ -506,6 +638,256 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   frontend_login_rate_limit: 40
 };
 
+const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
+  sql_injection: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["sql.query", "db.query"] }
+  },
+  unsafe_query_builder: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["db.query"] }
+  },
+  command_injection: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["exec"] }
+  },
+  idor: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["db.query", "sql.query"] }
+  },
+  org_id_trust: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["db.write"] }
+  },
+  debug_auth_leak: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  missing_rate_limiting: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sensitiveAction: true }
+  },
+  missing_audit_logging: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, destructiveAction: true }
+  },
+  missing_webhook_signature: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  webhook_code_execution: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  permissive_cors: {
+    allowedScopes: ["backend_shared"],
+    requiresEvidence: { sharedContext: true }
+  },
+  jwt_validation_bypass: {
+    allowedScopes: ["backend_shared"],
+    requiresEvidence: { sharedContext: true }
+  },
+  weak_jwt_secret: {
+    allowedScopes: ["backend_shared"],
+    requiresEvidence: { sharedContext: true }
+  },
+  weak_token_generation: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  sensitive_logging: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  command_output_logging: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  unbounded_query: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  missing_timeout: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sinkTypes: ["http.request", "exec"] }
+  },
+  dangerous_html_render: {
+    allowedScopes: ["frontend_ui"],
+    requiresEvidence: { sinkTypes: ["template.render"] }
+  },
+  frontend_only_authorization: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  },
+  anon_key_bearer: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  },
+  missing_bearer_token: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  },
+  frontend_login_rate_limit: {
+    allowedScopes: ["frontend_ui"]
+  }
+};
+
+const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
+  authentication: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  "authorization:role": {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  "authorization:ownership_or_membership": {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  rate_limiting: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, sensitiveAction: true }
+  },
+  audit_logging: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true, destructiveAction: true }
+  },
+  secure_token_handling: {
+    allowedScopes: ["backend_endpoint", "backend_shared"]
+  },
+  signature_verification: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  replay_protection: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  timeout: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { sinkTypes: ["http.request", "exec"] }
+  },
+  secure_rendering: {
+    allowedScopes: ["frontend_ui"]
+  },
+  no_frontend_only_auth: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  },
+  no_sensitive_secrets: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  }
+};
+
+function ruleGateAllows(
+  ruleId: string,
+  scope: FileScope,
+  evidence: FileScopeEvidence | undefined,
+  gateMap: Record<string, RuleScopeGate>
+): boolean {
+  const gate = gateMap[ruleId];
+  if (!gate) return true;
+  if (!gate.allowedScopes.includes(scope)) return false;
+  if (!gate.requiresEvidence) return true;
+  if (!evidence) return false;
+  return evidenceMatchesGate(gate.requiresEvidence, evidence);
+}
+
+function evidenceMatchesGate(gate: RuleEvidenceGate, evidence: FileScopeEvidence): boolean {
+  if (gate.endpointContext && !evidence.isEndpoint) return false;
+  if (gate.sharedContext && !evidence.isShared) return false;
+  if (gate.sensitiveAction && evidence.sensitiveActionHints.length === 0) return false;
+  if (gate.destructiveAction && !evidence.sensitiveActionHints.includes("destructive")) {
+    return false;
+  }
+  if (gate.sinkTypes && gate.sinkTypes.length > 0) {
+    const sinks = new Set(evidence.sinks.map((sink) => sink.toLowerCase()));
+    const matches = gate.sinkTypes.some((sink) => sinks.has(sink.toLowerCase()));
+    if (!matches) return false;
+  }
+  return true;
+}
+
+function collectGateMismatches(
+  gate: RuleScopeGate,
+  scope: FileScope,
+  evidence: FileScopeEvidence | undefined
+): RuleGateMismatch[] {
+  const mismatches: RuleGateMismatch[] = [];
+  if (!gate.allowedScopes.includes(scope)) {
+    mismatches.push("scope");
+  }
+  if (!gate.requiresEvidence) {
+    return mismatches;
+  }
+  if (!evidence) {
+    mismatches.push("evidence");
+    return mismatches;
+  }
+  if (gate.requiresEvidence.endpointContext && !evidence.isEndpoint) {
+    mismatches.push("endpoint");
+  }
+  if (gate.requiresEvidence.sharedContext && !evidence.isShared) {
+    mismatches.push("shared");
+  }
+  if (gate.requiresEvidence.sensitiveAction && evidence.sensitiveActionHints.length === 0) {
+    mismatches.push("sensitive");
+  }
+  if (
+    gate.requiresEvidence.destructiveAction &&
+    !evidence.sensitiveActionHints.includes("destructive")
+  ) {
+    mismatches.push("destructive");
+  }
+  if (gate.requiresEvidence.sinkTypes && gate.requiresEvidence.sinkTypes.length > 0) {
+    const sinks = new Set(evidence.sinks.map((sink) => sink.toLowerCase()));
+    const matches = gate.requiresEvidence.sinkTypes.some((sink) =>
+      sinks.has(sink.toLowerCase())
+    );
+    if (!matches) {
+      mismatches.push("sink");
+    }
+  }
+  return mismatches;
+}
+
+function evaluateRuleGate(
+  ruleId: string,
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined,
+  gateMap: Record<string, RuleScopeGate>
+): RuleGateCheck | null {
+  const gate = gateMap[ruleId];
+  if (!gate) return null;
+  const scopeValue = scope ?? "unknown";
+  const mismatches = collectGateMismatches(gate, scopeValue, evidence);
+  return {
+    allowed: mismatches.length === 0,
+    scope: scopeValue,
+    mismatches
+  };
+}
+
+export function evaluateControlGate(
+  controlId: string,
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined
+): RuleGateCheck | null {
+  return evaluateRuleGate(controlId, scope, evidence, CONTROL_RULE_GATES);
+}
+
+export function evaluateCandidateGate(
+  candidateType: string,
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined
+): RuleGateCheck | null {
+  return evaluateRuleGate(candidateType, scope, evidence, CANDIDATE_RULE_GATES);
+}
+
+export function filterRequiredControls(
+  requiredControls: string[],
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined
+): string[] {
+  if (!requiredControls || requiredControls.length === 0) return [];
+  const scopeValue = scope ?? "unknown";
+  return requiredControls.filter((control) =>
+    ruleGateAllows(control, scopeValue, evidence, CONTROL_RULE_GATES)
+  );
+}
+
 export function deriveFileRoleAssignments(files: RepositoryFileSample[]): FileRoleAssignment[] {
   return files.map((file) => {
     const roles = classifyFileRoles(file);
@@ -530,10 +912,16 @@ export function summarizeFileRoles(assignments: FileRoleAssignment[]): Record<st
 
 export function buildCandidateFindings(
   files: RepositoryFileSample[],
-  assignments: FileRoleAssignment[]
+  assignments: FileRoleAssignment[],
+  scopeAssignments?: FileScopeAssignment[]
 ): CandidateFinding[] {
   const candidates: CandidateFinding[] = [];
   const assignmentByPath = new Map(assignments.map((assignment) => [assignment.path, assignment]));
+  const resolvedScopeAssignments =
+    scopeAssignments && scopeAssignments.length > 0 ? scopeAssignments : deriveFileScopeAssignments(files);
+  const scopeByPath = new Map(
+    resolvedScopeAssignments.map((assignment) => [normalizePath(assignment.path), assignment])
+  );
   const samplesByPath = new Map<string, RepositoryFileSample[]>();
   for (const file of files) {
     if (!file.path) continue;
@@ -554,63 +942,76 @@ export function buildCandidateFindings(
     const content = file.content ?? "";
     const startLine = file.startLine ?? 1;
     const backendCandidate = isLikelyBackendFile(file.path, roles);
+    const scopeAssignment = scopeByPath.get(normalizePath(file.path));
+    const scopeValue = scopeAssignment?.scope ?? "unknown";
+    const scopeEvidence = scopeAssignment?.evidence;
+    const canRunRule = (ruleId: string) =>
+      ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
 
     if (isEndpointRole(roles) || backendCandidate) {
-      const idor = detectIdorCandidate(file, roles);
-      if (idor) {
-        candidates.push(idor);
+      if (canRunRule("idor")) {
+        const idor = detectIdorCandidate(file, roles);
+        if (idor) {
+          candidates.push(idor);
+        }
       }
 
-      const orgTrust = detectOrgIdTrustCandidate(file, roles);
-      if (orgTrust) {
-        candidates.push(orgTrust);
+      if (canRunRule("org_id_trust")) {
+        const orgTrust = detectOrgIdTrustCandidate(file, roles);
+        if (orgTrust) {
+          candidates.push(orgTrust);
+        }
       }
 
-      const sqlLine = findFirstLineMatch(content, SQL_INJECTION_PATTERNS, startLine);
-      if (sqlLine) {
-        candidates.push({
-          id: `sql-injection:${file.path}:${sqlLine.line}`,
-          type: "sql_injection",
-          summary: "SQL injection via raw SQL string concatenation",
-          rationale:
-            "Raw SQL appears to include user-controlled input via string concatenation or template interpolation.",
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: sqlLine.line,
-              endLine: sqlLine.line,
-              excerpt: sqlLine.text,
-              note: "Raw SQL with interpolated request input"
-            }
-          ],
-          relatedFileRoles: roles
-        });
+      if (canRunRule("sql_injection")) {
+        const sqlLine = findFirstLineMatch(content, SQL_INJECTION_PATTERNS, startLine);
+        if (sqlLine) {
+          candidates.push({
+            id: `sql-injection:${file.path}:${sqlLine.line}`,
+            type: "sql_injection",
+            summary: "SQL injection via raw SQL string concatenation",
+            rationale:
+              "Raw SQL appears to include user-controlled input via string concatenation or template interpolation.",
+            filepath: file.path,
+            evidence: [
+              {
+                filepath: file.path,
+                startLine: sqlLine.line,
+                endLine: sqlLine.line,
+                excerpt: sqlLine.text,
+                note: "Raw SQL with interpolated request input"
+              }
+            ],
+            relatedFileRoles: roles
+          });
+        }
       }
 
-      const queryLine = findFirstLineMatch(content, QUERY_BUILDER_PATTERNS, startLine);
-      if (queryLine) {
-        candidates.push({
-          id: `unsafe-query-builder:${file.path}:${queryLine.line}`,
-          type: "unsafe_query_builder",
-          summary: "Unsafe query builder usage: user-controlled filter string passed into query composition",
-          rationale:
-            "Query builder filters appear to be composed from request input without validation or allowlists.",
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: queryLine.line,
-              endLine: queryLine.line,
-              excerpt: queryLine.text,
-              note: "Query builder uses request input"
-            }
-          ],
-          relatedFileRoles: roles
-        });
+      if (canRunRule("unsafe_query_builder")) {
+        const queryLine = findFirstLineMatch(content, QUERY_BUILDER_PATTERNS, startLine);
+        if (queryLine) {
+          candidates.push({
+            id: `unsafe-query-builder:${file.path}:${queryLine.line}`,
+            type: "unsafe_query_builder",
+            summary: "Unsafe query builder usage: user-controlled filter string passed into query composition",
+            rationale:
+              "Query builder filters appear to be composed from request input without validation or allowlists.",
+            filepath: file.path,
+            evidence: [
+              {
+                filepath: file.path,
+                startLine: queryLine.line,
+                endLine: queryLine.line,
+                excerpt: queryLine.text,
+                note: "Query builder uses request input"
+              }
+            ],
+            relatedFileRoles: roles
+          });
+        }
       }
 
-      if (hasCommandInjectionRisk(content)) {
+      if (canRunRule("command_injection") && hasCommandInjectionRisk(content)) {
         const execLine =
           findFirstLineMatch(content, COMMAND_INJECTION_PATTERNS, startLine) ??
           findFirstLineMatch(content, EXEC_PATTERNS, startLine);
@@ -647,7 +1048,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (hasPermissiveCors(content)) {
+    if (canRunRule("permissive_cors") && hasPermissiveCors(content)) {
       const line = findFirstLineMatch(content, CORS_WILDCARD_PATTERNS, startLine);
       candidates.push({
         id: `permissive-cors:${file.path}:${line?.line ?? startLine}`,
@@ -669,7 +1070,7 @@ export function buildCandidateFindings(
       });
     }
 
-    if (isEndpointRole(roles) && hasDebugAuthLeak(content)) {
+    if (canRunRule("debug_auth_leak") && isEndpointRole(roles) && hasDebugAuthLeak(content)) {
       const debugLine = findFirstLineMatch(content, DEBUG_ENDPOINT_PATTERNS, startLine);
       const headerLine = findFirstLineMatch(content, DEBUG_HEADER_PATTERNS, startLine);
       const authLine = findFirstLineMatch(content, DEBUG_AUTH_PATTERNS, startLine);
@@ -720,7 +1121,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("SHARED_AUTH_LIB") || roles.includes("AUTH_ENDPOINT")) && hasJwtFallbackSecret(content)) {
+    if (
+      canRunRule("weak_jwt_secret") &&
+      (roles.includes("SHARED_AUTH_LIB") || roles.includes("AUTH_ENDPOINT")) &&
+      hasJwtFallbackSecret(content)
+    ) {
       const line = findFirstLineMatch(content, JWT_FALLBACK_PATTERNS, startLine);
       candidates.push({
         id: `jwt-weak-secret:${file.path}:${line?.line ?? startLine}`,
@@ -742,7 +1147,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("SHARED_AUTH_LIB") || roles.includes("AUTH_ENDPOINT")) && hasJwtDecodeWithoutVerify(content)) {
+    if (
+      canRunRule("jwt_validation_bypass") &&
+      (roles.includes("SHARED_AUTH_LIB") || roles.includes("AUTH_ENDPOINT")) &&
+      hasJwtDecodeWithoutVerify(content)
+    ) {
       const line = findFirstLineMatch(content, JWT_DECODE_PATTERNS, startLine);
       candidates.push({
         id: `jwt-no-verify:${file.path}:${line?.line ?? startLine}`,
@@ -764,7 +1173,7 @@ export function buildCandidateFindings(
       });
     }
 
-    if (isTokenRelated(content, file.path) && hasWeakTokenGeneration(content)) {
+    if (canRunRule("weak_token_generation") && isTokenRelated(content, file.path) && hasWeakTokenGeneration(content)) {
       const line = findFirstLineMatch(content, WEAK_TOKEN_PATTERNS, startLine);
       candidates.push({
         id: `weak-token:${file.path}:${line?.line ?? startLine}`,
@@ -786,67 +1195,22 @@ export function buildCandidateFindings(
       });
     }
 
-    const sensitiveLogLine = findLogLineWithKeywords(content, startLine, SENSITIVE_LOG_PATTERNS);
-    if (sensitiveLogLine) {
-      candidates.push({
-        id: `sensitive-log:${file.path}:${sensitiveLogLine.line}`,
-        type: "sensitive_logging",
-        summary: "Sensitive data (plaintext tokens/secrets) written to logs",
-        rationale: "Logging statements appear to include tokens, secrets, or credentials.",
-        filepath: file.path,
-        evidence: [
-          {
-            filepath: file.path,
-            startLine: sensitiveLogLine.line,
-            endLine: sensitiveLogLine.line,
-            excerpt: sensitiveLogLine.text,
-            note: "Sensitive value logged"
-          }
-        ],
-        relatedFileRoles: roles
-      });
-    }
-
-    const commandLogLine = findLogLineWithKeywords(content, startLine, COMMAND_OUTPUT_PATTERNS);
-    const hasExec = hasHighRiskExec(content) || matchesAny(content, COMMAND_INJECTION_PATTERNS);
-    const hasCommandInput = matchesAny(content, COMMAND_INPUT_PATTERNS);
-    const hasStrongCommandLog = commandLogLine
-      ? COMMAND_LOG_STRONG_PATTERNS.some((pattern) => pattern.test(commandLogLine.text))
-      : false;
-    if (commandLogLine && (hasExec || hasCommandInput || hasStrongCommandLog)) {
-      candidates.push({
-        id: `command-output-log:${file.path}:${commandLogLine.line}`,
-        type: "command_output_logging",
-        summary: "Sensitive command output or URLs logged without scrubbing",
-        rationale: "Logging includes command output or repository URLs without scrubbing.",
-        filepath: file.path,
-        evidence: [
-          {
-            filepath: file.path,
-            startLine: commandLogLine.line,
-            endLine: commandLogLine.line,
-            excerpt: commandLogLine.text,
-            note: "Command output or URL logged"
-          }
-        ],
-        relatedFileRoles: roles
-      });
-    } else if (hasExec && (hasCommandInput || matchesAny(content, COMMAND_OUTPUT_PATTERNS))) {
-      const fallbackLogLine = findFirstLineMatch(content, LOG_CALL_PATTERNS, startLine);
-      if (fallbackLogLine) {
+    if (canRunRule("sensitive_logging")) {
+      const sensitiveLogLine = findLogLineWithKeywords(content, startLine, SENSITIVE_LOG_PATTERNS);
+      if (sensitiveLogLine) {
         candidates.push({
-          id: `command-output-log:${file.path}:${fallbackLogLine.line}`,
-          type: "command_output_logging",
-          summary: "Sensitive command output or URLs logged without scrubbing",
-          rationale: "Command execution output or repository URLs may be logged without scrubbing.",
+          id: `sensitive-log:${file.path}:${sensitiveLogLine.line}`,
+          type: "sensitive_logging",
+          summary: "Sensitive data (plaintext tokens/secrets) written to logs",
+          rationale: "Logging statements appear to include tokens, secrets, or credentials.",
           filepath: file.path,
           evidence: [
             {
               filepath: file.path,
-              startLine: fallbackLogLine.line,
-              endLine: fallbackLogLine.line,
-              excerpt: fallbackLogLine.text,
-              note: "Command execution log statement"
+              startLine: sensitiveLogLine.line,
+              endLine: sensitiveLogLine.line,
+              excerpt: sensitiveLogLine.text,
+              note: "Sensitive value logged"
             }
           ],
           relatedFileRoles: roles
@@ -854,7 +1218,56 @@ export function buildCandidateFindings(
       }
     }
 
-    if (roles.includes("WEBHOOK_ENDPOINT") && !hasWebhookSignatureCheck(content)) {
+    if (canRunRule("command_output_logging")) {
+      const commandLogLine = findLogLineWithKeywords(content, startLine, COMMAND_OUTPUT_PATTERNS);
+      const hasExec = hasHighRiskExec(content) || matchesAny(content, COMMAND_INJECTION_PATTERNS);
+      const hasCommandInput = matchesAny(content, COMMAND_INPUT_PATTERNS);
+      const hasStrongCommandLog = commandLogLine
+        ? COMMAND_LOG_STRONG_PATTERNS.some((pattern) => pattern.test(commandLogLine.text))
+        : false;
+      if (commandLogLine && (hasExec || hasCommandInput || hasStrongCommandLog)) {
+        candidates.push({
+          id: `command-output-log:${file.path}:${commandLogLine.line}`,
+          type: "command_output_logging",
+          summary: "Sensitive command output or URLs logged without scrubbing",
+          rationale: "Logging includes command output or repository URLs without scrubbing.",
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: commandLogLine.line,
+              endLine: commandLogLine.line,
+              excerpt: commandLogLine.text,
+              note: "Command output or URL logged"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      } else if (hasExec && (hasCommandInput || matchesAny(content, COMMAND_OUTPUT_PATTERNS))) {
+        const fallbackLogLine = findFirstLineMatch(content, LOG_CALL_PATTERNS, startLine);
+        if (fallbackLogLine) {
+          candidates.push({
+            id: `command-output-log:${file.path}:${fallbackLogLine.line}`,
+            type: "command_output_logging",
+            summary: "Sensitive command output or URLs logged without scrubbing",
+            rationale: "Command execution output or repository URLs may be logged without scrubbing.",
+            filepath: file.path,
+            evidence: [
+              {
+                filepath: file.path,
+                startLine: fallbackLogLine.line,
+                endLine: fallbackLogLine.line,
+                excerpt: fallbackLogLine.text,
+                note: "Command execution log statement"
+              }
+            ],
+            relatedFileRoles: roles
+          });
+        }
+      }
+    }
+
+    if (canRunRule("missing_webhook_signature") && roles.includes("WEBHOOK_ENDPOINT") && !hasWebhookSignatureCheck(content)) {
       const line = findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine);
       candidates.push({
         id: `webhook-signature-missing:${file.path}:${line?.line ?? startLine}`,
@@ -876,7 +1289,7 @@ export function buildCandidateFindings(
       });
     }
 
-    if (roles.includes("WEBHOOK_ENDPOINT") && hasCodeExecution(content)) {
+    if (canRunRule("webhook_code_execution") && roles.includes("WEBHOOK_ENDPOINT") && hasCodeExecution(content)) {
       const line = findFirstLineMatch(content, CODE_EXECUTION_PATTERNS, startLine);
       candidates.push({
         id: `webhook-code-exec:${file.path}:${line?.line ?? startLine}`,
@@ -898,7 +1311,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) && hasDangerousHtml(content)) {
+    if (
+      canRunRule("dangerous_html_render") &&
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      hasDangerousHtml(content)
+    ) {
       const line = findFirstLineMatch(content, DANGEROUS_HTML_PATTERNS, startLine);
       candidates.push({
         id: `dangerous-html:${file.path}:${line?.line ?? startLine}`,
@@ -919,7 +1336,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) && hasAnonKeyBearer(content)) {
+    if (
+      canRunRule("anon_key_bearer") &&
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      hasAnonKeyBearer(content)
+    ) {
       const line = findFirstLineMatch(content, ANON_KEY_PATTERNS, startLine);
       candidates.push({
         id: `anon-key-bearer:${file.path}:${line?.line ?? startLine}`,
@@ -941,7 +1362,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) && hasMissingBearerToken(content)) {
+    if (
+      canRunRule("missing_bearer_token") &&
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      hasMissingBearerToken(content)
+    ) {
       const line = findFirstLineMatch(content, FRONTEND_API_CALL_PATTERNS, startLine);
       candidates.push({
         id: `missing-bearer:${file.path}:${line?.line ?? startLine}`,
@@ -963,7 +1388,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) && isLoginPage(file.path, content)) {
+    if (
+      canRunRule("frontend_login_rate_limit") &&
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      isLoginPage(file.path, content)
+    ) {
       if (!hasRateLimit(content) && !hasCaptcha(content)) {
         const line = findFirstLineMatch(content, LOGIN_UI_PATTERNS, startLine);
         candidates.push({
@@ -987,7 +1416,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (roles.includes("FRONTEND_ADMIN_PAGE")) {
+    if (canRunRule("frontend_only_authorization") && roles.includes("FRONTEND_ADMIN_PAGE")) {
       const roleLine = findFirstLineMatch(content, FRONTEND_ROLE_PATTERNS, startLine);
       if (roleLine) {
         const apiLine = findFirstLineMatch(content, FRONTEND_API_CALL_PATTERNS, startLine);
@@ -1024,7 +1453,12 @@ export function buildCandidateFindings(
       }
     }
 
-    if (isEndpointRole(roles) && frontendRoleEvidence && !hasRoleCheck(content)) {
+    if (
+      canRunRule("frontend_only_authorization") &&
+      isEndpointRole(roles) &&
+      frontendRoleEvidence &&
+      !hasRoleCheck(content)
+    ) {
       if (isAdminOrDestructive(roles, content, file.path)) {
         const evidence = [...frontendRoleEvidence.evidence];
         const handlerLine = findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine);
@@ -1048,7 +1482,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (isEndpointRole(roles)) {
+    if (canRunRule("missing_rate_limiting") && isEndpointRole(roles)) {
       const sensitive = isSensitiveAction(content, roles);
       if (sensitive && !hasRateLimit(content)) {
         const line = findFirstLineMatch(content, SENSITIVE_ACTION_PATTERNS, startLine);
@@ -1077,7 +1511,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (roles.includes("ADMIN_ENDPOINT") && isDestructiveAction(content, file.path)) {
+    if (canRunRule("missing_audit_logging") && roles.includes("ADMIN_ENDPOINT") && isDestructiveAction(content, file.path)) {
       const auditDisabled = matchesAny(content, AUDIT_DISABLE_PATTERNS);
       if (!hasAuditLogging(content) || auditDisabled) {
         const line = findFirstLineMatch(content, DESTRUCTIVE_PATTERNS, startLine);
@@ -1102,7 +1536,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (hasUnboundedSelect(content)) {
+    if (canRunRule("unbounded_query") && hasUnboundedSelect(content)) {
       const line = findFirstLineMatch(content, UNBOUNDED_SELECT_PATTERNS, startLine);
       candidates.push({
         id: `unbounded-query:${file.path}:${line?.line ?? startLine}`,
@@ -1124,7 +1558,11 @@ export function buildCandidateFindings(
       });
     }
 
-    if ((hasExternalCall(content) || roles.includes("HIGH_RISK_EXEC")) && !hasTimeout(content)) {
+    if (
+      canRunRule("missing_timeout") &&
+      (hasExternalCall(content) || roles.includes("HIGH_RISK_EXEC")) &&
+      !hasTimeout(content)
+    ) {
       const line = findFirstLineMatch(content, [...EXTERNAL_CALL_PATTERNS, ...EXEC_PATTERNS], startLine);
       candidates.push({
         id: `missing-timeout:${file.path}:${line?.line ?? startLine}`,
@@ -1151,17 +1589,26 @@ export function buildCandidateFindings(
     if (group.length < 2) continue;
     const assignment = assignmentByPath.get(path);
     const roles = assignment?.roles ?? [];
+    const scopeAssignment = scopeByPath.get(normalizePath(path));
+    const scopeValue = scopeAssignment?.scope ?? "unknown";
+    const scopeEvidence = scopeAssignment?.evidence;
+    const canRunRule = (ruleId: string) =>
+      ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
     const backendCandidate = isLikelyBackendFile(path, roles);
     if (!isEndpointRole(roles) && !backendCandidate) {
       continue;
     }
-    const idor = detectIdorCandidateAcrossChunks(group, roles);
-    if (idor) {
-      candidates.push(idor);
+    if (canRunRule("idor")) {
+      const idor = detectIdorCandidateAcrossChunks(group, roles);
+      if (idor) {
+        candidates.push(idor);
+      }
     }
-    const orgTrust = detectOrgIdTrustCandidateAcrossChunks(group, roles);
-    if (orgTrust) {
-      candidates.push(orgTrust);
+    if (canRunRule("org_id_trust")) {
+      const orgTrust = detectOrgIdTrustCandidateAcrossChunks(group, roles);
+      if (orgTrust) {
+        candidates.push(orgTrust);
+      }
     }
   }
 
@@ -1226,6 +1673,36 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
   return Array.from(roles);
 }
 
+export function classifyFileScope(file: RepositoryFileSample): FileScopeClassification {
+  const path = normalizePath(file.path ?? "");
+  const pathHints = buildPathHints(path);
+  const evidence = collectScopeEvidence(file.content ?? "", pathHints);
+  const scope = decideFileScope(pathHints, evidence);
+  return { scope, evidence };
+}
+
+export function deriveFileScopeAssignments(files: RepositoryFileSample[]): FileScopeAssignment[] {
+  const samplesByPath = new Map<string, RepositoryFileSample[]>();
+  for (const file of files) {
+    const path = normalizePath(file.path ?? "");
+    if (!path) continue;
+    if (!samplesByPath.has(path)) {
+      samplesByPath.set(path, []);
+    }
+    samplesByPath.get(path)!.push(file);
+  }
+
+  const assignments: FileScopeAssignment[] = [];
+  for (const [path, samples] of samplesByPath) {
+    const pathHints = buildPathHints(path);
+    const evidenceList = samples.map((sample) => collectScopeEvidence(sample.content ?? "", pathHints));
+    const evidence = mergeScopeEvidence(evidenceList);
+    const scope = decideFileScope(pathHints, evidence);
+    assignments.push({ path, scope, evidence });
+  }
+  return assignments;
+}
+
 function deriveRequiredControls(roles: FileRole[]): string[] {
   const controls = new Set<string>();
   for (const role of roles) {
@@ -1260,6 +1737,336 @@ function detectHttpMethods(content: string): Set<string> {
   }
 
   return methods;
+}
+
+type PathHints = {
+  lowerPath: string;
+  base: string;
+  ext: string;
+  isConfig: boolean;
+  isDocsTests: boolean;
+  isFrontend: boolean;
+  isFrontendUi: boolean;
+  isFrontendUtil: boolean;
+  isBackend: boolean;
+  isBackendEndpointHint: boolean;
+  isBackendShared: boolean;
+};
+
+type SecurityHeaderHints = {
+  hasHeader: boolean;
+  entryPointType: string | null;
+  entryPointIdentifier: string | null;
+  sinks: string[];
+};
+
+function normalizePath(value: string): string {
+  return value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.?\/*/, "")
+    .replace(/\/+/g, "/")
+    .replace(/\/+$/, "");
+}
+
+function buildPathHints(path: string): PathHints {
+  const normalized = normalizePath(path);
+  const lowerPath = normalized.toLowerCase();
+  const base = lowerPath.split("/").pop() ?? "";
+  const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
+  const isConfig = isConfigPath(lowerPath, base, ext);
+  const isDocsTests = isDocsTestsPath(lowerPath, base, ext);
+  const isFrontend =
+    FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint)) ||
+    FRONTEND_UI_EXTENSIONS.has(ext);
+  const isFrontendUi =
+    isFrontend &&
+    (FRONTEND_UI_EXTENSIONS.has(ext) ||
+      FRONTEND_UI_PATH_HINTS.some((hint) => lowerPath.includes(hint)));
+  const isFrontendUtil =
+    isFrontend && FRONTEND_UTIL_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  const isBackend =
+    BACKEND_PATH_HINTS.some((hint) => lowerPath.includes(hint)) ||
+    BACKGROUND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  const isBackendShared = BACKEND_SHARED_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  const isBackendEndpointHint =
+    !isBackendShared && BACKEND_ENDPOINT_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+
+  return {
+    lowerPath,
+    base,
+    ext,
+    isConfig,
+    isDocsTests,
+    isFrontend,
+    isFrontendUi,
+    isFrontendUtil,
+    isBackend,
+    isBackendEndpointHint,
+    isBackendShared
+  };
+}
+
+function isConfigPath(lowerPath: string, base: string, ext: string): boolean {
+  if (CONFIG_BASENAMES.has(base)) {
+    return true;
+  }
+  if (base.startsWith(".env")) {
+    return true;
+  }
+  if (CONFIG_EXTENSIONS.has(ext)) {
+    return true;
+  }
+  return false;
+}
+
+function isDocsTestsPath(lowerPath: string, base: string, ext: string): boolean {
+  if (DOC_BASENAMES.has(base)) {
+    return true;
+  }
+  if (DOC_EXTENSIONS.has(ext)) {
+    return true;
+  }
+  if (DOC_PATH_HINTS.some((hint) => lowerPath.includes(hint))) {
+    return true;
+  }
+  if (TEST_PATH_HINTS.some((hint) => lowerPath.includes(hint))) {
+    return true;
+  }
+  if (TEST_FILE_PATTERNS.some((pattern) => pattern.test(base))) {
+    return true;
+  }
+  return false;
+}
+
+function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeEvidence {
+  const { body, header } = extractSecurityHeaderHints(content);
+  const entryPointHints = collectEntryPointHints(body, header);
+  const sinks = collectSinkHints(body, header);
+  const sensitiveActionHints = collectSensitiveActionHints(body);
+  const headerIsEndpoint = header.hasHeader ? isEndpointEntryType(header.entryPointType) : false;
+  const contentIsEndpoint = header.hasHeader ? false : matchesAny(body, ROUTER_HANDLER_PATTERNS);
+  const pathIsEndpoint = header.hasHeader ? false : pathHints.isBackendEndpointHint;
+  const isEndpoint = header.hasHeader ? headerIsEndpoint : contentIsEndpoint || pathIsEndpoint;
+  const isShared = pathHints.isBackendShared || isSharedEntryType(header.entryPointType);
+
+  return {
+    isEndpoint,
+    isShared,
+    isConfig: pathHints.isConfig,
+    entryPointHints,
+    sinks,
+    sensitiveActionHints,
+    fromSecurityHeader: header.hasHeader
+  };
+}
+
+function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidence {
+  const headerEvidence = evidenceList.filter((evidence) => evidence.fromSecurityHeader);
+  const primary = headerEvidence.length ? headerEvidence : evidenceList;
+  const isEndpoint = primary.some((evidence) => evidence.isEndpoint);
+  const entryPointHints = uniqueList(primary.flatMap((evidence) => evidence.entryPointHints));
+  const sinks = uniqueList(primary.flatMap((evidence) => evidence.sinks));
+  const sensitiveActionHints = uniqueList(
+    evidenceList.flatMap((evidence) => evidence.sensitiveActionHints)
+  );
+  const isShared = evidenceList.some((evidence) => evidence.isShared);
+  const isConfig = evidenceList.some((evidence) => evidence.isConfig);
+
+  return {
+    isEndpoint,
+    isShared,
+    isConfig,
+    entryPointHints,
+    sinks,
+    sensitiveActionHints,
+    fromSecurityHeader: headerEvidence.length > 0
+  };
+}
+
+function decideFileScope(pathHints: PathHints, evidence: FileScopeEvidence): FileScope {
+  if (pathHints.isConfig) {
+    return "config_metadata";
+  }
+  if (pathHints.isDocsTests) {
+    return "docs_tests";
+  }
+  if (pathHints.isFrontend) {
+    if (pathHints.isFrontendUtil && !pathHints.isFrontendUi) {
+      return "frontend_util";
+    }
+    if (pathHints.isFrontendUi && !pathHints.isFrontendUtil) {
+      return "frontend_ui";
+    }
+    if (pathHints.isFrontendUtil) {
+      return "frontend_util";
+    }
+    return "frontend_ui";
+  }
+
+  const backendCandidate = pathHints.isBackend || evidence.isEndpoint || evidence.isShared;
+  if (backendCandidate) {
+    if (pathHints.isBackendShared || evidence.isShared) {
+      return "backend_shared";
+    }
+    if (evidence.isEndpoint || pathHints.isBackendEndpointHint) {
+      return "backend_endpoint";
+    }
+    return "backend_shared";
+  }
+
+  return "unknown";
+}
+
+function extractSecurityHeaderHints(content: string): { body: string; header: SecurityHeaderHints } {
+  const { header, body } = splitSecurityHeader(content);
+  if (!header) {
+    return {
+      body: content,
+      header: { hasHeader: false, entryPointType: null, entryPointIdentifier: null, sinks: [] }
+    };
+  }
+  return { body, header: parseSecurityHeaderHints(header) };
+}
+
+function parseSecurityHeaderHints(headerText: string): SecurityHeaderHints {
+  let entryPointType: string | null = null;
+  let entryPointIdentifier: string | null = null;
+  const sinks: string[] = [];
+  let section = "";
+
+  for (const rawLine of headerText.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (!rawLine.startsWith(" ") && line.endsWith(":")) {
+      section = line.slice(0, -1).toUpperCase();
+      continue;
+    }
+    if (section === "ENTRY_POINT") {
+      if (line.startsWith("type:")) {
+        entryPointType = normalizeHeaderValue(line.slice("type:".length).trim());
+      } else if (line.startsWith("identifier:")) {
+        entryPointIdentifier = normalizeHeaderValue(line.slice("identifier:".length).trim());
+      }
+    } else if (section === "SINKS" && line.startsWith("-")) {
+      const value = line.slice(1).trim();
+      if (value && value !== "none") {
+        sinks.push(value);
+      }
+    }
+  }
+
+  return {
+    hasHeader: true,
+    entryPointType,
+    entryPointIdentifier,
+    sinks: uniqueList(sinks)
+  };
+}
+
+function normalizeHeaderValue(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "unknown") {
+    return null;
+  }
+  return trimmed;
+}
+
+function isEndpointEntryType(value: string | null): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "http" || normalized === "webhook" || normalized === "rpc" || normalized === "graphql";
+}
+
+function isSharedEntryType(value: string | null): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "library" || normalized === "job" || normalized === "cli";
+}
+
+function collectEntryPointHints(content: string, header: SecurityHeaderHints): string[] {
+  if (header.hasHeader) {
+    const hints: string[] = [];
+    if (header.entryPointType) {
+      hints.push(`type:${header.entryPointType}`);
+    }
+    if (header.entryPointIdentifier) {
+      hints.push(`id:${header.entryPointIdentifier}`);
+    }
+    return uniqueList(hints);
+  }
+
+  const hints: string[] = [];
+  if (/Deno\.serve\s*\(/i.test(content)) {
+    hints.push("deno.serve");
+  }
+  if (/addEventListener\s*\(\s*['"]fetch['"]\s*\)/i.test(content)) {
+    hints.push("fetch.listener");
+  }
+  if (/\b(app|router)\.(get|post|put|patch|delete|all)\s*\(/i.test(content)) {
+    hints.push("router.method");
+  }
+  if (/export\s+(async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b/i.test(content)) {
+    hints.push("http.method");
+  }
+  const methods = detectHttpMethods(content);
+  for (const method of methods) {
+    hints.push(`method:${method}`);
+  }
+  return uniqueList(hints);
+}
+
+function collectSinkHints(content: string, header: SecurityHeaderHints): string[] {
+  if (header.hasHeader) {
+    return uniqueList(header.sinks);
+  }
+
+  const hints: string[] = [];
+  if (matchesAny(content, DB_WRITE_PATTERNS)) {
+    hints.push("db.write");
+  }
+  if (matchesAny(content, DB_ID_PATTERNS) || matchesAny(content, QUERY_BUILDER_PATTERNS)) {
+    hints.push("db.query");
+  }
+  if (matchesAny(content, SQL_INJECTION_PATTERNS)) {
+    hints.push("sql.query");
+  }
+  if (matchesAny(content, EXEC_PATTERNS) || matchesAny(content, COMMAND_INJECTION_PATTERNS)) {
+    hints.push("exec");
+  }
+  if (matchesAny(content, EXTERNAL_CALL_PATTERNS)) {
+    hints.push("http.request");
+  }
+  if (matchesAny(content, DANGEROUS_HTML_PATTERNS)) {
+    hints.push("template.render");
+  }
+  return uniqueList(hints);
+}
+
+function collectSensitiveActionHints(content: string): string[] {
+  const hints: string[] = [];
+  if (AUTH_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
+    hints.push("auth");
+  }
+  if (DESTRUCTIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
+    hints.push("destructive");
+  }
+  return hints;
+}
+
+function uniqueList(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 function isEndpointRole(roles: FileRole[]): boolean {
