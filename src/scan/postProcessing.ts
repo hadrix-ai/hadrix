@@ -1,4 +1,5 @@
 import type { ExistingScanFinding, RepositoryScanFinding } from "../types.js";
+import type { DedupeDebug } from "./debugLog.js";
 import {
   buildFindingIdentityKey,
   extractFindingIdentityType,
@@ -12,6 +13,11 @@ export type FindingLike = {
   location?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
 };
+
+function logDebug(debug: DedupeDebug | undefined, event: Record<string, unknown>): void {
+  if (!debug) return;
+  debug.log({ stage: debug.stage, ...event });
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -336,6 +342,48 @@ function buildDedupeKey(finding: FindingLike): string {
   return buildFindingIdentityKey(finding);
 }
 
+function buildDebugFinding(finding: FindingLike): Record<string, unknown> {
+  const details = toRecord(finding.details);
+  const location = toRecord(finding.location);
+  const locationParts = extractFindingLocation(location);
+  const rawPath = normalizeFilepath(
+    (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown
+  );
+  const filepath = locationParts.canonicalPath || rawPath || "";
+  const repoFullName = extractRepoFullNameFromFinding({ location, details });
+  const repoPathRaw = location.repoPath ?? location.repo_path;
+  const repoPath = typeof repoPathRaw === "string" ? normalizeRepoPath(repoPathRaw) : "";
+  const identityType = extractFindingIdentityType({
+    summary: finding.summary,
+    type: (finding as any).type ?? null,
+    category: extractFindingCategory(finding) || null,
+    source: finding.source ?? null,
+    location: finding.location ?? null,
+    details: finding.details ?? null
+  });
+  const dedupeKey = extractDedupeKey(finding) || buildDedupeKey(finding);
+
+  return {
+    summary: finding.summary,
+    severity: finding.severity ?? null,
+    source: extractDetectorId(finding) || null,
+    type: identityType || null,
+    category: extractFindingCategory(finding) || null,
+    ruleId: extractFindingRuleId(finding) || null,
+    dedupeKey: dedupeKey || null,
+    anchorNodeId: extractAnchorNodeId(finding) || null,
+    overlapGroupId: extractOverlapGroupId(finding) || null,
+    repoFullName: repoFullName || null,
+    location: {
+      filepath: filepath || null,
+      startLine: locationParts.startLine,
+      endLine: locationParts.endLine,
+      chunkIndex: locationParts.chunkIndex,
+      repoPath: repoPath || null
+    }
+  };
+}
+
 function isSecretsFinding(finding: FindingLike): boolean {
   const category = extractFindingCategory(finding);
   if (category === "secrets") return true;
@@ -440,6 +488,69 @@ function areFindingsSemanticallySimilar(a: FindingLike, b: FindingLike): boolean
   const kindB = normalizeFindingKind(extractFindingKind(b));
   if (kindA && kindB && kindA === kindB) return true;
   return summarySimilarity(a, b) >= SUMMARY_SIMILARITY_THRESHOLD;
+}
+
+function buildMergeDiagnostics(a: FindingLike, b: FindingLike): Record<string, unknown> {
+  const dedupeKeyA = extractDedupeKey(a) || buildDedupeKey(a);
+  const dedupeKeyB = extractDedupeKey(b) || buildDedupeKey(b);
+  const anchorNodeIdA = extractAnchorNodeId(a);
+  const anchorNodeIdB = extractAnchorNodeId(b);
+  const overlapGroupIdA = extractOverlapGroupId(a);
+  const overlapGroupIdB = extractOverlapGroupId(b);
+  const repoA = extractRepoFullNameFromFinding(a);
+  const repoB = extractRepoFullNameFromFinding(b);
+  const typeA = extractFindingIdentityType({
+    summary: a.summary,
+    type: (a as any).type ?? null,
+    category: extractFindingCategory(a) || null,
+    source: a.source ?? null,
+    location: a.location ?? null,
+    details: a.details ?? null
+  });
+  const typeB = extractFindingIdentityType({
+    summary: b.summary,
+    type: (b as any).type ?? null,
+    category: extractFindingCategory(b) || null,
+    source: b.source ?? null,
+    location: b.location ?? null,
+    details: b.details ?? null
+  });
+  const ruleIdA = extractFindingRuleId(a);
+  const ruleIdB = extractFindingRuleId(b);
+  const kindA = extractFindingKind(a);
+  const kindB = extractFindingKind(b);
+  const locationExact = locationsExactMatch(a, b);
+  const locationOverlap = locationsOverlapMatch(a, b);
+  const semanticSimilarity = summarySimilarity(a, b);
+  const semanticMatch = areFindingsSemanticallySimilar(a, b);
+
+  return {
+    dedupeKeyMatch: Boolean(dedupeKeyA && dedupeKeyB && dedupeKeyA === dedupeKeyB),
+    dedupeKeyA: dedupeKeyA || null,
+    dedupeKeyB: dedupeKeyB || null,
+    anchorNodeIdMatch: Boolean(anchorNodeIdA && anchorNodeIdB && anchorNodeIdA === anchorNodeIdB),
+    anchorNodeIdA: anchorNodeIdA || null,
+    anchorNodeIdB: anchorNodeIdB || null,
+    overlapGroupIdMatch: Boolean(
+      overlapGroupIdA && overlapGroupIdB && overlapGroupIdA === overlapGroupIdB
+    ),
+    overlapGroupIdA: overlapGroupIdA || null,
+    overlapGroupIdB: overlapGroupIdB || null,
+    repoA: repoA || null,
+    repoB: repoB || null,
+    typeA: typeA || null,
+    typeB: typeB || null,
+    ruleIdA: ruleIdA || null,
+    ruleIdB: ruleIdB || null,
+    kindA: kindA || null,
+    kindB: kindB || null,
+    dedupCategoryA: extractDedupCategory(a) || null,
+    dedupCategoryB: extractDedupCategory(b) || null,
+    locationExact,
+    locationOverlap,
+    semanticSimilarity,
+    semanticMatch
+  };
 }
 
 function isRepositorySummaryDuplicate(summary: FindingLike, candidate: FindingLike): boolean {
@@ -786,7 +897,8 @@ export function filterFindings<T extends FindingLike>(
 }
 
 export function dropRepositorySummaryDuplicates<T extends FindingLike>(
-  findings: T[]
+  findings: T[],
+  debug?: DedupeDebug
 ): { findings: T[]; dropped: number } {
   if (findings.length === 0) {
     return { findings, dropped: 0 };
@@ -803,10 +915,22 @@ export function dropRepositorySummaryDuplicates<T extends FindingLike>(
       kept.push(finding);
       continue;
     }
-    const duplicate = fileFindings.some((candidate) =>
-      isRepositorySummaryDuplicate(finding, candidate)
-    );
-    if (duplicate) {
+    let matched: T | null = null;
+    for (const candidate of fileFindings) {
+      if (isRepositorySummaryDuplicate(finding, candidate)) {
+        matched = candidate;
+        break;
+      }
+    }
+    if (matched) {
+      if (debug) {
+        logDebug(debug, {
+          event: "drop_summary_duplicate",
+          finding: buildDebugFinding(finding),
+          matched: buildDebugFinding(matched),
+          match: buildMergeDiagnostics(finding, matched)
+        });
+      }
       dropped += 1;
       continue;
     }
@@ -818,17 +942,47 @@ export function dropRepositorySummaryDuplicates<T extends FindingLike>(
 
 export function dedupeFindings<T extends FindingLike>(
   findings: T[],
-  sourceFallback?: string
+  sourceFallback?: string,
+  debug?: DedupeDebug
 ): { findings: T[]; dropped: number } {
   const deduped: T[] = [];
   let dropped = 0;
-  for (const finding of findings) {
+  for (const [index, finding] of findings.entries()) {
+    if (debug) {
+      logDebug(debug, {
+        event: "pre_dedupe",
+        index,
+        sourceFallback: sourceFallback ?? null,
+        finding: buildDebugFinding(finding)
+      });
+    }
     const matchIndex = deduped.findIndex((existing) => shouldMergeFindings(existing, finding));
     if (matchIndex === -1) {
       deduped.push(finding);
       continue;
     }
-    deduped[matchIndex] = mergeFindings(deduped[matchIndex], finding, sourceFallback);
+    const target = deduped[matchIndex];
+    let targetInfo: Record<string, unknown> | null = null;
+    let incomingInfo: Record<string, unknown> | null = null;
+    let matchInfo: Record<string, unknown> | null = null;
+    if (debug) {
+      targetInfo = buildDebugFinding(target);
+      incomingInfo = buildDebugFinding(finding);
+      matchInfo = buildMergeDiagnostics(target, finding);
+    }
+    const merged = mergeFindings(target, finding, sourceFallback);
+    if (debug) {
+      logDebug(debug, {
+        event: "merge",
+        matchIndex,
+        incomingIndex: index,
+        match: matchInfo,
+        target: targetInfo,
+        incoming: incomingInfo,
+        merged: buildDebugFinding(merged)
+      });
+    }
+    deduped[matchIndex] = merged;
     dropped += 1;
   }
   return { findings: deduped, dropped };
@@ -846,7 +1000,8 @@ function isLikelyDuplicateFinding(
 
 export function dedupeRepositoryFindingsAgainstExisting(
   llmFindings: RepositoryScanFinding[],
-  existingFindings: ExistingScanFinding[]
+  existingFindings: ExistingScanFinding[],
+  debug?: DedupeDebug
 ): { findings: RepositoryScanFinding[]; dropped: number } {
   if (llmFindings.length === 0 || existingFindings.length === 0) {
     return { findings: llmFindings, dropped: 0 };
@@ -882,12 +1037,26 @@ export function dedupeRepositoryFindingsAgainstExisting(
     }
 
     const isSummary = isRepositorySummaryFinding(finding);
-    const isDuplicate = candidates.some((existing) =>
-      isSummary
+    let matched: ExistingScanFinding | null = null;
+    const isDuplicate = candidates.some((existing) => {
+      const duplicate = isSummary
         ? isRepositorySummaryDuplicate(finding, existing)
-        : isLikelyDuplicateFinding(finding, existing)
-    );
+        : isLikelyDuplicateFinding(finding, existing);
+      if (duplicate) {
+        matched = existing;
+      }
+      return duplicate;
+    });
     if (isDuplicate) {
+      if (debug) {
+        logDebug(debug, {
+          event: "drop_against_existing",
+          isSummary,
+          finding: buildDebugFinding(finding),
+          matched: matched ? buildDebugFinding(matched) : null,
+          match: matched ? buildMergeDiagnostics(finding, matched) : null
+        });
+      }
       dropped += 1;
       continue;
     }

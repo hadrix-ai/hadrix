@@ -33,6 +33,7 @@ import {
   REQUIRED_CONTROLS
 } from "./repositoryHeuristics.js";
 import { buildFindingIdentityKey, extractFindingIdentityType } from "./dedupeKey.js";
+import type { DedupeDebug } from "./debugLog.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -48,6 +49,7 @@ export interface RepositoryScanInput {
   files: RepositoryFileSample[];
   existingFindings: ExistingScanFinding[];
   mapConcurrency?: number;
+  debug?: DedupeDebug;
 }
 
 export interface CompositeScanInput {
@@ -220,6 +222,10 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       if (!systemPrompt) {
         continue;
       }
+      const matchedControls = filterControlsForRule(rule, fileContext);
+      const matchedCandidates = filterCandidateFindingsForRule(rule, fileContext).map(
+        (candidate) => candidate.type
+      );
       tasks.push({
         rule,
         file,
@@ -228,6 +234,30 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         roleSummary: insights.roleSummary,
         existingFindings
       });
+      if (input.debug) {
+        logDebug(input.debug, {
+          event: "rule_pass_task",
+          taskIndex: tasks.length - 1,
+          rule: {
+            id: rule.id,
+            title: rule.title,
+            category: rule.category,
+            requiredControls: rule.requiredControls ?? [],
+            candidateTypes: rule.candidateTypes ?? []
+          },
+          file: {
+            path: file.path,
+            chunkIndex: file.chunkIndex,
+            startLine: file.startLine,
+            endLine: file.endLine,
+            overlapGroupId: file.overlapGroupId ?? null,
+            truncated: file.truncated ?? false
+          },
+          matchedControls,
+          matchedCandidateTypes: matchedCandidates,
+          roles: fileContext.roles
+        });
+      }
     }
   }
 
@@ -317,7 +347,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     llmFindings,
     existingFindings
   });
-  const reduced = reduceRepositoryFindings([...llmFindings, ...promoted]);
+  const reduceDebug = input.debug ? { stage: "llm_rule_reduce", log: input.debug.log } : undefined;
+  const reduced = reduceRepositoryFindings([...llmFindings, ...promoted], reduceDebug);
   return reduced;
 }
 
@@ -1398,7 +1429,65 @@ function normalizeFindingLocation(
   return normalized;
 }
 
-export function reduceRepositoryFindings(findings: RepositoryScanFinding[]): RepositoryScanFinding[] {
+function logDebug(debug: DedupeDebug | undefined, event: Record<string, unknown>): void {
+  if (!debug) return;
+  debug.log({ stage: debug.stage, ...event });
+}
+
+function buildRepositoryDebugFinding(finding: RepositoryScanFinding): Record<string, unknown> {
+  const details = toRecord(finding.details);
+  const location = toRecord(finding.location);
+  const filepathRaw = location.filepath ?? location.filePath ?? location.path ?? location.file;
+  const filepath = typeof filepathRaw === "string" ? filepathRaw : "";
+  const startLine = normalizeLineNumber(
+    location.startLine ?? location.start_line ?? location.line ?? location.start
+  );
+  const endLine = normalizeLineNumber(
+    location.endLine ?? location.end_line ?? location.lineEnd ?? location.end
+  );
+  const chunkIndex = normalizeChunkIndex(location.chunkIndex ?? (location as any).chunk_index);
+  const categoryRaw =
+    details.category ?? details.findingCategory ?? details.finding_category ?? null;
+  const category = typeof categoryRaw === "string" ? categoryRaw.trim() : null;
+  const sourceRaw = details.source ?? null;
+  const source = typeof sourceRaw === "string" ? sourceRaw.trim() : null;
+  const identityType = extractFindingIdentityType({
+    summary: finding.summary,
+    type: finding.type ?? null,
+    category,
+    source,
+    location: finding.location ?? null,
+    details: finding.details ?? null
+  });
+  const ruleId =
+    details.ruleId ??
+    details.rule_id ??
+    details.ruleID ??
+    details.findingType ??
+    details.finding_type ??
+    null;
+
+  return {
+    summary: finding.summary,
+    severity: finding.severity,
+    type: finding.type ?? null,
+    identityType: identityType || null,
+    ruleId: typeof ruleId === "string" ? ruleId.trim() : null,
+    dedupeKey: buildFindingIdentityKey(finding) || null,
+    repositoryFullName: finding.repositoryFullName ?? null,
+    location: {
+      filepath: filepath || null,
+      startLine,
+      endLine,
+      chunkIndex
+    }
+  };
+}
+
+export function reduceRepositoryFindings(
+  findings: RepositoryScanFinding[],
+  debug?: DedupeDebug
+): RepositoryScanFinding[] {
   if (findings.length === 0) {
     return [];
   }
@@ -1417,7 +1506,17 @@ export function reduceRepositoryFindings(findings: RepositoryScanFinding[]): Rep
       deduped.set(fingerprint, finding);
       continue;
     }
-    deduped.set(fingerprint, mergeRepositoryFindings(existing, finding));
+    const merged = mergeRepositoryFindings(existing, finding);
+    if (debug) {
+      logDebug(debug, {
+        event: "merge_reduce",
+        fingerprint,
+        left: buildRepositoryDebugFinding(existing),
+        right: buildRepositoryDebugFinding(finding),
+        merged: buildRepositoryDebugFinding(merged)
+      });
+    }
+    deduped.set(fingerprint, merged);
   }
 
   const combined = [...deduped.values(), ...passthrough];

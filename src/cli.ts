@@ -115,6 +115,8 @@ program
   .option("--repo-full-name <name>", "Repository full name for metadata")
   .option("--repo-id <id>", "Repository id for metadata")
   .option("--commit-sha <sha>", "Commit SHA for metadata")
+  .option("--debug", "Enable debug logging to a file")
+  .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (
     target: string | undefined,
     options: {
@@ -129,6 +131,8 @@ program
       repoFullName?: string;
       repoId?: string;
       commitSha?: string;
+      debug?: boolean;
+      debugLog?: string;
     }
   ) => {
     const projectRoot = path.resolve(process.cwd(), target ?? ".");
@@ -174,7 +178,9 @@ program
           repoFullName: options.repoFullName,
           repositoryId: options.repoId,
           commitSha: options.commitSha,
-          logger
+          logger,
+          debug: options.debug,
+          debugLogPath: options.debugLog
         });
 
       let result;

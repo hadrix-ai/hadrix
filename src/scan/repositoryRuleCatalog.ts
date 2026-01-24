@@ -21,6 +21,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     ]
   },
   {
+    id: "missing_server_action_auth",
+    title: "Missing authentication/authorization in server actions",
+    category: "authentication",
+    description: "Server Actions perform mutations without verifying the caller's session or permissions.",
+    requiredControls: ["no_frontend_only_auth"],
+    guidance: [
+      "Treat Server Actions (\"use server\") as public endpoints; enforce auth inside the action, not only in UI or layout guards.",
+      "Verify the session user is allowed to perform the mutation before executing data writes."
+    ]
+  },
+  {
     id: "missing_role_check",
     title: "Missing role checks on admin endpoint",
     category: "access_control",
@@ -111,6 +122,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     requiredControls: ["no_sensitive_secrets"],
     guidance: [
       "Frontend code should not embed private keys, service secrets, or admin tokens."
+    ]
+  },
+  {
+    id: "sensitive_client_storage",
+    title: "Sensitive data stored in client-side storage",
+    category: "secrets",
+    description: "Tokens, secrets, or PII are persisted in localStorage or sessionStorage.",
+    requiredControls: ["no_sensitive_secrets"],
+    guidance: [
+      "Do not store access tokens, refresh tokens, or session IDs in localStorage/sessionStorage.",
+      "Persist only non-sensitive preferences; keep PII and secrets on the server or in httpOnly cookies."
     ]
   },
   {

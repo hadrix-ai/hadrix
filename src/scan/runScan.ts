@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { createWriteStream, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -33,6 +33,7 @@ import type {
   ScanResult,
   StaticFinding
 } from "../types.js";
+import type { DedupeDebug } from "./debugLog.js";
 
 export interface RunScanOptions {
   projectRoot: string;
@@ -47,6 +48,8 @@ export interface RunScanOptions {
   repositoryId?: string | null;
   commitSha?: string | null;
   logger?: (message: string) => void;
+  debug?: boolean;
+  debugLogPath?: string | null;
 }
 
 type ChunkRow = {
@@ -59,6 +62,52 @@ type ChunkRow = {
   chunk_format?: string | null;
   overlap_group_id?: string | null;
 };
+
+type DebugLogWriter = {
+  log: (event: Record<string, unknown>) => void;
+  close: () => Promise<void>;
+  path: string;
+};
+
+async function createDebugLogWriter(params: {
+  enabled: boolean;
+  requestedPath?: string | null;
+  stateDir: string;
+  log: (message: string) => void;
+}): Promise<DebugLogWriter | null> {
+  if (!params.enabled) return null;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filePath = params.requestedPath
+    ? path.isAbsolute(params.requestedPath)
+      ? params.requestedPath
+      : path.resolve(process.cwd(), params.requestedPath)
+    : path.join(params.stateDir, "logs", `scan-debug-${timestamp}.jsonl`);
+
+  try {
+    await mkdir(path.dirname(filePath), { recursive: true });
+    const stream = createWriteStream(filePath, { flags: "a" });
+    stream.on("error", (err) => {
+      params.log(`Debug log error: ${err.message}`);
+    });
+    const log = (event: Record<string, unknown>) => {
+      const payload = { timestamp: new Date().toISOString(), ...event };
+      stream.write(`${JSON.stringify(payload)}\n`);
+    };
+    const close = () =>
+      new Promise<void>((resolve) => {
+        stream.end(() => resolve());
+      });
+    const relative = path.relative(process.cwd(), filePath);
+    params.log(
+      `Debug log enabled: ${relative && !relative.startsWith("..") ? relative : filePath}.`
+    );
+    return { log, close, path: filePath };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    params.log(`Failed to create debug log: ${message}`);
+    return null;
+  }
+}
 
 function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
   if (vector.length !== expectedDims) {
@@ -810,500 +859,505 @@ function toRepositoryFinding(
 
 export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const start = Date.now();
-  const config = await loadConfig({
-    projectRoot: options.projectRoot,
-    configPath: options.configPath,
-    overrides: options.overrides
-  });
-
-  const log = options.logger ?? (() => {});
-  const repoRoot = config.projectRoot;
-  const explicitRepoPath = normalizeRepoPath(options.repoPath ?? config.repoPath ?? "");
-  let repoPath: string | null = explicitRepoPath || null;
-  if (!repoPath && options.inferRepoPath !== false) {
-    log("Inferring repoPath...");
-    const inferredRepoPath = await inferRepoPathFromDisk(repoRoot);
-    if (inferredRepoPath) {
-      repoPath = inferredRepoPath;
-      log(`Inferred repoPath: ${repoPath}`);
-    }
-  }
-
-  const resolved = resolveScanRoot(repoRoot, repoPath);
-  if (resolved.missing) {
-    log(`repoPath missing; falling back to repo root (${resolved.missing})`);
-  } else if (repoPath) {
-    log(`Scanning repoPath: ${repoPath}`);
-  }
-  const scanRoot = resolved.scanRoot;
-  repoPath = resolved.repoPath;
-
-  const repoFullName =
-    typeof options.repoFullName === "string" && options.repoFullName.trim()
-      ? options.repoFullName.trim()
-      : path.basename(config.projectRoot) || "local-repo";
-  const repositoryId =
-    typeof options.repositoryId === "string" && options.repositoryId.trim()
-      ? options.repositoryId.trim()
-      : null;
-  const commitSha =
-    typeof options.commitSha === "string" && options.commitSha.trim()
-      ? options.commitSha.trim()
-      : null;
-
-  const rawStaticFindings = options.skipStatic
-    ? []
-    : await runStaticScanners(config, scanRoot, log);
-  log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
-
-  const jellyAnchorsEnabled =
-    config.flags.enableJellyAnchors && !(options.skipJellyAnchors ?? false);
-  let jellyResult: JellyAnchorComputation | null = null;
-  let jellyIndex: AnchorIndex | null = null;
-  if (jellyAnchorsEnabled) {
-    log("Computing jelly anchors...");
-    jellyResult = await computeJellyAnchors({
-      repoRoot,
-      scanRoot,
-      commitSha
-    });
-    jellyIndex = jellyResult.index;
-    if (jellyIndex) {
-      log(
-        `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
-      );
-    } else {
-      const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
-      log(`Jelly anchors unavailable${reason}.`);
-    }
-  } else if (config.flags.enableJellyAnchors && options.skipJellyAnchors) {
-    log("Jelly anchors skipped by CLI flag.");
-  }
-
-  const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);
-
-  let staticExistingFindings = toExistingFindings(
-    rawStaticFindings,
-    repoPath,
-    repoFullName,
-    repositoryId
-  );
-  if (jellyIndex) {
-    const applied = attachJellyAnchors(staticExistingFindings, jellyIndex);
-    if (applied.anchored > 0) {
-      log(`Jelly anchors applied to static findings (${applied.anchored}/${applied.total}).`);
-    }
-  }
-  staticExistingFindings = staticExistingFindings.map((finding) =>
-    applyFindingIdentityKey(finding, repoPath)
-  );
-
-  const { kept: filteredStaticExisting, dropped: staticFilteredDropped } = filterFindings(
-    staticExistingFindings
-  );
-  if (staticFilteredDropped > 0) {
-    log(`Filtered ${staticFilteredDropped} static findings.`);
-  }
-
-  const reportStaticFindings = toStaticFindingsFromExisting(filteredStaticExisting);
-  const { findings: dedupedStaticExisting, dropped: staticDedupeDropped } = dedupeFindings(
-    filteredStaticExisting
-  );
-  if (staticDedupeDropped > 0) {
-    log(`Deduped ${staticDedupeDropped} static findings.`);
-  }
-
-  const staticFindings = toStaticFindingsFromExisting(dedupedStaticExisting);
-
-  const normalizedExistingFindings = normalizeExistingFindings(options.existingFindings, {
-    repoFullName,
-    repositoryId,
-    repoPath
-  }).map((finding) => applyFindingIdentityKey(finding, repoPath));
-  const existingFindings = [
-    ...dedupedStaticExisting,
-    ...normalizedExistingFindings
-  ];
-
-  const files = await discoverFiles({
-    root: scanRoot,
-    includeExtensions: config.chunking.includeExtensions,
-    exclude: config.chunking.exclude,
-    maxFileSizeBytes: config.chunking.maxFileSizeBytes
-  });
-
-  const db = new HadrixDb({
-    stateDir: config.stateDir,
-    extensionPath: config.vector.extensionPath,
-    vectorDimensions: config.embeddings.dimensions,
-    vectorMaxElements: config.vector.maxElements,
-    logger: log
-  });
-  const desiredChunkFormat = config.flags.enableSecurityChunking ? "security_semantic" : "line_window";
-  if (config.flags.enableSecurityChunking) {
-    log("Security chunking enabled.");
-  }
-
-  const newEmbeddings: Array<{ chunkId: number; content: string }> = [];
+  let debugWriter: DebugLogWriter | null = null;
 
   try {
-    for (const file of files) {
-      const relPath = toRelative(config.projectRoot, file);
-      const normalizedRelPath = normalizePath(relPath);
-      let fileHash: string;
-      let stats: ReturnType<typeof statSync>;
-      try {
-        fileHash = hashFile(file);
-        stats = statSync(file);
-      } catch {
-        continue;
-      }
-      const existing = db.getFileByPath(relPath);
-      const existingFormat = existing ? db.getChunkFormatForFile(existing.id) : null;
+    const config = await loadConfig({
+      projectRoot: options.projectRoot,
+      configPath: options.configPath,
+      overrides: options.overrides
+    });
 
-      if (existing && existing.hash === fileHash && existingFormat === desiredChunkFormat) {
-        continue;
+    const log = options.logger ?? (() => {});
+    debugWriter = await createDebugLogWriter({
+      enabled: Boolean(options.debug || options.debugLogPath),
+      requestedPath: options.debugLogPath ?? null,
+      stateDir: config.stateDir,
+      log
+    });
+    const debugContext = (stage: string): DedupeDebug | undefined =>
+      debugWriter ? { stage, log: debugWriter.log } : undefined;
+    const repoRoot = config.projectRoot;
+    const explicitRepoPath = normalizeRepoPath(options.repoPath ?? config.repoPath ?? "");
+    let repoPath: string | null = explicitRepoPath || null;
+    if (!repoPath && options.inferRepoPath !== false) {
+      log("Inferring repoPath...");
+      const inferredRepoPath = await inferRepoPathFromDisk(repoRoot);
+      if (inferredRepoPath) {
+        repoPath = inferredRepoPath;
+        log(`Inferred repoPath: ${repoPath}`);
       }
-
-      const fileRow = db.upsertFile({
-        path: relPath,
-        hash: fileHash,
-        mtimeMs: stats.mtimeMs,
-        size: stats.size
+    }
+  
+    const resolved = resolveScanRoot(repoRoot, repoPath);
+    if (resolved.missing) {
+      log(`repoPath missing; falling back to repo root (${resolved.missing})`);
+    } else if (repoPath) {
+      log(`Scanning repoPath: ${repoPath}`);
+    }
+    const scanRoot = resolved.scanRoot;
+    repoPath = resolved.repoPath;
+  
+    const repoFullName =
+      typeof options.repoFullName === "string" && options.repoFullName.trim()
+        ? options.repoFullName.trim()
+        : path.basename(config.projectRoot) || "local-repo";
+    const repositoryId =
+      typeof options.repositoryId === "string" && options.repositoryId.trim()
+        ? options.repositoryId.trim()
+        : null;
+    const commitSha =
+      typeof options.commitSha === "string" && options.commitSha.trim()
+        ? options.commitSha.trim()
+        : null;
+    if (debugWriter) {
+      debugWriter.log({
+        event: "debug_start",
+        projectRoot: config.projectRoot,
+        scanRoot,
+        repoPath,
+        repoFullName,
+        repositoryId,
+        commitSha,
+        configPath: options.configPath ?? null
       });
-
-      db.deleteChunksForFile(fileRow.id);
-
-      let chunks = config.flags.enableSecurityChunking
-        ? securityChunkFile({
-            filePath: file,
-            idPath: relPath,
-            repoPath,
-            sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
-          })
-        : chunkFile(file, {
+    }
+  
+    const rawStaticFindings = options.skipStatic
+      ? []
+      : await runStaticScanners(config, scanRoot, log);
+    log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
+  
+    const jellyAnchorsEnabled =
+      config.flags.enableJellyAnchors && !(options.skipJellyAnchors ?? false);
+    let jellyResult: JellyAnchorComputation | null = null;
+    let jellyIndex: AnchorIndex | null = null;
+    if (jellyAnchorsEnabled) {
+      log("Computing jelly anchors...");
+      jellyResult = await computeJellyAnchors({
+        repoRoot,
+        scanRoot,
+        commitSha
+      });
+      jellyIndex = jellyResult.index;
+      if (jellyIndex) {
+        log(
+          `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
+        );
+      } else {
+        const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
+        log(`Jelly anchors unavailable${reason}.`);
+      }
+    } else if (config.flags.enableJellyAnchors && options.skipJellyAnchors) {
+      log("Jelly anchors skipped by CLI flag.");
+    }
+  
+    const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);
+  
+    let staticExistingFindings = toExistingFindings(
+      rawStaticFindings,
+      repoPath,
+      repoFullName,
+      repositoryId
+    );
+    if (jellyIndex) {
+      const applied = attachJellyAnchors(staticExistingFindings, jellyIndex);
+      if (applied.anchored > 0) {
+        log(`Jelly anchors applied to static findings (${applied.anchored}/${applied.total}).`);
+      }
+    }
+    staticExistingFindings = staticExistingFindings.map((finding) =>
+      applyFindingIdentityKey(finding, repoPath)
+    );
+  
+    const { kept: filteredStaticExisting, dropped: staticFilteredDropped } = filterFindings(
+      staticExistingFindings
+    );
+    if (staticFilteredDropped > 0) {
+      log(`Filtered ${staticFilteredDropped} static findings.`);
+    }
+  
+    const reportStaticFindings = toStaticFindingsFromExisting(filteredStaticExisting);
+    const { findings: dedupedStaticExisting, dropped: staticDedupeDropped } = dedupeFindings(
+      filteredStaticExisting,
+      undefined,
+      debugContext("static_dedupe")
+    );
+    if (staticDedupeDropped > 0) {
+      log(`Deduped ${staticDedupeDropped} static findings.`);
+    }
+  
+    const staticFindings = toStaticFindingsFromExisting(dedupedStaticExisting);
+  
+    const normalizedExistingFindings = normalizeExistingFindings(options.existingFindings, {
+      repoFullName,
+      repositoryId,
+      repoPath
+    }).map((finding) => applyFindingIdentityKey(finding, repoPath));
+    const existingFindings = [
+      ...dedupedStaticExisting,
+      ...normalizedExistingFindings
+    ];
+  
+    const files = await discoverFiles({
+      root: scanRoot,
+      includeExtensions: config.chunking.includeExtensions,
+      exclude: config.chunking.exclude,
+      maxFileSizeBytes: config.chunking.maxFileSizeBytes
+    });
+  
+    const db = new HadrixDb({
+      stateDir: config.stateDir,
+      extensionPath: config.vector.extensionPath,
+      vectorDimensions: config.embeddings.dimensions,
+      vectorMaxElements: config.vector.maxElements,
+      logger: log
+    });
+    const desiredChunkFormat = config.flags.enableSecurityChunking ? "security_semantic" : "line_window";
+    if (config.flags.enableSecurityChunking) {
+      log("Security chunking enabled.");
+    }
+  
+    const newEmbeddings: Array<{ chunkId: number; content: string }> = [];
+  
+    try {
+      for (const file of files) {
+        const relPath = toRelative(config.projectRoot, file);
+        const normalizedRelPath = normalizePath(relPath);
+        let fileHash: string;
+        let stats: ReturnType<typeof statSync>;
+        try {
+          fileHash = hashFile(file);
+          stats = statSync(file);
+        } catch {
+          continue;
+        }
+        const existing = db.getFileByPath(relPath);
+        const existingFormat = existing ? db.getChunkFormatForFile(existing.id) : null;
+  
+        if (existing && existing.hash === fileHash && existingFormat === desiredChunkFormat) {
+          continue;
+        }
+  
+        const fileRow = db.upsertFile({
+          path: relPath,
+          hash: fileHash,
+          mtimeMs: stats.mtimeMs,
+          size: stats.size
+        });
+  
+        db.deleteChunksForFile(fileRow.id);
+  
+        let chunks = config.flags.enableSecurityChunking
+          ? securityChunkFile({
+              filePath: file,
+              idPath: relPath,
+              repoPath,
+              sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
+            })
+          : chunkFile(file, {
+              maxChars: config.chunking.maxChars,
+              overlapChars: config.chunking.overlapChars,
+              idPath: relPath
+            });
+        if (config.flags.enableSecurityChunking && chunks.length === 0) {
+          log(`Security chunking produced no chunks for ${relPath}; falling back to line window.`);
+          chunks = chunkFile(file, {
             maxChars: config.chunking.maxChars,
             overlapChars: config.chunking.overlapChars,
             idPath: relPath
           });
-      if (config.flags.enableSecurityChunking && chunks.length === 0) {
-        log(`Security chunking produced no chunks for ${relPath}; falling back to line window.`);
-        chunks = chunkFile(file, {
-          maxChars: config.chunking.maxChars,
-          overlapChars: config.chunking.overlapChars,
-          idPath: relPath
-        });
-      }
-
-      const inserted = db.insertChunks(
-        fileRow.id,
-        relPath,
-        chunks.map((chunk) => ({
-          chunkUid: chunk.id,
-          chunkIndex: chunk.chunkIndex,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          content: chunk.content,
-          contentHash: chunk.contentHash,
-          chunkFormat: chunk.chunkFormat ?? "line_window",
-          securityHeader: chunk.securityHeader ?? null,
-          primarySymbol: chunk.primarySymbol ?? null,
-          entryPoint: chunk.entryPoint ?? null,
-          executionRole: chunk.executionRole ?? null,
-          sinks: chunk.sinks ?? null,
-          overlapGroupId: chunk.overlapGroupId ?? null,
-          dedupeKey: chunk.dedupeKey ?? null
-        }))
-      );
-
-      const idByUid = new Map(inserted.map((row) => [row.chunkUid, row.id]));
-      for (const chunk of chunks) {
-        const chunkId = idByUid.get(chunk.id);
-        if (!chunkId) continue;
-        newEmbeddings.push({ chunkId, content: chunk.content });
-      }
-    }
-
-    let embeddingQueue = newEmbeddings;
-    if (db.didResetEmbeddings()) {
-      log("Embedding dimensions changed; rebuilding embeddings for all chunks.");
-      const allChunks = db.getAllChunks();
-      embeddingQueue = allChunks.map((chunk) => ({ chunkId: chunk.id, content: chunk.content }));
-    }
-
-    if (embeddingQueue.length) {
-      log(`Embedding ${embeddingQueue.length} chunks...`);
-      const batchSize = config.embeddings.batchSize;
-      for (let i = 0; i < embeddingQueue.length; i += batchSize) {
-        const batch = embeddingQueue.slice(i, i + batchSize);
-        const vectors = await embedTexts(
-          config,
-          batch.map((item) => item.content)
+        }
+  
+        const inserted = db.insertChunks(
+          fileRow.id,
+          relPath,
+          chunks.map((chunk) => ({
+            chunkUid: chunk.id,
+            chunkIndex: chunk.chunkIndex,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            content: chunk.content,
+            contentHash: chunk.contentHash,
+            chunkFormat: chunk.chunkFormat ?? "line_window",
+            securityHeader: chunk.securityHeader ?? null,
+            primarySymbol: chunk.primarySymbol ?? null,
+            entryPoint: chunk.entryPoint ?? null,
+            executionRole: chunk.executionRole ?? null,
+            sinks: chunk.sinks ?? null,
+            overlapGroupId: chunk.overlapGroupId ?? null,
+            dedupeKey: chunk.dedupeKey ?? null
+          }))
         );
-        const rows = vectors.map((vector, index) => ({
-          chunkId: batch[index]?.chunkId ?? 0,
-          embedding: embeddingToBuffer(vector, config.embeddings.dimensions)
-        }));
-        db.insertEmbeddings(rows);
+  
+        const idByUid = new Map(inserted.map((row) => [row.chunkUid, row.id]));
+        for (const chunk of chunks) {
+          const chunkId = idByUid.get(chunk.id);
+          if (!chunkId) continue;
+          newEmbeddings.push({ chunkId, content: chunk.content });
+        }
       }
-    }
-
-    const allChunks = db.getAllChunks();
-    const scopedChunks = repoPath
-      ? allChunks.filter(
-          (chunk) => chunk.filepath === repoPath || chunk.filepath.startsWith(`${repoPath}/`)
-        )
-      : allChunks;
-    const scannedChunks = scopedChunks.length;
-    const llmSource = `llm_${config.llm.provider}_repository_scan`;
-    const llmCompositeSource = `llm_${config.llm.provider}_repository_composite_scan`;
-    let llmFindings: RepositoryScanFinding[] = [];
-    let reportLlmFindings: RepositoryScanFinding[] = [];
-    let compositeFindings: RepositoryScanFinding[] = [];
-    let fileSamples: RepositoryFileSample[] = [];
-    let repositoryDescriptor: { fullName: string; repoPaths: string[] } | null = null;
-
-    if (scopedChunks.length > 0) {
-      let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
-      if (config.sampling.queries.length) {
-        log("Retrieving top-k chunks...");
-        const queryEmbeddings = await embedTexts(config, config.sampling.queries);
-        const candidates = new Map<number, number>();
-
-        for (const vector of queryEmbeddings) {
-          const results = db.querySimilar(
-            embeddingToBuffer(vector, config.embeddings.dimensions),
-            config.sampling.topKPerQuery
+  
+      let embeddingQueue = newEmbeddings;
+      if (db.didResetEmbeddings()) {
+        log("Embedding dimensions changed; rebuilding embeddings for all chunks.");
+        const allChunks = db.getAllChunks();
+        embeddingQueue = allChunks.map((chunk) => ({ chunkId: chunk.id, content: chunk.content }));
+      }
+  
+      if (embeddingQueue.length) {
+        log(`Embedding ${embeddingQueue.length} chunks...`);
+        const batchSize = config.embeddings.batchSize;
+        for (let i = 0; i < embeddingQueue.length; i += batchSize) {
+          const batch = embeddingQueue.slice(i, i + batchSize);
+          const vectors = await embedTexts(
+            config,
+            batch.map((item) => item.content)
           );
-          for (const result of results) {
-            const existing = candidates.get(result.chunkId);
-            if (existing === undefined || result.distance < existing) {
-              candidates.set(result.chunkId, result.distance);
+          const rows = vectors.map((vector, index) => ({
+            chunkId: batch[index]?.chunkId ?? 0,
+            embedding: embeddingToBuffer(vector, config.embeddings.dimensions)
+          }));
+          db.insertEmbeddings(rows);
+        }
+      }
+  
+      const allChunks = db.getAllChunks();
+      const scopedChunks = repoPath
+        ? allChunks.filter(
+            (chunk) => chunk.filepath === repoPath || chunk.filepath.startsWith(`${repoPath}/`)
+          )
+        : allChunks;
+      const scannedChunks = scopedChunks.length;
+      const llmSource = `llm_${config.llm.provider}_repository_scan`;
+      const llmCompositeSource = `llm_${config.llm.provider}_repository_composite_scan`;
+      let llmFindings: RepositoryScanFinding[] = [];
+      let reportLlmFindings: RepositoryScanFinding[] = [];
+      let compositeFindings: RepositoryScanFinding[] = [];
+      let fileSamples: RepositoryFileSample[] = [];
+      let repositoryDescriptor: { fullName: string; repoPaths: string[] } | null = null;
+  
+      if (scopedChunks.length > 0) {
+        let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
+        if (config.sampling.queries.length) {
+          log("Retrieving top-k chunks...");
+          const queryEmbeddings = await embedTexts(config, config.sampling.queries);
+          const candidates = new Map<number, number>();
+  
+          for (const vector of queryEmbeddings) {
+            const results = db.querySimilar(
+              embeddingToBuffer(vector, config.embeddings.dimensions),
+              config.sampling.topKPerQuery
+            );
+            for (const result of results) {
+              const existing = candidates.get(result.chunkId);
+              if (existing === undefined || result.distance < existing) {
+                candidates.set(result.chunkId, result.distance);
+              }
             }
           }
+  
+          const orderedIds = [...candidates.entries()]
+            .sort((a, b) => a[1] - b[1])
+            .map(([id]) => id);
+  
+          const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
+          const rows = db.getChunksByIds(limitedIds);
+          const rowById = new Map(rows.map((row) => [row.id, row]));
+          preferredChunks = limitedIds
+            .map((id) => rowById.get(id))
+            .filter(Boolean)
+            .filter((row) =>
+              repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
+            )
+            .map((row) => toLocalChunk(row!));
         }
-
-        const orderedIds = [...candidates.entries()]
-          .sort((a, b) => a[1] - b[1])
-          .map(([id]) => id);
-
-        const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
-        const rows = db.getChunksByIds(limitedIds);
-        const rowById = new Map(rows.map((row) => [row.id, row]));
-        preferredChunks = limitedIds
-          .map((id) => rowById.get(id))
-          .filter(Boolean)
-          .filter((row) =>
-            repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
-          )
-          .map((row) => toLocalChunk(row!));
-      }
-
-      log("Heuristic analysis and chunk sampling...");
-      fileSamples = buildRepositoryFileSamples(
-        scopedChunks.map((chunk) =>
-          toLocalChunk({
-            filepath: chunk.filepath,
-            chunk_index: chunk.chunk_index,
-            start_line: chunk.start_line,
-            end_line: chunk.end_line,
-            content: chunk.content,
-            chunk_format: chunk.chunk_format,
-            overlap_group_id: chunk.overlap_group_id ?? null
-          })
-        ),
-        {
-          maxFiles: config.sampling.maxChunks,
-          maxChunksPerFile: config.sampling.maxChunksPerFile,
-          preferredChunks
-        }
-      );
-
-      if (fileSamples.length > 0) {
-        repositoryDescriptor = {
-          fullName: repoFullName,
-          repoPaths: repoPath ? [repoPath] : []
-        };
-
-        log("LLM scan (rule pass)...");
+  
+        log("Heuristic analysis and chunk sampling...");
+        fileSamples = buildRepositoryFileSamples(
+          scopedChunks.map((chunk) =>
+            toLocalChunk({
+              filepath: chunk.filepath,
+              chunk_index: chunk.chunk_index,
+              start_line: chunk.start_line,
+              end_line: chunk.end_line,
+              content: chunk.content,
+              chunk_format: chunk.chunk_format,
+              overlap_group_id: chunk.overlap_group_id ?? null
+            })
+          ),
+          {
+            maxFiles: config.sampling.maxChunks,
+            maxChunksPerFile: config.sampling.maxChunksPerFile,
+            preferredChunks
+          }
+        );
+  
+        if (fileSamples.length > 0) {
+          repositoryDescriptor = {
+            fullName: repoFullName,
+            repoPaths: repoPath ? [repoPath] : []
+          };
+  
+          log("LLM scan (rule pass)...");
         llmFindings = await scanRepository({
           config,
           repository: repositoryDescriptor,
           files: fileSamples,
-          existingFindings
+          existingFindings,
+          debug: debugContext("llm_rule_pass")
         });
       }
     }
-
-    if (llmFindings.length > 0) {
-      llmFindings = llmFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
-      llmFindings = llmFindings.map((finding) =>
-        enrichRepositoryFinding(finding, {
-          repoFullName,
-          repositoryId,
-          repoPath,
-          commitSha
-        })
-      );
-    }
-
-    if (jellyIndex && llmFindings.length > 0) {
-      const appliedLlm = attachJellyAnchors(llmFindings, jellyIndex);
-      if (appliedLlm.anchored > 0) {
-        log(`Jelly anchors applied to LLM findings (${appliedLlm.anchored}/${appliedLlm.total}).`);
-      }
-    }
-
-    if (llmFindings.length > 0) {
-      const normalizedLlmFindings = llmFindings.map(normalizeRepositoryFinding);
-      const { kept: filteredLlmFindings, dropped: filteredLlmDropped } = filterFindings(
-        normalizedLlmFindings
-      );
-      if (filteredLlmDropped > 0) {
-        log(`Filtered ${filteredLlmDropped} LLM findings.`);
-      }
-      reportLlmFindings = filteredLlmFindings;
-
-      const { findings: dedupedLlmFindings, dropped: dedupeLlmDropped } = dedupeFindings(
-        filteredLlmFindings,
-        llmSource
-      );
-      if (dedupeLlmDropped > 0) {
-        log(`Deduped ${dedupeLlmDropped} LLM findings.`);
-      }
-
-      const { findings: dedupedAgainstStatic, dropped: dedupeAgainstStaticDropped } =
-        dedupeRepositoryFindingsAgainstExisting(dedupedLlmFindings, dedupedStaticExisting);
-      if (dedupeAgainstStaticDropped > 0) {
-        log(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
-      }
-      const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
-        dropRepositorySummaryDuplicates(dedupedAgainstStatic);
-      if (summaryDropped > 0) {
-        log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
-      }
-      llmFindings = dedupedSummaryFindings;
-    }
-
-    if (
-      fileSamples.length > 0 &&
-      repositoryDescriptor &&
-      (llmFindings.length || existingFindings.length)
-    ) {
-      log("LLM scan (composite pass)...");
-      compositeFindings = await scanRepositoryComposites({
-        config,
-        repository: repositoryDescriptor,
-        files: fileSamples,
-        existingFindings,
-        priorFindings: llmFindings
-      });
-    }
-
-    if (compositeFindings.length > 0) {
-      compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
-      compositeFindings = compositeFindings.map((finding) =>
-        enrichRepositoryFinding(finding, {
-          repoFullName,
-          repositoryId,
-          repoPath,
-          commitSha
-        })
-      );
-      compositeFindings = compositeFindings.map(normalizeRepositoryFinding);
-    }
-
-    if (jellyIndex && compositeFindings.length > 0) {
-      const appliedComposite = attachJellyAnchors(compositeFindings, jellyIndex);
-      if (appliedComposite.anchored > 0) {
-        log(
-          `Jelly anchors applied to composite findings (${appliedComposite.anchored}/${appliedComposite.total}).`
+  
+      if (llmFindings.length > 0) {
+        llmFindings = llmFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
+        llmFindings = llmFindings.map((finding) =>
+          enrichRepositoryFinding(finding, {
+            repoFullName,
+            repositoryId,
+            repoPath,
+            commitSha
+          })
         );
       }
-    }
-    if (compositeFindings.length > 0) {
-      compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
-    }
-
-    let combinedFindings =
-      llmFindings.length || compositeFindings.length
-        ? reduceRepositoryFindings([...llmFindings, ...compositeFindings])
-        : [];
-    if (combinedFindings.length > 0) {
-      const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
-        dropRepositorySummaryDuplicates(combinedFindings);
-      if (summaryDropped > 0) {
-        log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+  
+      if (jellyIndex && llmFindings.length > 0) {
+        const appliedLlm = attachJellyAnchors(llmFindings, jellyIndex);
+        if (appliedLlm.anchored > 0) {
+          log(`Jelly anchors applied to LLM findings (${appliedLlm.anchored}/${appliedLlm.total}).`);
+        }
       }
-      combinedFindings = dedupedSummaryFindings;
-      const { findings: dedupedCombined, dropped: dedupeCombinedDropped } = dedupeFindings(
-        combinedFindings,
-        llmSource
+  
+      if (llmFindings.length > 0) {
+        const normalizedLlmFindings = llmFindings.map(normalizeRepositoryFinding);
+        const { kept: filteredLlmFindings, dropped: filteredLlmDropped } = filterFindings(
+          normalizedLlmFindings
+        );
+        if (filteredLlmDropped > 0) {
+          log(`Filtered ${filteredLlmDropped} LLM findings.`);
+        }
+        reportLlmFindings = filteredLlmFindings;
+  
+        const { findings: dedupedLlmFindings, dropped: dedupeLlmDropped } = dedupeFindings(
+          filteredLlmFindings,
+          llmSource,
+          debugContext("llm_dedupe")
+        );
+        if (dedupeLlmDropped > 0) {
+          log(`Deduped ${dedupeLlmDropped} LLM findings.`);
+        }
+  
+        const { findings: dedupedAgainstStatic, dropped: dedupeAgainstStaticDropped } =
+          dedupeRepositoryFindingsAgainstExisting(
+            dedupedLlmFindings,
+            dedupedStaticExisting,
+            debugContext("llm_vs_static")
+          );
+        if (dedupeAgainstStaticDropped > 0) {
+          log(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
+        }
+        const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
+          dropRepositorySummaryDuplicates(dedupedAgainstStatic, debugContext("llm_summary"));
+        if (summaryDropped > 0) {
+          log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+        }
+        llmFindings = dedupedSummaryFindings;
+      }
+  
+      if (
+        fileSamples.length > 0 &&
+        repositoryDescriptor &&
+        (llmFindings.length || existingFindings.length)
+      ) {
+        log("LLM scan (composite pass)...");
+        compositeFindings = await scanRepositoryComposites({
+          config,
+          repository: repositoryDescriptor,
+          files: fileSamples,
+          existingFindings,
+          priorFindings: llmFindings
+        });
+      }
+  
+      if (compositeFindings.length > 0) {
+        compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
+        compositeFindings = compositeFindings.map((finding) =>
+          enrichRepositoryFinding(finding, {
+            repoFullName,
+            repositoryId,
+            repoPath,
+            commitSha
+          })
+        );
+        compositeFindings = compositeFindings.map(normalizeRepositoryFinding);
+      }
+  
+      if (jellyIndex && compositeFindings.length > 0) {
+        const appliedComposite = attachJellyAnchors(compositeFindings, jellyIndex);
+        if (appliedComposite.anchored > 0) {
+          log(
+            `Jelly anchors applied to composite findings (${appliedComposite.anchored}/${appliedComposite.total}).`
+          );
+        }
+      }
+      if (compositeFindings.length > 0) {
+        compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
+      }
+  
+      let combinedFindings =
+        llmFindings.length || compositeFindings.length
+          ? reduceRepositoryFindings(
+              [...llmFindings, ...compositeFindings],
+              debugContext("llm_composite_reduce")
+            )
+          : [];
+      if (combinedFindings.length > 0) {
+        const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
+          dropRepositorySummaryDuplicates(combinedFindings, debugContext("combined_summary"));
+        if (summaryDropped > 0) {
+          log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+        }
+        combinedFindings = dedupedSummaryFindings;
+        const { findings: dedupedCombined, dropped: dedupeCombinedDropped } = dedupeFindings(
+          combinedFindings,
+          llmSource,
+          debugContext("combined_dedupe")
+        );
+        if (dedupeCombinedDropped > 0) {
+          log(`Deduped ${dedupeCombinedDropped} combined LLM findings.`);
+        }
+        combinedFindings = dedupedCombined;
+      }
+      const fallbackPath = "(repository)";
+      const llmOutput = combinedFindings.map((finding) =>
+        toRepositoryFinding(finding, fallbackPath, repoPath)
       );
-      if (dedupeCombinedDropped > 0) {
-        log(`Deduped ${dedupeCombinedDropped} combined LLM findings.`);
+      const coreStaticFindings = toCoreStaticFindings({
+        findings: staticFindings,
+        repoFullName,
+        repositoryId,
+        repoPath,
+        commitSha,
+        chunks: scopedChunks
+      });
+      if (jellyIndex) {
+        attachJellyAnchors(coreStaticFindings, jellyIndex);
       }
-      combinedFindings = dedupedCombined;
-    }
-    const fallbackPath = "(repository)";
-    const llmOutput = combinedFindings.map((finding) =>
-      toRepositoryFinding(finding, fallbackPath, repoPath)
-    );
-    const coreStaticFindings = toCoreStaticFindings({
-      findings: staticFindings,
-      repoFullName,
-      repositoryId,
-      repoPath,
-      commitSha,
-      chunks: scopedChunks
-    });
-    if (jellyIndex) {
-      attachJellyAnchors(coreStaticFindings, jellyIndex);
-    }
-    const coreFindings = [
-      ...coreStaticFindings,
-      ...toCoreRepositoryFindings({
-        findings: llmFindings,
-        type: "repository",
-        source: llmSource,
-        repoFullName,
-        repositoryId,
-        repoPath,
-        commitSha,
-        chunks: scopedChunks
-      })
-    ];
-    const coreCompositeFindings = toCoreRepositoryFindings({
-      findings: compositeFindings,
-      type: "repository_composite",
-      source: llmCompositeSource,
-      repoFullName,
-      repositoryId,
-      repoPath,
-      commitSha,
-      chunks: scopedChunks
-    });
-
-    const reportRawFindings = [
-      ...toCoreStaticFindings({
-        findings: reportStaticFindings,
-        repoFullName,
-        repositoryId,
-        repoPath,
-        commitSha,
-        chunks: scopedChunks
-      }),
-      ...toCoreRepositoryFindings({
-        findings: reportLlmFindings,
-        type: "repository",
-        source: llmSource,
-        repoFullName,
-        repositoryId,
-        repoPath,
-        commitSha,
-        chunks: scopedChunks
-      }),
-      ...toCoreRepositoryFindings({
+      const coreFindings = [
+        ...coreStaticFindings,
+        ...toCoreRepositoryFindings({
+          findings: llmFindings,
+          type: "repository",
+          source: llmSource,
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha,
+          chunks: scopedChunks
+        })
+      ];
+      const coreCompositeFindings = toCoreRepositoryFindings({
         findings: compositeFindings,
         type: "repository_composite",
         source: llmCompositeSource,
@@ -1312,43 +1366,78 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         repoPath,
         commitSha,
         chunks: scopedChunks
-      })
-    ];
-    const finalFindingCount = staticFindings.length + combinedFindings.length;
-    const dedupeReport = buildDedupeReport(reportRawFindings, finalFindingCount);
-    log(
-      `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
-    );
-    if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
-      log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
+      });
+  
+      const reportRawFindings = [
+        ...toCoreStaticFindings({
+          findings: reportStaticFindings,
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha,
+          chunks: scopedChunks
+        }),
+        ...toCoreRepositoryFindings({
+          findings: reportLlmFindings,
+          type: "repository",
+          source: llmSource,
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha,
+          chunks: scopedChunks
+        }),
+        ...toCoreRepositoryFindings({
+          findings: compositeFindings,
+          type: "repository_composite",
+          source: llmCompositeSource,
+          repoFullName,
+          repositoryId,
+          repoPath,
+          commitSha,
+          chunks: scopedChunks
+        })
+      ];
+      const finalFindingCount = staticFindings.length + combinedFindings.length;
+      const dedupeReport = buildDedupeReport(reportRawFindings, finalFindingCount);
+      log(
+        `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
+      );
+      if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
+        log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
+      }
+      if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
+        log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
+      }
+      if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
+        log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
+      }
+      try {
+        await writeDedupeReport(config.stateDir, dedupeReport, log);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`Failed to persist dedupe report: ${message}`);
+      }
+  
+      return {
+        findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],
+        scannedFiles: files.length,
+        scannedChunks,
+        durationMs: Date.now() - start,
+        staticFindings,
+        repositoryFindings: llmFindings,
+        compositeFindings,
+        existingFindings,
+        coreFindings,
+        coreCompositeFindings
+      };
+    } finally {
+      db.close();
     }
-    if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
-      log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
-    }
-    if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
-      log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
-    }
-    try {
-      await writeDedupeReport(config.stateDir, dedupeReport, log);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`Failed to persist dedupe report: ${message}`);
-    }
-
-    return {
-      findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],
-      scannedFiles: files.length,
-      scannedChunks,
-      durationMs: Date.now() - start,
-      staticFindings,
-      repositoryFindings: llmFindings,
-      compositeFindings,
-      existingFindings,
-      coreFindings,
-      coreCompositeFindings
-    };
   } finally {
-    db.close();
+    if (debugWriter) {
+      await debugWriter.close();
+    }
   }
 }
 
