@@ -58,6 +58,7 @@ export interface CompositeScanInput {
   files: RepositoryFileSample[];
   existingFindings: ExistingScanFinding[];
   priorFindings: RepositoryScanFinding[];
+  debug?: DedupeDebug;
 }
 
 type FileInsight = {
@@ -336,7 +337,19 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         response
       );
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`${message} (saved raw response to ${savedPath})`);
+      logDebug(input.debug, {
+        event: "llm_parse_error",
+        ruleId: rule.id,
+        file: {
+          path: file.path,
+          chunkIndex: file.chunkIndex,
+          startLine: file.startLine,
+          endLine: file.endLine,
+        },
+        message,
+        savedPath,
+      });
+      return [];
     }
   });
 
@@ -414,7 +427,12 @@ export async function scanRepositoryComposites(
       response
     );
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`${message} (saved raw response to ${savedPath})`);
+    logDebug(input.debug, {
+      event: "llm_composite_parse_error",
+      message,
+      savedPath,
+    });
+    return [];
   }
 }
 

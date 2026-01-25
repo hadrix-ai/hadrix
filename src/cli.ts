@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -315,6 +315,9 @@ program
       : options.debug
         ? path.join(outDir, "logs")
         : null;
+    if (options.debug && !options.debugLog && debugLogPath) {
+      await mkdir(debugLogPath, { recursive: true });
+    }
 
     try {
       if (spinner) {

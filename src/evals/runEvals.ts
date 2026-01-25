@@ -70,6 +70,8 @@ export interface RunEvalsOptions {
   output?: "text" | "json";
   outDir?: string | null;
   skipStatic?: boolean;
+  debug?: boolean;
+  debugLogPath?: string | null;
   logger?: (message: string) => void;
 }
 
@@ -438,6 +440,8 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
         skipStatic: options.skipStatic,
         repoFullName: spec.repoFullName,
         logger,
+        debug: options.debug,
+        debugLogPath: options.debugLogPath ?? null,
       });
 
       const evalFindings = toEvalFindings(scanResult);

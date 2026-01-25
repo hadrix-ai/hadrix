@@ -1,5 +1,5 @@
 import { createWriteStream, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { HadrixConfig } from "../config/loadConfig.js";
@@ -77,11 +77,24 @@ async function createDebugLogWriter(params: {
 }): Promise<DebugLogWriter | null> {
   if (!params.enabled) return null;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filePath = params.requestedPath
-    ? path.isAbsolute(params.requestedPath)
+  let filePath: string;
+  if (params.requestedPath) {
+    const resolvedPath = path.isAbsolute(params.requestedPath)
       ? params.requestedPath
-      : path.resolve(process.cwd(), params.requestedPath)
-    : path.join(params.stateDir, "logs", `scan-debug-${timestamp}.jsonl`);
+      : path.resolve(process.cwd(), params.requestedPath);
+    const endsWithSeparator =
+      resolvedPath.endsWith(path.sep) || resolvedPath.endsWith("/") || resolvedPath.endsWith("\\");
+    if (endsWithSeparator) {
+      filePath = path.join(resolvedPath, `scan-debug-${timestamp}.jsonl`);
+    } else {
+      const stats = await stat(resolvedPath).catch(() => null);
+      filePath = stats?.isDirectory()
+        ? path.join(resolvedPath, `scan-debug-${timestamp}.jsonl`)
+        : resolvedPath;
+    }
+  } else {
+    filePath = path.join(params.stateDir, "logs", `scan-debug-${timestamp}.jsonl`);
+  }
 
   try {
     await mkdir(path.dirname(filePath), { recursive: true });
@@ -1276,7 +1289,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           repository: repositoryDescriptor,
           files: fileSamples,
           existingFindings,
-          priorFindings: llmFindings
+          priorFindings: llmFindings,
+          debug: debugContext("llm_composite_pass")
         });
       }
   
