@@ -25,6 +25,20 @@ interface GeminiResponse {
   error?: { message?: string };
 }
 
+async function safeFetch(
+  url: string,
+  options: RequestInit,
+  provider: Provider,
+  label: string
+): Promise<Response> {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`${label} request failed (${provider}) to ${url}: ${message}`);
+  }
+}
+
 function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -63,21 +77,26 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
 
   if (provider === "gemini") {
     const { system, rest } = splitSystemMessages(messages);
-    const response = await fetch(config.llm.endpoint, {
-      method: "POST",
-      headers: buildHeaders(config, provider, apiKey),
-      body: JSON.stringify({
-        system_instruction: system ? { parts: [{ text: system }] } : undefined,
-        contents: rest.map((message) => ({
-          role: message.role === "assistant" ? "model" : "user",
-          parts: [{ text: message.content }]
-        })),
-        generationConfig: {
-          temperature: config.llm.temperature,
-          maxOutputTokens: config.llm.maxTokens
-        }
-      })
-    });
+    const response = await safeFetch(
+      config.llm.endpoint,
+      {
+        method: "POST",
+        headers: buildHeaders(config, provider, apiKey),
+        body: JSON.stringify({
+          system_instruction: system ? { parts: [{ text: system }] } : undefined,
+          contents: rest.map((message) => ({
+            role: message.role === "assistant" ? "model" : "user",
+            parts: [{ text: message.content }]
+          })),
+          generationConfig: {
+            temperature: config.llm.temperature,
+            maxOutputTokens: config.llm.maxTokens
+          }
+        })
+      },
+      provider,
+      "LLM"
+    );
 
     const payload = (await response.json()) as GeminiResponse;
 
@@ -98,16 +117,21 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     return text;
   }
 
-  const response = await fetch(config.llm.endpoint, {
-    method: "POST",
-    headers: buildHeaders(config, provider, apiKey),
-    body: JSON.stringify({
-      model: config.llm.model,
-      messages,
-      temperature: config.llm.temperature,
-      max_tokens: config.llm.maxTokens
-    })
-  });
+  const response = await safeFetch(
+    config.llm.endpoint,
+    {
+      method: "POST",
+      headers: buildHeaders(config, provider, apiKey),
+      body: JSON.stringify({
+        model: config.llm.model,
+        messages,
+        temperature: config.llm.temperature,
+        max_tokens: config.llm.maxTokens
+      })
+    },
+    provider,
+    "LLM"
+  );
 
   const payload = (await response.json()) as ChatCompletionResponse;
 

@@ -257,6 +257,8 @@ program
   .option("--out-dir <path>", "Directory for eval artifacts (default .hadrix-evals)")
   .option("--json", "Output JSON instead of text")
   .option("--skip-static", "Skip static scanners")
+  .option("--debug", "Enable debug logging to a file")
+  .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (fixturesDir: string | undefined, options: {
     fixtures?: string;
     spec?: string;
@@ -271,6 +273,8 @@ program
     outDir?: string;
     json?: boolean;
     skipStatic?: boolean;
+    debug?: boolean;
+    debugLog?: string;
   }) => {
     const output = options.json ? "json" : "text";
     const useSpinner = output !== "json" && process.stderr.isTTY;
@@ -306,6 +310,11 @@ program
 
     const fixtures = fixturesDir ?? options.fixtures;
     const outDir = options.outDir ? path.resolve(process.cwd(), options.outDir) : path.resolve(process.cwd(), ".hadrix-evals");
+    const debugLogPath = options.debugLog
+      ? path.resolve(process.cwd(), options.debugLog)
+      : options.debug
+        ? path.join(outDir, "logs")
+        : null;
 
     try {
       if (spinner) {
@@ -325,6 +334,8 @@ program
         summaryMatchThreshold: parseNumber(options.threshold),
         shortCircuitThreshold: parseNumber(options.shortCircuit),
         comparisonConcurrency: parseNumber(options.concurrency),
+        debug: options.debug,
+        debugLogPath,
         output,
         skipStatic: options.skipStatic,
         logger,
