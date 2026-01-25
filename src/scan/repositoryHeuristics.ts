@@ -356,6 +356,9 @@ const SENSITIVE_ACTION_PATTERNS = [
   /\brevoke\b/i
 ];
 
+const DESTRUCTIVE_IDENTIFIER_PATTERN =
+  /\b(?:delete|remove|destroy|revoke|disable|suspend)(?:[A-Z][a-z0-9]+|[_-][a-z0-9]+)/i;
+
 const DESTRUCTIVE_PATTERNS = [
   /\bdelete\b/i,
   /\bremove\b/i,
@@ -363,7 +366,8 @@ const DESTRUCTIVE_PATTERNS = [
   /\brevoke\b/i,
   /\bdisable\b/i,
   /\bsuspend\b/i,
-  /\.delete\(/i
+  /\.delete\(/i,
+  DESTRUCTIVE_IDENTIFIER_PATTERN
 ];
 
 const AUTH_ACTION_HINT_PATTERNS = [
@@ -383,7 +387,17 @@ const DESTRUCTIVE_ACTION_HINT_PATTERNS = [
   /\bdestroy\b/i,
   /\brevoke\b/i,
   /\bdisable\b/i,
-  /\bsuspend\b/i
+  /\bsuspend\b/i,
+  DESTRUCTIVE_IDENTIFIER_PATTERN
+];
+
+const DESTRUCTIVE_PATH_HINT_PATTERNS = [
+  /delete/i,
+  /remove/i,
+  /destroy/i,
+  /revoke/i,
+  /disable/i,
+  /suspend/i
 ];
 
 const AUDIT_PATTERNS = [
@@ -641,7 +655,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
 const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   sql_injection: {
     allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, sinkTypes: ["sql.query", "db.query"] }
+    requiresEvidence: { endpointContext: true }
   },
   unsafe_query_builder: {
     allowedScopes: ["backend_endpoint"],
@@ -1751,6 +1765,7 @@ type PathHints = {
   isBackend: boolean;
   isBackendEndpointHint: boolean;
   isBackendShared: boolean;
+  isDestructivePathHint: boolean;
 };
 
 type SecurityHeaderHints = {
@@ -1791,6 +1806,7 @@ function buildPathHints(path: string): PathHints {
   const isBackendShared = BACKEND_SHARED_PATH_HINTS.some((hint) => lowerPath.includes(hint));
   const isBackendEndpointHint =
     !isBackendShared && BACKEND_ENDPOINT_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  const isDestructivePathHint = DESTRUCTIVE_PATH_HINT_PATTERNS.some((pattern) => pattern.test(lowerPath));
 
   return {
     lowerPath,
@@ -1803,7 +1819,8 @@ function buildPathHints(path: string): PathHints {
     isFrontendUtil,
     isBackend,
     isBackendEndpointHint,
-    isBackendShared
+    isBackendShared,
+    isDestructivePathHint
   };
 }
 
@@ -1843,7 +1860,7 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
   const { body, header } = extractSecurityHeaderHints(content);
   const entryPointHints = collectEntryPointHints(body, header);
   const sinks = collectSinkHints(body, header);
-  const sensitiveActionHints = collectSensitiveActionHints(body);
+  const sensitiveActionHints = collectSensitiveActionHints(body, pathHints);
   const headerIsEndpoint = header.hasHeader ? isEndpointEntryType(header.entryPointType) : false;
   const contentIsEndpoint = header.hasHeader ? false : matchesAny(body, ROUTER_HANDLER_PATTERNS);
   const pathIsEndpoint = header.hasHeader ? false : pathHints.isBackendEndpointHint;
@@ -2018,11 +2035,10 @@ function collectEntryPointHints(content: string, header: SecurityHeaderHints): s
 }
 
 function collectSinkHints(content: string, header: SecurityHeaderHints): string[] {
-  if (header.hasHeader) {
-    return uniqueList(header.sinks);
-  }
-
   const hints: string[] = [];
+  if (header.hasHeader) {
+    hints.push(...header.sinks);
+  }
   if (matchesAny(content, DB_WRITE_PATTERNS)) {
     hints.push("db.write");
   }
@@ -2044,12 +2060,16 @@ function collectSinkHints(content: string, header: SecurityHeaderHints): string[
   return uniqueList(hints);
 }
 
-function collectSensitiveActionHints(content: string): string[] {
+function collectSensitiveActionHints(content: string, pathHints?: PathHints): string[] {
   const hints: string[] = [];
   if (AUTH_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
     hints.push("auth");
   }
-  if (DESTRUCTIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
+  const destructiveByContent = DESTRUCTIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content));
+  const destructiveByPath = pathHints
+    ? DESTRUCTIVE_PATH_HINT_PATTERNS.some((pattern) => pattern.test(pathHints.lowerPath))
+    : false;
+  if (destructiveByContent || destructiveByPath) {
     hints.push("destructive");
   }
   return hints;

@@ -224,7 +224,7 @@ const SUMMARY_STOP_WORDS = new Set([
   "those",
   "should"
 ]);
-const SUMMARY_SIMILARITY_THRESHOLD = 0.8;
+const SUMMARY_SIMILARITY_THRESHOLD = 0.85;
 const REPOSITORY_SUMMARY_PATH = "(repository)";
 const DEDUPE_KIND_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
@@ -643,7 +643,17 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
     return Boolean(typeA && typeB && typeA === typeB);
   }
   if (locationsExactMatch(a, b)) {
-    return true;
+    const typeA = extractFindingIdentityType(a);
+    const typeB = extractFindingIdentityType(b);
+    if (typeA && typeB && typeA === typeB) {
+      return true;
+    }
+    const categoryA = extractDedupCategory(a);
+    const categoryB = extractDedupCategory(b);
+    if (categoryA && categoryB && categoryA === categoryB) {
+      return true;
+    }
+    return false;
   }
   if (!locationsOverlapMatch(a, b)) {
     return false;

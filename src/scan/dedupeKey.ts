@@ -115,6 +115,16 @@ export function extractOverlapGroupId(finding: FindingIdentityInput): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
+function extractPackageIdentity(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const packageName = typeof details.packageName === "string" ? details.packageName.trim() : "";
+  const packageVersion = typeof details.packageVersion === "string" ? details.packageVersion.trim() : "";
+  const ecosystem = typeof details.ecosystem === "string" ? details.ecosystem.trim() : "";
+  const parts = [ecosystem, packageName, packageVersion].filter(Boolean);
+  if (parts.length === 0) return "";
+  return `pkg:${parts.join("@")}`;
+}
+
 function parseLineNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -226,5 +236,9 @@ export function buildFindingIdentityKey(
     normalizeKeyPart(anchorKey),
     normalizeKeyPart(typeKey)
   ];
+  const packageKey = extractPackageIdentity(finding);
+  if (packageKey) {
+    parts.push(normalizeKeyPart(packageKey));
+  }
   return parts.join("|");
 }

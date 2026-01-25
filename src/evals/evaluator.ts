@@ -74,9 +74,83 @@ const jaccard = (a: Set<string>, b: Set<string>): number => {
   return union === 0 ? 0 : intersection / union;
 };
 
+const collectRuleIds = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim());
+  }
+  return [];
+};
+
+const uniqueList = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+};
+
+const normalizeRuleId = (value: string): string => value.trim().toLowerCase();
+
+const extractActualRuleIds = (finding: EvalFinding): string[] => {
+  const details = (finding.details ?? {}) as Record<string, unknown>;
+  return uniqueList([
+    ...collectRuleIds(details.ruleId),
+    ...collectRuleIds(details.rule_id),
+    ...collectRuleIds(details.ruleID),
+    ...collectRuleIds(details.mergedRuleIds),
+    ...collectRuleIds(details.merged_rule_ids),
+  ]);
+};
+
+const buildExpectedComparisonText = (expected: ExpectedFinding): string => {
+  const parts = [expected.expectation];
+  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
+    parts.push(expected.ruleId.trim());
+  }
+  return parts.filter(Boolean).join(" ");
+};
+
+const buildActualComparisonText = (actual: EvalFinding): string => {
+  const parts = [actual.summary ?? ""];
+  for (const ruleId of extractActualRuleIds(actual)) {
+    parts.push(ruleId);
+  }
+  return parts.filter(Boolean).join(" ");
+};
+
+const ruleIdMatches = (expected: ExpectedFinding, actual: EvalFinding): boolean => {
+  const expectedRuleId =
+    typeof expected.ruleId === "string" ? normalizeRuleId(expected.ruleId) : "";
+  if (!expectedRuleId) return false;
+  const actualRuleIds = extractActualRuleIds(actual).map((ruleId) => normalizeRuleId(ruleId));
+  return actualRuleIds.includes(expectedRuleId);
+};
+
 const defaultComparator = (threshold: number): SummaryComparator => {
   return ({ expected, actual }): SummaryComparison => {
-    const score = jaccard(tokenSet(expected.expectation), tokenSet(actual.summary));
+    if (ruleIdMatches(expected, actual)) {
+      return {
+        match: true,
+        score: 1,
+        rationale: "rule_id_match",
+      };
+    }
+    const score = jaccard(
+      tokenSet(buildExpectedComparisonText(expected)),
+      tokenSet(buildActualComparisonText(actual))
+    );
     return {
       match: score >= threshold,
       score,
@@ -159,7 +233,7 @@ export async function evaluateFindingsGroup(args: {
   shortCircuitThreshold?: number;
   actualFilter?: (finding: EvalFinding) => boolean;
 }): Promise<EvalGroupResult> {
-  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.45);
+  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.4);
   const comparisonConcurrency = normalizeComparisonConcurrency(args.comparisonConcurrency);
   const shortCircuitThreshold = normalizeShortCircuitThreshold(args.shortCircuitThreshold);
 
@@ -181,12 +255,16 @@ export async function evaluateFindingsGroup(args: {
 
     let best: { finding: EvalFinding; comparison: SummaryComparison } | null = null;
     if (candidates.length > 0) {
-      const expectedTokens = tokenSet(exp.expectation ?? "");
-      let bestShort: { candidate: EvalFinding; score: number } | null = null;
+      const expectedTokens = tokenSet(buildExpectedComparisonText(exp));
+      let bestShort: { candidate: EvalFinding; score: number; rationale: string } | null = null;
       for (const candidate of candidates) {
-        const score = jaccard(expectedTokens, tokenSet(candidate.summary ?? ""));
+        if (ruleIdMatches(exp, candidate)) {
+          bestShort = { candidate, score: 1, rationale: "rule_id_short_circuit" };
+          break;
+        }
+        const score = jaccard(expectedTokens, tokenSet(buildActualComparisonText(candidate)));
         if (!bestShort || score > bestShort.score) {
-          bestShort = { candidate, score };
+          bestShort = { candidate, score, rationale: "token_jaccard_short_circuit" };
         }
       }
       if (bestShort && bestShort.score >= shortCircuitThreshold) {
@@ -195,7 +273,7 @@ export async function evaluateFindingsGroup(args: {
           comparison: {
             match: true,
             score: bestShort.score,
-            rationale: "token_jaccard_short_circuit",
+            rationale: bestShort.rationale,
           },
         };
       } else {

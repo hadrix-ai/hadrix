@@ -99,6 +99,14 @@ type ScopeGateDecision = {
   reasons: RuleGateMismatch[];
 };
 
+type RuleGateDebugCheck = {
+  kind: "control" | "candidate";
+  id: string;
+  allowed: boolean;
+  scope: FileScope;
+  mismatches: RuleGateMismatch[];
+};
+
 const DEFAULT_MAP_CONCURRENCY = 4;
 const DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO = 80;
 const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
@@ -217,6 +225,47 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     const fileContext = resolveFileContext(file, fileInsight);
     for (const rule of REPOSITORY_SCAN_RULES) {
       if (!ruleAppliesToFile(rule, fileContext)) {
+        if (input.debug) {
+          const gateChecks = collectRuleGateDebugChecks(
+            rule,
+            fileContext.scope,
+            fileContext.scopeEvidence
+          );
+          const blockedChecks = gateChecks.filter((check) => !check.allowed);
+          const mismatchSet = new Set<RuleGateMismatch>();
+          for (const check of blockedChecks) {
+            for (const mismatch of check.mismatches) {
+              mismatchSet.add(mismatch);
+            }
+          }
+          const mismatches = Array.from(mismatchSet);
+          const hasNonScopeMismatch = mismatches.some((mismatch) => mismatch !== "scope");
+          if (blockedChecks.length > 0 && hasNonScopeMismatch) {
+            logDebug(input.debug, {
+              event: "rule_pass_gate_mismatch",
+              rule: {
+                id: rule.id,
+                title: rule.title,
+                category: rule.category,
+                requiredControls: rule.requiredControls ?? [],
+                candidateTypes: rule.candidateTypes ?? []
+              },
+              file: {
+                path: file.path,
+                chunkIndex: file.chunkIndex,
+                startLine: file.startLine,
+                endLine: file.endLine,
+                overlapGroupId: file.overlapGroupId ?? null,
+                truncated: file.truncated ?? false
+              },
+              scope: fileContext.scope ?? null,
+              scopeEvidence: fileContext.scopeEvidence ?? null,
+              mismatches,
+              checks: blockedChecks,
+              roles: fileContext.roles
+            });
+          }
+        }
         continue;
       }
       const systemPrompt = rulePrompts.get(rule.id);
@@ -504,6 +553,27 @@ function ruleAppliesToFile(rule: RuleScanDefinition, fileContext: ResolvedFileCo
     candidateTypes.length > 0 &&
     fileContext.candidateFindings.some((candidate) => candidateTypes.includes(candidate.type));
   return matchesRequired || matchesCandidate;
+}
+
+function collectRuleGateDebugChecks(
+  rule: RuleScanDefinition,
+  scope: FileScope | undefined,
+  evidence: FileScopeEvidence | undefined
+): RuleGateDebugCheck[] {
+  const checks: RuleGateDebugCheck[] = [];
+  for (const control of rule.requiredControls ?? []) {
+    const check = evaluateControlGate(control, scope, evidence);
+    if (check) {
+      checks.push({ kind: "control", id: control, ...check });
+    }
+  }
+  for (const candidateType of rule.candidateTypes ?? []) {
+    const check = evaluateCandidateGate(candidateType, scope, evidence);
+    if (check) {
+      checks.push({ kind: "candidate", id: candidateType, ...check });
+    }
+  }
+  return checks;
 }
 
 function filterControlsForRule(

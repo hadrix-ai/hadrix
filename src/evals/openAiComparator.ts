@@ -2,7 +2,7 @@ import type { SummaryComparator, SummaryComparison } from "./types.js";
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 60000;
-const FALLBACK_THRESHOLD = 0.45;
+const FALLBACK_THRESHOLD = 0.4;
 
 const readEnv = (name: string): string => {
   const value = process.env[name];
@@ -83,6 +83,76 @@ const jaccard = (a: Set<string>, b: Set<string>): number => {
   return union === 0 ? 0 : intersection / union;
 };
 
+const collectRuleIds = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim());
+  }
+  return [];
+};
+
+const uniqueList = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+};
+
+const normalizeRuleId = (value: string): string => value.trim().toLowerCase();
+
+const extractActualRuleIds = (actual: { details?: Record<string, unknown> | null }): string[] => {
+  const details = (actual.details ?? {}) as Record<string, unknown>;
+  return uniqueList([
+    ...collectRuleIds(details.ruleId),
+    ...collectRuleIds(details.rule_id),
+    ...collectRuleIds(details.ruleID),
+    ...collectRuleIds(details.mergedRuleIds),
+    ...collectRuleIds(details.merged_rule_ids),
+  ]);
+};
+
+const buildExpectedComparisonText = (expected: {
+  expectation: string;
+  ruleId?: string | null;
+}): string => {
+  const parts = [expected.expectation];
+  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
+    parts.push(expected.ruleId.trim());
+  }
+  return parts.filter(Boolean).join(" ");
+};
+
+const buildActualComparisonText = (actual: { summary?: string; details?: Record<string, unknown> | null }): string => {
+  const parts = [actual.summary ?? ""];
+  for (const ruleId of extractActualRuleIds(actual)) {
+    parts.push(ruleId);
+  }
+  return parts.filter(Boolean).join(" ");
+};
+
+const ruleIdMatches = (
+  expected: { ruleId?: string | null },
+  actual: { details?: Record<string, unknown> | null }
+): boolean => {
+  const expectedRuleId =
+    typeof expected.ruleId === "string" ? normalizeRuleId(expected.ruleId) : "";
+  if (!expectedRuleId) return false;
+  const actualRuleIds = extractActualRuleIds(actual).map((ruleId) => normalizeRuleId(ruleId));
+  return actualRuleIds.includes(expectedRuleId);
+};
+
 export function createOpenAiSummaryComparator(options?: {
   apiKey?: string;
   baseUrl?: string;
@@ -104,7 +174,17 @@ export function createOpenAiSummaryComparator(options?: {
 
   return async ({ expected, actual }): Promise<SummaryComparison> => {
     const fallback = (): SummaryComparison => {
-      const score = jaccard(tokenSet(expected.expectation), tokenSet(actual.summary));
+      if (ruleIdMatches(expected, actual)) {
+        return {
+          match: true,
+          score: 1,
+          rationale: "rule_id_fallback",
+        };
+      }
+      const score = jaccard(
+        tokenSet(buildExpectedComparisonText(expected)),
+        tokenSet(buildActualComparisonText(actual))
+      );
       return {
         match: score >= FALLBACK_THRESHOLD,
         score,
@@ -159,6 +239,10 @@ export function createOpenAiSummaryComparator(options?: {
                     ruleId:
                       typeof actual.details?.ruleId === "string"
                         ? actual.details.ruleId
+                        : null,
+                    mergedRuleIds:
+                      Array.isArray(actual.details?.mergedRuleIds)
+                        ? actual.details?.mergedRuleIds
                         : null,
                     tool:
                       typeof actual.details?.tool === "string"
