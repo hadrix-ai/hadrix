@@ -175,6 +175,12 @@ function rangesOverlap(
 const NON_CODE_FILE_EXTENSIONS = new Set([".json", ".lock", ".md", ".yaml", ".yml"]);
 const FRONTEND_PATH_SEGMENTS = ["frontend", "components", "app", "pages"];
 const SERVER_PATH_SEGMENTS = ["api", "functions", "server", "backend"];
+const SERVER_ACTION_PATH_PATTERNS = [
+  /^app\/actions(?:\/|$|\.)/i,
+  /\/app\/actions(?:\/|$|\.)/i,
+  /^app\/.*\/actions(?:\/|$|\.)/i,
+  /\/app\/.*\/actions(?:\/|$|\.)/i
+];
 const FRONTEND_ONLY_EXTENSIONS = new Set([".tsx", ".jsx"]);
 const DESTRUCTIVE_PATH_PATTERNS = [
   /delete/i,
@@ -224,7 +230,7 @@ const SUMMARY_STOP_WORDS = new Set([
   "those",
   "should"
 ]);
-const SUMMARY_SIMILARITY_THRESHOLD = 0.85;
+const SUMMARY_SIMILARITY_THRESHOLD = 0.88;
 const REPOSITORY_SUMMARY_PATH = "(repository)";
 const DEDUPE_KIND_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
@@ -264,8 +270,22 @@ function hasPathSegment(filepath: string, segment: string): boolean {
   return new RegExp(`(^|/)${segment}(/|$)`).test(filepath);
 }
 
-function isFrontendOnlyPath(filepath: string): boolean {
+function hasServerActionEntryPoint(details: Record<string, unknown>): boolean {
+  const entryPoint = extractEntryPointIdentity({ summary: "", details });
+  if (!entryPoint) return false;
+  const normalized = entryPoint.toLowerCase();
+  return normalized.includes("server.action") || normalized.includes("server action") ||
+    normalized.includes("use server");
+}
+
+function isFrontendOnlyPath(filepath: string, details?: Record<string, unknown>): boolean {
   const lower = filepath.toLowerCase();
+  if (details && hasServerActionEntryPoint(details)) {
+    return false;
+  }
+  if (SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(lower))) {
+    return false;
+  }
   const hasFrontendSegment = FRONTEND_PATH_SEGMENTS.some((segment) => hasPathSegment(lower, segment));
   const hasFrontendExtension = FRONTEND_ONLY_EXTENSIONS.has(extensionOfPath(lower));
   const hasServerSegment = SERVER_PATH_SEGMENTS.some((segment) => hasPathSegment(lower, segment));
@@ -280,6 +300,22 @@ function normalizeFindingKind(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+function normalizeEntryPointIdentity(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/\s+/g, " ")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+function normalizeRuleIdAlias(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return normalizeIdentityTypeValue(trimmed);
+}
+
 function extractFindingRuleId(finding: FindingLike): string {
   const details = toRecord(finding.details);
   const ruleId =
@@ -291,10 +327,40 @@ function extractFindingRuleId(finding: FindingLike): string {
   return typeof ruleId === "string" ? ruleId.trim() : "";
 }
 
+function extractEntryPointIdentity(finding: FindingLike): string {
+  const details = toRecord(finding.details);
+  const candidates = [
+    details.entryPoint,
+    details.entry_point,
+    details.entryPointIdentifier,
+    details.entry_point_identifier,
+    details.entryPointId,
+    details.entry_point_id,
+    details.primarySymbol,
+    details.primary_symbol
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return trimmed;
+  }
+  return "";
+}
+
 function extractFindingKind(finding: FindingLike): string {
   const details = toRecord(finding.details);
   const raw = details.findingType ?? details.finding_type ?? details.type;
   return typeof raw === "string" ? raw.trim() : "";
+}
+
+function extractCandidateTypeForMerge(finding: FindingLike): string {
+  const details = toRecord(finding.details);
+  const raw = details.candidateType ?? details.candidate_type;
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return normalizeIdentityTypeValue(trimmed);
 }
 
 function extractFindingCategory(finding: FindingLike): string {
@@ -362,6 +428,7 @@ function buildDebugFinding(finding: FindingLike): Record<string, unknown> {
     details: finding.details ?? null
   });
   const dedupeKey = extractDedupeKey(finding) || buildDedupeKey(finding);
+  const candidateTypeRaw = details.candidateType ?? details.candidate_type ?? null;
 
   return {
     summary: finding.summary,
@@ -370,7 +437,9 @@ function buildDebugFinding(finding: FindingLike): Record<string, unknown> {
     type: identityType || null,
     category: extractFindingCategory(finding) || null,
     ruleId: extractFindingRuleId(finding) || null,
+    candidateType: typeof candidateTypeRaw === "string" ? candidateTypeRaw.trim() : null,
     dedupeKey: dedupeKey || null,
+    entryPoint: extractEntryPointIdentity(finding) || null,
     anchorNodeId: extractAnchorNodeId(finding) || null,
     overlapGroupId: extractOverlapGroupId(finding) || null,
     repoFullName: repoFullName || null,
@@ -477,16 +546,64 @@ function isLikelyDestructiveFinding(finding: FindingLike, filepath: string): boo
   return DESTRUCTIVE_TEXT_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function areFindingsSemanticallySimilar(a: FindingLike, b: FindingLike): boolean {
+type SemanticSimilarityOptions = {
+  requireOverlap?: boolean;
+  requireEntryPoint?: boolean;
+};
+
+function areFindingsSemanticallySimilar(
+  a: FindingLike,
+  b: FindingLike,
+  options?: SemanticSimilarityOptions
+): boolean {
+  const requireOverlap = options?.requireOverlap ?? false;
+  const requireEntryPoint = options?.requireEntryPoint ?? false;
+  if (requireOverlap && !locationsOverlapMatch(a, b)) {
+    return false;
+  }
+  const entryPointA = normalizeEntryPointIdentity(extractEntryPointIdentity(a));
+  const entryPointB = normalizeEntryPointIdentity(extractEntryPointIdentity(b));
+  if (requireEntryPoint) {
+    if (!entryPointA || !entryPointB) {
+      return false;
+    }
+    if (entryPointA !== entryPointB) {
+      return false;
+    }
+  } else if (entryPointA && entryPointB && entryPointA !== entryPointB) {
+    return false;
+  }
+  const candidateTypeA = extractCandidateTypeForMerge(a);
+  const candidateTypeB = extractCandidateTypeForMerge(b);
+  if (candidateTypeA && candidateTypeB && candidateTypeA !== candidateTypeB) {
+    return false;
+  }
+  const typeA = extractFindingIdentityType(a);
+  const typeB = extractFindingIdentityType(b);
+  if (typeA && typeB && typeA !== typeB) {
+    return false;
+  }
+  const ruleIdA = normalizeRuleIdAlias(extractFindingRuleId(a));
+  const ruleIdB = normalizeRuleIdAlias(extractFindingRuleId(b));
+  if (ruleIdA && ruleIdB && ruleIdA === ruleIdB) return true;
+  const identityMatch = Boolean(
+    (candidateTypeA && candidateTypeB && candidateTypeA === candidateTypeB) ||
+    (typeA && typeB && typeA === typeB) ||
+    (entryPointA && entryPointB && entryPointA === entryPointB)
+  );
   const categoryA = extractDedupCategory(a);
   const categoryB = extractDedupCategory(b);
-  if (categoryA && categoryB && categoryA === categoryB) return true;
-  const ruleIdA = normalizeFindingKind(extractFindingRuleId(a));
-  const ruleIdB = normalizeFindingKind(extractFindingRuleId(b));
-  if (ruleIdA && ruleIdB && ruleIdA === ruleIdB) return true;
+  if (categoryA && categoryB && categoryA === categoryB) {
+    return identityMatch;
+  }
   const kindA = normalizeFindingKind(extractFindingKind(a));
   const kindB = normalizeFindingKind(extractFindingKind(b));
-  if (kindA && kindB && kindA === kindB) return true;
+  if (kindA && kindB && kindA === kindB) {
+    return identityMatch;
+  }
+  if (!identityMatch) {
+    return false;
+  }
   return summarySimilarity(a, b) >= SUMMARY_SIMILARITY_THRESHOLD;
 }
 
@@ -515,6 +632,8 @@ function buildMergeDiagnostics(a: FindingLike, b: FindingLike): Record<string, u
     location: b.location ?? null,
     details: b.details ?? null
   });
+  const candidateTypeA = extractCandidateTypeForMerge(a);
+  const candidateTypeB = extractCandidateTypeForMerge(b);
   const ruleIdA = extractFindingRuleId(a);
   const ruleIdB = extractFindingRuleId(b);
   const kindA = extractFindingKind(a);
@@ -540,6 +659,8 @@ function buildMergeDiagnostics(a: FindingLike, b: FindingLike): Record<string, u
     repoB: repoB || null,
     typeA: typeA || null,
     typeB: typeB || null,
+    candidateTypeA: candidateTypeA || null,
+    candidateTypeB: candidateTypeB || null,
     ruleIdA: ruleIdA || null,
     ruleIdB: ruleIdB || null,
     kindA: kindA || null,
@@ -615,11 +736,36 @@ function locationsOverlapMatch(a: FindingLike, b: FindingLike): boolean {
 }
 
 function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
+  const ruleIdA = normalizeRuleIdAlias(extractFindingRuleId(a));
+  const ruleIdB = normalizeRuleIdAlias(extractFindingRuleId(b));
+  const candidateTypeA = extractCandidateTypeForMerge(a);
+  const candidateTypeB = extractCandidateTypeForMerge(b);
+  const entryPointA = normalizeEntryPointIdentity(extractEntryPointIdentity(a));
+  const entryPointB = normalizeEntryPointIdentity(extractEntryPointIdentity(b));
+  const categoryA = extractDedupCategory(a);
+  const categoryB = extractDedupCategory(b);
+  const strictRuntimeControl = categoryA === categoryB &&
+    (categoryA === "rate_limiting" || categoryA === "lockout");
+  const entryPointMatch = Boolean(entryPointA && entryPointB && entryPointA === entryPointB);
+  if (strictRuntimeControl && !entryPointMatch) {
+    return false;
+  }
   const dedupeKeyA = extractDedupeKey(a) || buildDedupeKey(a);
   const dedupeKeyB = extractDedupeKey(b) || buildDedupeKey(b);
   if (dedupeKeyA && dedupeKeyB && dedupeKeyA === dedupeKeyB) {
     return true;
   }
+  if (ruleIdA && ruleIdB && ruleIdA !== ruleIdB) {
+    return false;
+  }
+  if (candidateTypeA && candidateTypeB && candidateTypeA !== candidateTypeB) {
+    return false;
+  }
+  if (entryPointA && entryPointB && entryPointA !== entryPointB) {
+    return false;
+  }
+  const typeA = extractFindingIdentityType(a);
+  const typeB = extractFindingIdentityType(b);
   const anchorA = extractAnchorNodeId(a);
   const anchorB = extractAnchorNodeId(b);
   if (anchorA && anchorB && anchorA === anchorB) {
@@ -638,13 +784,16 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
     if (repoA && repoB && repoA !== repoB) {
       return false;
     }
-    const typeA = extractFindingIdentityType(a);
-    const typeB = extractFindingIdentityType(b);
     return Boolean(typeA && typeB && typeA === typeB);
   }
+  if (locationsOverlapMatch(a, b)) {
+    const ruleMatch = Boolean(ruleIdA && ruleIdB && ruleIdA === ruleIdB);
+    const typeMatch = Boolean(typeA && typeB && typeA === typeB);
+    if (!ruleMatch && !typeMatch) {
+      return false;
+    }
+  }
   if (locationsExactMatch(a, b)) {
-    const typeA = extractFindingIdentityType(a);
-    const typeB = extractFindingIdentityType(b);
     if (typeA && typeB && typeA === typeB) {
       return true;
     }
@@ -655,10 +804,36 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
     }
     return false;
   }
+  return areFindingsSemanticallySimilar(a, b, { requireOverlap: true, requireEntryPoint: true });
+}
+
+function mergeBlockReason(a: FindingLike, b: FindingLike): string | null {
+  const ruleIdA = normalizeRuleIdAlias(extractFindingRuleId(a));
+  const ruleIdB = normalizeRuleIdAlias(extractFindingRuleId(b));
+  if (ruleIdA && ruleIdB && ruleIdA !== ruleIdB) {
+    return "rule_id_mismatch";
+  }
+  const candidateTypeA = extractCandidateTypeForMerge(a);
+  const candidateTypeB = extractCandidateTypeForMerge(b);
+  if (candidateTypeA && candidateTypeB && candidateTypeA !== candidateTypeB) {
+    return "candidate_type_mismatch";
+  }
+  const entryPointA = normalizeEntryPointIdentity(extractEntryPointIdentity(a));
+  const entryPointB = normalizeEntryPointIdentity(extractEntryPointIdentity(b));
+  if (entryPointA && entryPointB && entryPointA !== entryPointB) {
+    return "entry_point_mismatch";
+  }
+  if ((entryPointA && !entryPointB) || (!entryPointA && entryPointB)) {
+    return "entry_point_missing";
+  }
+  return null;
+}
+
+function shouldLogMergeSkip(a: FindingLike, b: FindingLike): boolean {
   if (!locationsOverlapMatch(a, b)) {
     return false;
   }
-  return areFindingsSemanticallySimilar(a, b);
+  return summarySimilarity(a, b) >= SUMMARY_SIMILARITY_THRESHOLD;
 }
 
 function normalizeSeverity(value: string | null | undefined): string | null {
@@ -852,6 +1027,7 @@ function mergeFindings<T extends FindingLike>(
 }
 
 function shouldKeepFinding(finding: FindingLike): boolean {
+  const details = toRecord(finding.details);
   const location = toRecord(finding.location);
   const filepath = normalizeFilepath(
     (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown
@@ -877,14 +1053,18 @@ function shouldKeepFinding(finding: FindingLike): boolean {
       lowerFilepath &&
       isAuditLoggingFinding(finding) &&
       isLikelyDestructiveFinding(finding, lowerFilepath) &&
-      !isFrontendOnlyPath(lowerFilepath)
+      !isFrontendOnlyPath(lowerFilepath, details)
     ) {
       return true;
     }
     return false;
   }
 
-  if (lowerFilepath && isBackendOnlyControlFinding(finding) && isFrontendOnlyPath(lowerFilepath)) {
+  if (
+    lowerFilepath &&
+    isBackendOnlyControlFinding(finding) &&
+    isFrontendOnlyPath(lowerFilepath, details)
+  ) {
     return false;
   }
 
@@ -966,7 +1146,28 @@ export function dedupeFindings<T extends FindingLike>(
         finding: buildDebugFinding(finding)
       });
     }
-    const matchIndex = deduped.findIndex((existing) => shouldMergeFindings(existing, finding));
+    let matchIndex = -1;
+    let skipLogged = false;
+    for (let i = 0; i < deduped.length; i += 1) {
+      const existing = deduped[i];
+      if (shouldMergeFindings(existing, finding)) {
+        matchIndex = i;
+        break;
+      }
+      if (debug && !skipLogged && shouldLogMergeSkip(existing, finding)) {
+        const reason = mergeBlockReason(existing, finding);
+        if (reason) {
+          logDebug(debug, {
+            event: "skip_merge",
+            reason,
+            existing: buildDebugFinding(existing),
+            incoming: buildDebugFinding(finding),
+            match: buildMergeDiagnostics(existing, finding)
+          });
+          skipLogged = true;
+        }
+      }
+    }
     if (matchIndex === -1) {
       deduped.push(finding);
       continue;

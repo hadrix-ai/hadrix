@@ -1,6 +1,7 @@
 # Hadrix CLI
 
 Hadrix performs a local, read-only security scan and writes results to the terminal or JSON.
+Default scans target common source files plus schema files (including `.sql`).
 
 ## Quick start
 
@@ -86,6 +87,8 @@ Optional flags:
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
 - `--repo <path>` to run a single spec against a specific repo path (requires `--spec`).
 - `--json` for machine-readable output.
+- `--debug` to enable debug logs (written under `--out-dir/logs` by default).
+- `--debug-log <path>` to control debug log output. For multiple specs, the spec id is added to the filename.
 
 Artifacts are written to `./.hadrix-evals` by default:
 - `results.json` (full eval output)
@@ -138,7 +141,7 @@ Use debug logging to trace rule-pass tasks and dedupe/merge behavior. Output is 
 hadrix scan /path/to/repo --debug
 ```
 
-By default logs are written under `.hadrix/logs` with a timestamped filename like
+By default logs are written under `<scan-target>/.hadrix/logs` with a timestamped filename like
 `scan-debug-2024-05-01T12-34-56-789Z.jsonl`. To control the path:
 
 ```bash

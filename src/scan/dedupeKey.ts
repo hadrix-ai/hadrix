@@ -67,13 +67,46 @@ function normalizeTypeToken(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+function extractEntryPointIdentity(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const candidates = [
+    details.entryPoint,
+    details.entry_point,
+    details.entryPointIdentifier,
+    details.entry_point_identifier,
+    details.entryPointId,
+    details.entry_point_id,
+    details.primarySymbol,
+    details.primary_symbol
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return trimmed;
+  }
+  return "";
+}
+
+function extractPrimarySymbolIdentity(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const candidates = [details.primarySymbol, details.primary_symbol];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return trimmed;
+  }
+  return "";
+}
+
 export function normalizeIdentityTypeValue(value: string): string {
   const normalized = normalizeTypeToken(value);
   if (!normalized) return "";
   return IDENTITY_KIND_ALIASES[normalized] ?? normalized;
 }
 
-export function extractFindingIdentityType(finding: FindingIdentityInput): string {
+function extractRawIdentityType(finding: FindingIdentityInput): string {
   const details = toRecord(finding.details);
   const candidates = [
     finding.type,
@@ -83,6 +116,8 @@ export function extractFindingIdentityType(finding: FindingIdentityInput): strin
     details.ruleId,
     details.rule_id,
     details.ruleID,
+    details.candidateType,
+    details.candidate_type,
     finding.category,
     details.category,
     details.findingCategory,
@@ -92,10 +127,30 @@ export function extractFindingIdentityType(finding: FindingIdentityInput): strin
     if (typeof candidate !== "string") continue;
     const trimmed = candidate.trim();
     if (!trimmed) continue;
-    const normalized = normalizeIdentityTypeValue(trimmed);
-    if (normalized) return normalized;
+    return trimmed;
   }
   return "";
+}
+
+function extractRuleIdIdentity(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const raw = details.ruleId ?? details.rule_id ?? details.ruleID;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function extractCandidateTypeToken(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const raw = details.candidateType ?? details.candidate_type;
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return normalizeTypeToken(trimmed);
+}
+
+export function extractFindingIdentityType(finding: FindingIdentityInput): string {
+  const rawType = extractRawIdentityType(finding);
+  if (!rawType) return "";
+  return normalizeIdentityTypeValue(rawType);
 }
 
 export function extractAnchorNodeId(finding: FindingIdentityInput): string {
@@ -167,7 +222,14 @@ function extractLocationParts(
     location.repoPath ?? location.repo_path ?? details.repoPath ?? details.repo_path ?? fallbackRepoPath ?? ""
   );
   const filepathRaw =
-    (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+    (location.filepath ??
+      location.filePath ??
+      location.path ??
+      location.file ??
+      details.filepath ??
+      details.filePath ??
+      details.path ??
+      details.file) as unknown;
   const filepath = normalizeFilepath(filepathRaw);
   const fileKey =
     repoPath && filepath.startsWith(`${repoPath}/`)
@@ -230,12 +292,42 @@ export function buildFindingIdentityKey(
   }
   if (!typeKey) return "";
 
+  const entryPointKey = extractEntryPointIdentity(finding);
+  const primarySymbolKey = extractPrimarySymbolIdentity(finding);
+  const entryPointToken = entryPointKey ? normalizeKeyPart(entryPointKey) : "";
+  const primarySymbolToken = primarySymbolKey ? normalizeKeyPart(primarySymbolKey) : "";
+  const rawType = extractRawIdentityType(finding);
+  const rawTypeToken = rawType ? normalizeTypeToken(rawType) : "";
+  const typeToken = normalizeTypeToken(typeKey);
+  const candidateTypeToken = extractCandidateTypeToken(finding);
+  const ruleId = extractRuleIdIdentity(finding);
+  const ruleIdToken = ruleId ? normalizeKeyPart(ruleId) : "";
+  const runtimeControl = typeToken === "rate_limiting" || typeToken === "lockout";
   const parts = [
     normalizeKeyPart(location.repoPath),
     normalizeKeyPart(location.fileKey),
     normalizeKeyPart(anchorKey),
-    normalizeKeyPart(typeKey)
+    ...(entryPointToken ? [entryPointToken] : []),
+    ...(primarySymbolToken && primarySymbolToken !== entryPointToken
+      ? [`symbol:${primarySymbolToken}`]
+      : []),
+    normalizeKeyPart(typeKey),
+    ...(rawTypeToken && rawTypeToken !== typeToken ? [`raw:${rawTypeToken}`] : [])
   ];
+  if (runtimeControl && ruleIdToken) {
+    const rawTokenKey = rawTypeToken ? normalizeKeyPart(rawTypeToken) : "";
+    const typeKeyToken = normalizeKeyPart(typeKey);
+    if (ruleIdToken !== typeKeyToken && ruleIdToken !== rawTokenKey) {
+      parts.push(normalizeKeyPart(`rule:${ruleIdToken}`));
+    }
+  }
+  if (
+    candidateTypeToken &&
+    candidateTypeToken !== typeToken &&
+    candidateTypeToken !== rawTypeToken
+  ) {
+    parts.push(normalizeKeyPart(`candidate:${candidateTypeToken}`));
+  }
   const packageKey = extractPackageIdentity(finding);
   if (packageKey) {
     parts.push(normalizeKeyPart(packageKey));

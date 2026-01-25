@@ -30,6 +30,27 @@ const CHUNK_ENDPOINT_PATTERNS = [
   /\breq\.method\b/i,
   /\baddEventListener\s*\(\s*['"]fetch['"]\s*\)/i
 ];
+const CHUNK_EXTERNAL_CALL_PATTERNS = [
+  /\bfetch\s*\(/i,
+  /\baxios\b/i,
+  /\bgot\s*\(/i,
+  /\brequest\s*\(/i,
+  /\bhttp\.request\s*\(/i,
+  /\bhttps\.request\s*\(/i
+];
+const CHUNK_WEBHOOK_PATTERNS = [/\bwebhook\b/i];
+const CHUNK_WEBHOOK_CONFIG_PATTERNS = [
+  /\bconfigUrl\w*\b/i,
+  /\bconfig_url\w*\b/i,
+  /\bconfigUri\w*\b/i,
+  /\bconfig_uri\w*\b/i,
+  /\bconfigEndpoint\b/i,
+  /\bwebhookConfig\w*\b/i,
+  /\bconfig\s*(?:\?\.|\.)\s*(url|uri|endpoint|link)\b/i,
+  /\bconfig\s*\[\s*['"](url|uri|endpoint|link)['"]\s*\]/i,
+  /\b(payload|body|event\.payload|event\.data|req\.body|request\.body)\s*(?:\?\.|\.)\s*config\w*\b/i,
+  /\b(payload|body|event\.payload|event\.data|req\.body|request\.body)\s*(?:\?\.|\.)\s*config\s*(?:\?\.|\.)\s*(url|uri|endpoint|link)\b/i
+];
 const CHUNK_AUTH_PATTERNS = [/\bauth\b/i, /\bjwt\b/i, /\btoken\b/i, /\bsession\b/i];
 const CHUNK_ADMIN_PATTERNS = [/\badmin\b/i, /\brole\b/i, /\bpermission\b/i, /\bclaims\b/i];
 const CHUNK_DATA_PATTERNS = [
@@ -168,10 +189,16 @@ function scoreChunk(chunk: LocalChunk): number {
   if (path.endsWith(".ts") || path.endsWith(".tsx") || path.endsWith(".js") || path.endsWith(".jsx")) {
     score += 5;
   }
+  if (path.includes("/db/") || path.endsWith("schema.sql")) {
+    score += 6;
+  }
   if (path.includes("/src/") || path.startsWith("src/") || path.includes("/service/") || path.includes("/ui/")) {
     score += 4;
   }
   if (path.includes("/functions") || path.includes("/api/") || path.includes("/edge/")) {
+    score += 3;
+  }
+  if (path.includes("webhook")) {
     score += 3;
   }
   if (path.includes("package-lock") || path.includes("pnpm-lock") || path.includes("yarn.lock")) {
@@ -185,6 +212,9 @@ function scoreChunk(chunk: LocalChunk): number {
   if (content) {
     if (matchesAnyPattern(content, CHUNK_ENDPOINT_PATTERNS)) {
       score += 4;
+    }
+    if (matchesAnyPattern(content, CHUNK_WEBHOOK_PATTERNS)) {
+      score += 2;
     }
     if (matchesAnyPattern(content, CHUNK_AUTH_PATTERNS)) {
       score += 3;
@@ -207,6 +237,14 @@ function scoreChunk(chunk: LocalChunk): number {
     if (matchesAnyPattern(content, CHUNK_DANGEROUS_PATTERNS)) {
       score += 2;
     }
+    const hasWebhookConfig = matchesAnyPattern(content, CHUNK_WEBHOOK_CONFIG_PATTERNS);
+    if (hasWebhookConfig) {
+      score += 5;
+    }
+    const hasExternalCall = matchesAnyPattern(content, CHUNK_EXTERNAL_CALL_PATTERNS);
+    if (hasWebhookConfig && hasExternalCall) {
+      score += 6;
+    }
   }
 
   const folder = topLevelFolder(chunk.filepath);
@@ -214,6 +252,16 @@ function scoreChunk(chunk: LocalChunk): number {
     score += 1;
   }
   return score;
+}
+
+function isWebhookConfigChunk(chunk: LocalChunk): boolean {
+  const path = chunk.filepath.toLowerCase();
+  const content = stripSecurityHeader(chunk.content ?? "");
+  if (!content) return false;
+  const hasConfig = matchesAnyPattern(content, CHUNK_WEBHOOK_CONFIG_PATTERNS);
+  const hasExternalCall = matchesAnyPattern(content, CHUNK_EXTERNAL_CALL_PATTERNS);
+  if (hasConfig) return true;
+  return path.includes("webhook") && hasExternalCall;
 }
 
 function topLevelFolder(filepath: string): string {
@@ -228,7 +276,16 @@ function pickFirstChunkPerFile(chunks: LocalChunk[]): Map<string, LocalChunk> {
   const firstChunks = new Map<string, LocalChunk>();
   for (const chunk of chunks) {
     const existing = firstChunks.get(chunk.filepath);
-    if (!existing || chunk.chunkIndex < existing.chunkIndex) {
+    if (!existing) {
+      firstChunks.set(chunk.filepath, chunk);
+      continue;
+    }
+    const existingScore = scoreChunk(existing);
+    const candidateScore = scoreChunk(chunk);
+    if (
+      candidateScore > existingScore ||
+      (candidateScore === existingScore && chunk.chunkIndex < existing.chunkIndex)
+    ) {
       firstChunks.set(chunk.filepath, chunk);
     }
   }
@@ -304,7 +361,24 @@ function expandChunkSelection(selected: LocalChunk[], allChunks: LocalChunk[], m
   const expanded: LocalChunk[] = [];
   for (const seed of selected) {
     const list = chunksByFile.get(seed.filepath) ?? [seed];
-    for (let i = 0; i < list.length && i < maxChunksPerFile; i += 1) {
+    if (list.length <= maxChunksPerFile) {
+      expanded.push(...list);
+      continue;
+    }
+    const seedIndex = list.findIndex((chunk) => chunk.chunkIndex === seed.chunkIndex);
+    if (seedIndex === -1) {
+      for (let i = 0; i < list.length && i < maxChunksPerFile; i += 1) {
+        expanded.push(list[i]);
+      }
+      continue;
+    }
+    const windowSize = Math.max(1, maxChunksPerFile);
+    let start = Math.max(0, seedIndex - Math.floor((windowSize - 1) / 2));
+    let end = Math.min(list.length, start + windowSize);
+    if (end - start < windowSize) {
+      start = Math.max(0, end - windowSize);
+    }
+    for (let i = start; i < end; i += 1) {
       expanded.push(list[i]);
     }
   }
@@ -427,6 +501,9 @@ export function buildRepositoryFileSamples(
     expanded = expandChunkSelection(selected, filtered, maxChunksPerFile);
   }
 
+  const webhookPreferred = preferSecurityChunks(
+    alignPreferredChunks(filtered.filter((chunk) => isWebhookConfigChunk(chunk)), filtered)
+  );
   const preferred = (options.preferredChunks ?? []).map((chunk) => ({
     ...chunk,
     filepath: normalizePath(chunk.filepath),
@@ -434,7 +511,8 @@ export function buildRepositoryFileSamples(
   }));
   const alignedPreferred = preferSecurityChunks(alignPreferredChunks(preferred, filtered));
 
-  const combined = mergeChunkSelection(expanded, alignedPreferred);
+  const combinedPreferred = mergeChunkSelection(webhookPreferred, alignedPreferred);
+  const combined = mergeChunkSelection(combinedPreferred, expanded);
   const capped = capChunks(combined, maxFiles, maxChunksPerFile);
 
   return capped.map((chunk) => ({

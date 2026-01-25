@@ -16,6 +16,8 @@ import type {
 } from "./types.js";
 
 const DEFAULT_EVAL_DIR = ".hadrix-eval-fixtures";
+const DEFAULT_SUMMARY_MATCH_THRESHOLD = 0.45;
+const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
 
 export type EvalGroupStatus = "pass" | "fail" | "skipped";
 
@@ -450,9 +452,9 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
         actual: evalFindings,
         comparator,
         groupId: null,
-        summaryMatchThreshold: options.summaryMatchThreshold,
+        summaryMatchThreshold: options.summaryMatchThreshold ?? DEFAULT_SUMMARY_MATCH_THRESHOLD,
         comparisonConcurrency: options.comparisonConcurrency,
-        shortCircuitThreshold: options.shortCircuitThreshold,
+        shortCircuitThreshold: options.shortCircuitThreshold ?? DEFAULT_SHORT_CIRCUIT_THRESHOLD,
       });
       evalResults = evalResponse.groups;
     }

@@ -99,7 +99,8 @@ const DEFAULT_INCLUDE_EXTENSIONS = [
   ".php",
   ".rs",
   ".kt",
-  ".swift"
+  ".swift",
+  ".sql"
 ];
 
 const DEFAULT_EXCLUDES = [

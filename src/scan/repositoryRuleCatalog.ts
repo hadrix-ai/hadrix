@@ -67,6 +67,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     ]
   },
   {
+    id: "missing_lockout",
+    title: "Missing lockout protections on login endpoints",
+    category: "authentication",
+    description: "Login flows lack account lockout or brute-force defenses.",
+    candidateTypes: ["missing_lockout"],
+    guidance: [
+      "Require account lockout or escalating delays after repeated failed login attempts.",
+      "CAPTCHA or challenge-based defenses can be valid alternatives."
+    ]
+  },
+  {
     id: "missing_audit_logging",
     title: "Missing audit logging on destructive actions",
     category: "configuration",
@@ -120,6 +131,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "secrets",
     description: "Client bundles include credentials or secrets.",
     requiredControls: ["no_sensitive_secrets"],
+    candidateTypes: ["frontend_secret_exposure"],
     guidance: [
       "Frontend code should not embed private keys, service secrets, or admin tokens."
     ]
@@ -145,6 +157,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     guidance: [
       "Require signature verification with shared secret and timing-safe compare.",
       "Prefer replay protection when available."
+    ]
+  },
+  {
+    id: "missing_webhook_config_integrity",
+    title: "Missing webhook config integrity checks",
+    category: "configuration",
+    description: "Webhook handlers fetch or apply configuration payloads without integrity verification.",
+    candidateTypes: ["missing_webhook_config_integrity"],
+    guidance: [
+      "Verify external config URLs or payloads with signatures, hashes, or allowlisted sources.",
+      "Treat config payloads from webhooks as untrusted input."
     ]
   },
   {
@@ -185,6 +208,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "configuration",
     description: "Background jobs or services use overly broad permissions.",
     requiredControls: ["least_privilege"],
+    candidateTypes: ["missing_least_privilege"],
     guidance: [
       "Prefer scoped credentials and minimal permissions for jobs and workers."
     ]
@@ -395,6 +419,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     guidance: [
       "Normalize paths and enforce base directory allowlists.",
       "Reject '..', absolute paths, or encoded traversal sequences."
+    ]
+  },
+  {
+    id: "missing_upload_size_limit",
+    title: "Missing upload size limits",
+    category: "configuration",
+    description: "Upload handlers accept large payloads without enforcing size limits.",
+    candidateTypes: ["missing_upload_size_limit"],
+    guidance: [
+      "Enforce max upload sizes at the server or middleware level.",
+      "Reject oversized payloads before buffering or storing them."
     ]
   },
   {

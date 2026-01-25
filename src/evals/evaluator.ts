@@ -38,8 +38,11 @@ const matchFilepath = (expected: string, actual: string): boolean => {
   return globToRegex(expected).test(actual);
 };
 
+const stripGhsaTokens = (value: string): string =>
+  value.replace(/\bGHSA-[A-Za-z0-9-]+\b/gi, " ");
+
 const normalizeText = (value: string): string =>
-  value
+  stripGhsaTokens(value)
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
@@ -74,6 +77,81 @@ const jaccard = (a: Set<string>, b: Set<string>): number => {
   return union === 0 ? 0 : intersection / union;
 };
 
+const RULE_ID_ALIASES: Record<string, string> = {
+  missing_rate_limiting: "rate_limiting",
+  missing_rate_limit: "rate_limiting",
+  frontend_login_rate_limit: "rate_limiting",
+  rate_limiting: "rate_limiting",
+  missing_audit_logging: "audit_logging",
+  missing_audit_log: "audit_logging",
+  audit_logging: "audit_logging",
+  missing_lockout: "lockout",
+  login_lockout_missing: "lockout",
+  brute_force_defense: "lockout",
+  brute_force_defenses: "lockout",
+  bruteforce_defense: "lockout",
+  credential_stuffing: "lockout",
+  missing_timeout: "timeout",
+  missing_timeouts: "timeout",
+  timeout: "timeout",
+  object_injection: "prototype_pollution",
+  prototype_pollution: "prototype_pollution",
+  idor: "idor",
+  sql_injection: "sql_injection",
+  command_injection: "command_injection",
+  missing_webhook_signature: "webhook_signature",
+  missing_webhook_config_integrity: "webhook_config_integrity",
+  config_integrity: "webhook_config_integrity",
+  config_url_integrity: "webhook_config_integrity",
+  webhook_config: "webhook_config_integrity",
+  unbounded_query: "unbounded_query",
+  permissive_cors: "permissive_cors",
+  throttling: "rate_limiting",
+  login_throttling: "rate_limiting",
+  request_throttling: "rate_limiting"
+};
+const RULE_HINT_PATTERNS: Array<{ hint: string; patterns: RegExp[] }> = [
+  {
+    hint: "rate_limiting",
+    patterns: [/rate limit/i, /ratelimit/i, /throttl/i, /request thrott/i, /too many requests/i]
+  },
+  { hint: "audit_logging", patterns: [/audit log/i, /audit logging/i] },
+  {
+    hint: "lockout",
+    patterns: [
+      /lockout/i,
+      /account lock/i,
+      /brute[- ]?force/i,
+      /brute[- ]?force (defen|protect|mitigat|guard)/i,
+      /login attempts/i,
+      /credential stuffing/i
+    ]
+  },
+  { hint: "timeout", patterns: [/timeout/i, /time out/i] },
+  { hint: "idor", patterns: [/idor/i, /insecure direct object/i] },
+  { hint: "sql_injection", patterns: [/sql injection/i] },
+  { hint: "unsafe_query_builder", patterns: [/query builder/i] },
+  { hint: "command_injection", patterns: [/command injection/i, /shell injection/i] },
+  { hint: "permissive_cors", patterns: [/cors/i, /cross[- ]origin/i] },
+  { hint: "unbounded_query", patterns: [/unbounded/i, /missing limit/i, /no pagination/i, /missing pagination/i] },
+  {
+    hint: "webhook_signature",
+    patterns: [/webhook[^\n]*signature/i, /signature[^\n]*webhook/i]
+  },
+  {
+    hint: "webhook_config_integrity",
+    patterns: [
+      /webhook[^\n]*config[^\n]*(integrity|signature|checksum|hash|hmac)/i,
+      /config (integrity|signature|checksum|hash|hmac)/i,
+      /config[_\s-]?(url|uri|endpoint|link)[^\n]{0,40}(integrity|signature|checksum|hash|hmac)/i
+    ]
+  },
+  {
+    hint: "sensitive_logging",
+    patterns: [/sensitive log/i, /log[^\n]{0,20}(token|secret|password)/i, /plaintext log/i]
+  }
+];
+
 const collectRuleIds = (value: unknown): string[] => {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -102,6 +180,48 @@ const uniqueList = (values: string[]): string[] => {
 };
 
 const normalizeRuleId = (value: string): string => value.trim().toLowerCase();
+const normalizeRuleIdAlias = (value: string): string => {
+  const normalized = normalizeRuleId(value);
+  return RULE_ID_ALIASES[normalized] ?? normalized;
+};
+
+const expandRuleIdAliases = (values: string[]): string[] => {
+  const normalized = values
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const expanded = normalized.flatMap((value) => {
+    const alias = normalizeRuleIdAlias(value);
+    return alias && alias !== value ? [value, alias] : [value];
+  });
+  return uniqueList(expanded);
+};
+
+const extractEntryPointIdentity = (actual: EvalFinding): string => {
+  const details = (actual.details ?? {}) as Record<string, unknown>;
+  const candidates = [
+    details.entryPoint,
+    details.entry_point,
+    details.entryPointIdentifier,
+    details.entry_point_identifier,
+    details.entryPointId,
+    details.entry_point_id,
+    details.primarySymbol,
+    details.primary_symbol
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return trimmed;
+  }
+  return "";
+};
+
+const extractLocationFilepath = (finding: EvalFinding): string => {
+  const location = (finding.location ?? {}) as Record<string, unknown>;
+  const raw = (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  return typeof raw === "string" ? raw.trim() : "";
+};
 
 const extractActualRuleIds = (finding: EvalFinding): string[] => {
   const details = (finding.details ?? {}) as Record<string, unknown>;
@@ -114,32 +234,102 @@ const extractActualRuleIds = (finding: EvalFinding): string[] => {
   ]);
 };
 
+const extractRuleHintsFromText = (value: string): string[] => {
+  if (!value) return [];
+  const hints: string[] = [];
+  for (const rule of RULE_HINT_PATTERNS) {
+    if (rule.patterns.some((pattern) => pattern.test(value))) {
+      hints.push(normalizeRuleIdAlias(rule.hint));
+    }
+  }
+  return uniqueList(hints);
+};
+
+const collectExpectedRuleHints = (expected: ExpectedFinding): string[] => {
+  const hints = new Set<string>();
+  for (const hint of extractRuleHintsFromText(expected.expectation)) {
+    hints.add(hint);
+  }
+  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
+    hints.add(normalizeRuleIdAlias(expected.ruleId));
+  }
+  return Array.from(hints);
+};
+
+const collectActualRuleHints = (actual: EvalFinding): string[] => {
+  const details = (actual.details ?? {}) as Record<string, unknown>;
+  const hints = new Set<string>();
+  for (const ruleId of extractActualRuleIds(actual)) {
+    hints.add(normalizeRuleIdAlias(ruleId));
+  }
+  const candidateType = details.candidateType ?? details.candidate_type ?? null;
+  if (typeof candidateType === "string" && candidateType.trim()) {
+    hints.add(normalizeRuleIdAlias(candidateType));
+  }
+  for (const hint of extractRuleHintsFromText(actual.summary ?? "")) {
+    hints.add(hint);
+  }
+  return Array.from(hints);
+};
+
+const hasRuleHintConflict = (expectedHints: string[], actualHints: string[]): boolean => {
+  if (expectedHints.length === 0 || actualHints.length === 0) {
+    return false;
+  }
+  const expectedSet = new Set(expectedHints.map((hint) => normalizeRuleIdAlias(hint)));
+  for (const hint of actualHints) {
+    if (expectedSet.has(normalizeRuleIdAlias(hint))) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const buildExpectedComparisonText = (expected: ExpectedFinding): string => {
   const parts = [expected.expectation];
-  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
-    parts.push(expected.ruleId.trim());
+  if (typeof expected.filepath === "string" && expected.filepath.trim()) {
+    parts.push(expected.filepath.trim());
   }
-  return parts.filter(Boolean).join(" ");
+  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
+    parts.push(...expandRuleIdAliases([expected.ruleId]));
+  }
+  parts.push(...collectExpectedRuleHints(expected));
+  return uniqueList(parts.filter(Boolean)).join(" ");
 };
 
 const buildActualComparisonText = (actual: EvalFinding): string => {
   const parts = [actual.summary ?? ""];
-  for (const ruleId of extractActualRuleIds(actual)) {
-    parts.push(ruleId);
+  const ruleIds = extractActualRuleIds(actual);
+  if (ruleIds.length > 0) {
+    parts.push(...expandRuleIdAliases(ruleIds));
   }
-  return parts.filter(Boolean).join(" ");
+  const entryPoint = extractEntryPointIdentity(actual);
+  if (entryPoint) {
+    parts.push(entryPoint);
+  }
+  const filepath = extractLocationFilepath(actual);
+  if (filepath) {
+    parts.push(filepath);
+  }
+  parts.push(...collectActualRuleHints(actual));
+  return uniqueList(parts.filter(Boolean)).join(" ");
 };
 
 const ruleIdMatches = (expected: ExpectedFinding, actual: EvalFinding): boolean => {
   const expectedRuleId =
-    typeof expected.ruleId === "string" ? normalizeRuleId(expected.ruleId) : "";
+    typeof expected.ruleId === "string" ? normalizeRuleIdAlias(expected.ruleId) : "";
   if (!expectedRuleId) return false;
-  const actualRuleIds = extractActualRuleIds(actual).map((ruleId) => normalizeRuleId(ruleId));
+  const actualRuleIds = extractActualRuleIds(actual).map((ruleId) => normalizeRuleIdAlias(ruleId));
   return actualRuleIds.includes(expectedRuleId);
 };
 
 const defaultComparator = (threshold: number): SummaryComparator => {
   return ({ expected, actual }): SummaryComparison => {
+    const expectedHints = collectExpectedRuleHints(expected);
+    const actualHints = collectActualRuleHints(actual);
+    if (hasRuleHintConflict(expectedHints, actualHints)) {
+      return { match: false, score: 0, rationale: "rule_hint_conflict" };
+    }
     if (ruleIdMatches(expected, actual)) {
       return {
         match: true,
@@ -160,7 +350,7 @@ const defaultComparator = (threshold: number): SummaryComparator => {
 };
 
 const DEFAULT_COMPARISON_CONCURRENCY = 5;
-const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.8;
+const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
 
 const normalizeComparisonConcurrency = (value?: number): number => {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -233,7 +423,7 @@ export async function evaluateFindingsGroup(args: {
   shortCircuitThreshold?: number;
   actualFilter?: (finding: EvalFinding) => boolean;
 }): Promise<EvalGroupResult> {
-  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.4);
+  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.47);
   const comparisonConcurrency = normalizeComparisonConcurrency(args.comparisonConcurrency);
   const shortCircuitThreshold = normalizeShortCircuitThreshold(args.shortCircuitThreshold);
 
@@ -252,12 +442,16 @@ export async function evaluateFindingsGroup(args: {
     const candidates = actualWithPath
       .filter((a) => matchFilepath(exp.filepath, a.filepath) && !usedActualIds.has(a.finding.id))
       .map((a) => a.finding);
+    const expectedHints = collectExpectedRuleHints(exp);
+    const filteredCandidates = candidates.filter(
+      (candidate) => !hasRuleHintConflict(expectedHints, collectActualRuleHints(candidate))
+    );
 
     let best: { finding: EvalFinding; comparison: SummaryComparison } | null = null;
-    if (candidates.length > 0) {
+    if (filteredCandidates.length > 0) {
       const expectedTokens = tokenSet(buildExpectedComparisonText(exp));
       let bestShort: { candidate: EvalFinding; score: number; rationale: string } | null = null;
-      for (const candidate of candidates) {
+      for (const candidate of filteredCandidates) {
         if (ruleIdMatches(exp, candidate)) {
           bestShort = { candidate, score: 1, rationale: "rule_id_short_circuit" };
           break;
@@ -277,10 +471,14 @@ export async function evaluateFindingsGroup(args: {
           },
         };
       } else {
-        const comparisons = await runWithConcurrency(candidates, comparisonConcurrency, async (candidate) => ({
-          candidate,
-          comparison: await comparator({ expected: exp, actual: candidate }),
-        }));
+        const comparisons = await runWithConcurrency(
+          filteredCandidates,
+          comparisonConcurrency,
+          async (candidate) => ({
+            candidate,
+            comparison: await comparator({ expected: exp, actual: candidate }),
+          })
+        );
         for (const { candidate, comparison } of comparisons) {
           if (!comparison.match) continue;
           const score = typeof comparison.score === "number" ? comparison.score : 0;

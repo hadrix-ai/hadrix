@@ -151,7 +151,11 @@ const SINK_PATTERNS: Array<{ label: string; regex: RegExp }> = [
   { label: "exec", regex: /\b(execSync|exec|spawnSync|spawn|child_process|Deno\.run|Bun\.spawn)\b/i },
   { label: "template.render", regex: /\bdangerouslySetInnerHTML\b|\bres\.send\b|\bres\.write\b/i },
   { label: "file.write", regex: /\bwriteFile(Sync)?\s*\(/i },
-  { label: "http.request", regex: /\bfetch\b|\baxios\.\w+\b|\bgot\s*\(/i }
+  { label: "http.request", regex: /\bfetch\b|\baxios\.\w+\b|\bgot\s*\(/i },
+  {
+    label: "log.write",
+    regex: /\bconsole\.(log|info|warn|error|debug|trace)\s*\(|\blogger(?:\?\.|\.)\s*(info|warn|error|debug|log|trace)\s*\(|\blog(?:\?\.|\.)\s*(info|warn|error|debug|trace)\s*\(/i
+  }
 ];
 
 const SAST_ENTRYPOINT_HINTS: Array<{ entryType: string; patterns: RegExp[] }> = [

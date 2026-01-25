@@ -54,6 +54,7 @@ export type FileScopeEvidence = {
   entryPointHints: string[];
   sinks: string[];
   sensitiveActionHints: string[];
+  isServerAction: boolean;
   fromSecurityHeader: boolean;
 };
 
@@ -141,7 +142,14 @@ const BACKEND_PATH_HINTS = [
   "/functions/",
   "/edge/",
   "/supabase/",
-  "/routes/"
+  "/routes/",
+  "/db/",
+  "/schema/"
+];
+const APP_ROUTER_API_PATH_PATTERN = /(^|\/)app\/api(\/|$)/i;
+const SERVER_ACTION_PATH_PATTERNS = [
+  /^app\/actions(?:\/|$|\.)/i,
+  /\/app\/actions(?:\/|$|\.)/i
 ];
 const BACKGROUND_PATH_HINTS = [
   "/jobs/",
@@ -215,6 +223,16 @@ const RATE_LIMIT_PATTERNS = [
   /express-rate-limit/i,
   /upstash\/ratelimit/i
 ];
+const RATE_LIMIT_NEGATION_PATTERNS = [
+  /\bno\s+rate[_-]?limit\b/i,
+  /\bwithout\s+rate[_-]?limit\b/i,
+  /\bdisable(?:d)?\s+rate[_-]?limit\b/i,
+  /\brate[_-]?limit\s*disabled\b/i,
+  /\bno\s+throttl/i,
+  /\bunthrottled\b/i,
+  /\bunlimited\s+requests?\b/i,
+  /\bnoRateLimit\b/
+];
 
 const ROLE_CHECK_PATTERNS = [
   /\brole\b/i,
@@ -285,14 +303,35 @@ const ORG_ID_INPUT_PATTERNS = [
   /\b\{[^}]*\b(organization|tenant)(_?id)?\b[^}]*\}\s*=\s*await\s*(req|request)\.json\s*\(/i,
   /\b(req|request)\.json\s*\(\)[^;\n]*\borg(_?id)?\b/i,
   /\b(req|request)\.json\s*\(\)[^;\n]*\b(organization|tenant)(_?id)?\b/i,
+  /\bformData(?:\?\.|\.)get\s*\(\s*['"]org(_?id)?['"]\s*\)/i,
+  /\bformData(?:\?\.|\.)get\s*\(\s*['"](organization|tenant)(_?id)?['"]\s*\)/i,
+  /\b(input|data)\b[^;\n]{0,20}\.\s*(org|organization|tenant)(_?id)?\b/i,
+  /\b(input|data)\s*(?:\?\.\s*)?\[\s*['"](org(_?id)?|organization(_?id)?|tenant(_?id)?)['"]\s*\]/i,
+  /\bfunction\b[^(]*\(\s*\{[^}]*\b(org|organization|tenant)(_?id)?\b[^}]*\}/i,
+  /\(\s*\{[^}]*\b(org|organization|tenant)(_?id)?\b[^}]*\}\s*\)\s*=>/i,
   /\bsearchParams\.get\s*\(\s*['"]org(_?id)?['"]\s*\)/i,
   /\bsearchParams\.get\s*\(\s*['"](organization|tenant)(_?id)?['"]\s*\)/i,
+  /\bsearchParams\.org(_?id)?\b/i,
+  /\bsearchParams\?\.org(_?id)?\b/i,
   /\bnew\s+URL\s*\([^)]*\)\.searchParams\.get\s*\(\s*['"]org(_?id)?['"]\s*\)/i,
   /\bnew\s+URL\s*\([^)]*\)\.searchParams\.get\s*\(\s*['"](organization|tenant)(_?id)?['"]\s*\)/i,
   /\bheaders\.get\s*\(\s*['"][^'"]*org[^'"]*id['"]\s*\)/i,
   /\b(req|request)\.headers\.get\s*\(\s*['"][^'"]*org[^'"]*id['"]\s*\)/i,
   /\bheaders\.get\s*\(\s*['"][^'"]*(organization|tenant)[^'"]*id['"]\s*\)/i,
   /\b(req|request)\.headers\.get\s*\(\s*['"][^'"]*(organization|tenant)[^'"]*id['"]\s*\)/i
+];
+
+const FRONTEND_ORG_ID_INPUT_PATTERNS = [
+  /\bsearchParams\.org(_?id)?\b/i,
+  /\bsearchParams\?\.org(_?id)?\b/i,
+  /\bsearchParams\.get\s*\(\s*['"]org(_?id)?['"]\s*\)/i,
+  /\bsearchParams\.get\s*\(\s*['"](organization|tenant)(_?id)?['"]\s*\)/i,
+  /\bnew\s+URL\s*\([^)]*\)\.searchParams\.get\s*\(\s*['"]org(_?id)?['"]\s*\)/i,
+  /\bnew\s+URL\s*\([^)]*\)\.searchParams\.get\s*\(\s*['"](organization|tenant)(_?id)?['"]\s*\)/i,
+  /\bparams\.org(_?id)?\b/i,
+  /\bparams\?\.org(_?id)?\b/i,
+  /\bparams\.(organization|tenant)(_?id)?\b/i,
+  /\bparams\?\.(organization|tenant)(_?id)?\b/i
 ];
 
 const USER_ID_INPUT_PATTERNS = [
@@ -306,12 +345,29 @@ const USER_ID_INPUT_PATTERNS = [
 ];
 
 const REQUEST_JSON_PATTERNS = [/\b(req|request)\.json\s*\(/i];
+const REQUEST_BODY_PATTERNS = [
+  /\breq\.body\b/i,
+  /\brequest\.body\b/i,
+  /\b(await|return)\s+(req|request)\.json\s*\(/i,
+  /\b(body|payload)\s*=\s*await\s*(req|request)\.json\s*\(/i
+];
+const REQUEST_BODY_LOG_PATTERNS = [
+  /\bbody\b/i,
+  /\bpayload\b/i,
+  /\brequestBody\b/i,
+  /\breq\.body\b/i,
+  /\brequest\.body\b/i,
+  /\b(req|request)\.json\s*\(/i,
+  /\b(req|request)\.json\s*\?\.\s*\(/i,
+  /\b(req|request)\.json\s*\(\)\s*\.\s*catch\b/i
+];
 const BODY_ID_PATTERNS = [
   /\b(body|data|payload|input)\b[^;\n]{0,20}\.\s*[A-Za-z0-9_]*id\b/i,
   /\b\{[^}]*\b[A-Za-z0-9_]*id\b[^}]*\}\s*=\s*(body|data|payload|input)\b/i
 ];
 const BODY_ORG_PATTERNS = [
   /\b(body|data|payload|input)\b[^;\n]{0,20}\.\s*(org|organization|tenant)(_?id)?\b/i,
+  /\b(body|data|payload|input)\s*(?:\?\.\s*)?\[\s*['"](org(_?id)?|organization(_?id)?|tenant(_?id)?)['"]\s*\]/i,
   /\b\{[^}]*\b(org|organization|tenant)(_?id)?\b[^}]*\}\s*=\s*(body|data|payload|input)\b/i
 ];
 
@@ -339,21 +395,44 @@ const OWNERSHIP_FILTER_PATTERNS = [
   /\bWHERE\b[^\n]{0,120}\b(org_id|user_id|tenant_id|owner_id|team_id|workspace_id|account_id)\b/i
 ];
 
-const DB_WRITE_PATTERNS = [/\.(insert|update|upsert)\s*\(/i, /\.rpc\s*\(/i];
+const DB_WRITE_PATTERNS = [/\.(insert|update|upsert|create(?:Many|One)?)\s*\(/i, /\.rpc\s*\(/i];
 
 const SENSITIVE_ACTION_PATTERNS = [
   /\blogin\b/i,
   /\bsignin\b/i,
   /\bsignup\b/i,
   /\bregister\b/i,
-  /\btoken\b/i,
+  /token\b/i,
   /\bpassword\b/i,
   /\breset\b/i,
   /\binvite\b/i,
   /\bcreate\b/i,
+  /create[A-Z]/,
+  /\bprojects?\b/i,
+  /\blist\b/i,
+  /\bwrite\b/i,
+  /\bupdate\b/i,
+  /\binsert\b/i,
+  /\bupsert\b/i,
   /\bdelete\b/i,
   /\bdestroy\b/i,
-  /\brevoke\b/i
+  /\brevoke\b/i,
+  /["']use server["']/i
+];
+
+const SENSITIVE_ACTION_HINT_PATTERNS = [
+  /\bcreate\b/i,
+  /create[A-Z]/,
+  /\bprojects?\b/i,
+  /\blist\b/i,
+  /\bwrite\b/i,
+  /\bupdate\b/i,
+  /\binsert\b/i,
+  /\bupsert\b/i,
+  /token\b/i,
+  /\bapi[_-]?token\b/i,
+  /\baccess[_-]?token\b/i,
+  /\brefresh[_-]?token\b/i
 ];
 
 const DESTRUCTIVE_IDENTIFIER_PATTERN =
@@ -388,6 +467,7 @@ const DESTRUCTIVE_ACTION_HINT_PATTERNS = [
   /\brevoke\b/i,
   /\bdisable\b/i,
   /\bsuspend\b/i,
+  /\bdestructive\b/i,
   DESTRUCTIVE_IDENTIFIER_PATTERN
 ];
 
@@ -416,7 +496,13 @@ const AUDIT_DISABLE_PATTERNS = [
   /vulnEnabled\s*\([^)]*audit/i
 ];
 
-const UNBOUNDED_SELECT_PATTERNS = [/\.select\(\s*['"][*]['"]\s*\)/i];
+const UNBOUNDED_SELECT_PATTERNS = [
+  /\.select\s*\(\s*['"][^'"]*['"]\s*\)/i,
+  /\.select\s*\(\s*`[^`]*`\s*\)/i,
+  /\.select\s*\(\s*\[[^\]]+\]\s*\)/i,
+  /\.select\s*\(\s*\)/i,
+  /\.select\s*\(\s*[A-Za-z_$]/i
+];
 const LIMIT_PATTERNS = [/\.limit\(/i, /\.range\(/i, /\.paginate\(/i, /\.page\(/i];
 
 const EXTERNAL_CALL_PATTERNS = [
@@ -473,6 +559,7 @@ const SQL_INJECTION_PATTERNS = [
   /`[^`]*\b(select|insert|update|delete)\b[^`]*\$\{[^}]+}/i,
   /\b(select|insert|update|delete)\b[^\n]{0,120}\+[^\n]{0,120}\b(req\.|params\.|query\.|body\.)/i
 ];
+const RAW_SQL_HELPER_PATTERNS = [/\braw\s+sql\b/i, /\bunsafe\s+sql\b/i, /\bsql\s+helper\b/i];
 
 const QUERY_BUILDER_PATTERNS = [
   /\.(or|filter|ilike|order|textSearch)\s*\([^\n]*(req\.|params\.|query\.|body\.)/i,
@@ -493,9 +580,9 @@ const TOKEN_CONTEXT_PATTERNS = [/\btoken\b/i, /\bapi[_-]?key\b/i, /\bsecret\b/i]
 const WEAK_TOKEN_PATTERNS = [/Math\.random\s*\(/i, /\bDate\.now\s*\(/i];
 
 const LOG_CALL_PATTERNS = [
-  /\bconsole\.(log|info|warn|error)\s*\(/i,
-  /\blogger\.(info|warn|error|debug|log)\s*\(/i,
-  /\blog\.(info|warn|error|debug)\s*\(/i
+  /\bconsole\.(log|info|warn|error|debug|trace)\s*\(/i,
+  /\blogger(?:\?\.|\.)\s*(info|warn|error|debug|log|trace)\s*\(/i,
+  /\blog(?:\?\.|\.)\s*(info|warn|error|debug|trace)\s*\(/i
 ];
 
 const SENSITIVE_LOG_PATTERNS = [
@@ -549,6 +636,41 @@ const WEBHOOK_SIGNATURE_PATTERNS = [
   /\bwebhook-secret\b/i
 ];
 
+const WEBHOOK_CONFIG_PATTERNS = [
+  /\bconfigUrl\w*\b/i,
+  /\bconfig_url\w*\b/i,
+  /\bconfigUri\w*\b/i,
+  /\bconfig_uri\w*\b/i,
+  /\bconfigLink\w*\b/i,
+  /\bconfig_link\w*\b/i,
+  /\bremoteConfig\w*\b/i,
+  /\bremote_config\w*\b/i,
+  /\bconfigSource\b/i,
+  /\bwebhookConfig\b/i,
+  /\bwebhookConfig\w*\b/i,
+  /\bwebhook_config\w*\b/i,
+  /\bconfigEndpoint\b/i,
+  /\bconfigPayload\b/i,
+  /\bconfig\s*(?:\?\.|\.)\s*(url|uri|endpoint|link)\b/i,
+  /\bconfig\s*\[\s*['"](url|uri|endpoint|link)['"]\s*\]/i,
+  /\b(payload|body|req\.body|request\.body|event\.data|event\.payload)\s*(?:\?\.|\.)\s*config\w*\b/i,
+  /\b(payload|body|req\.body|request\.body|event\.data|event\.payload)\s*(?:\?\.|\.)\s*config\s*(?:\?\.|\.)\s*(url|uri|endpoint|link)\b/i,
+  /\b(payload|body|req\.body|request\.body|event\.data|event\.payload)\s*(?:\?\.|\.)\s*(url|uri|endpoint|link)\b/i,
+  /\b\{\s*(config\w*|url|uri|endpoint|link)\s*\}\s*=\s*(payload|body|req\.body|request\.body|event\.data|event\.payload)\b/i,
+  /\b\{\s*config\w*\s*\}\s*=\s*await\s*(req|request)\.json\s*\(\s*\)/i,
+  /\b(await\s+)?(req|request)\.json\s*\(\s*\)\s*\.\s*config\w*\b/i,
+  /\b(req|request)\.(query|params)\.config\w*\b/i,
+  /\bsearchParams\.get\s*\(\s*['"]config(?:[_-]?(url|uri|endpoint|link))['"]\s*\)/i
+];
+const WEBHOOK_CONFIG_INTEGRITY_PATTERNS = [
+  /\bconfig(?:[_-]?(?:url|uri|endpoint|link|payload|body|data|response|remote|source))\w*[^;\n]{0,40}\b(signature|sig|hmac|hash|checksum|digest|integrity)\b/i,
+  /\b(signature|sig|hmac|hash|checksum|digest|integrity)\b[^;\n]{0,40}\bconfig(?:[_-]?(?:url|uri|endpoint|link|payload|body|data|response|remote|source))\w*\b/i,
+  /\bremoteConfig\w*[^;\n]{0,40}\b(signature|sig|hmac|hash|checksum|digest|integrity)\b/i,
+  /\b(signature|sig|hmac|hash|checksum|digest|integrity)\b[^;\n]{0,40}\bremoteConfig\w*\b/i,
+  /\bconfig(?:[_-]?(?:payload|response|data))?\s*(?:\?\.|\.)\s*(signature|sig|hmac|hash|checksum|digest|integrity)\b/i,
+  /\bconfig[_-]?(?:Signature|Sig|Hmac|Hash|Checksum|Digest|Integrity)\w*\b/i
+];
+
 const CODE_EXECUTION_PATTERNS = [
   /\bnew Function\s*\(/i,
   /\beval\s*\(/i,
@@ -561,6 +683,43 @@ const ANON_KEY_PATTERNS = [
   /SUPABASE_ANON_KEY/i,
   /\banonKey\b/i,
   /\bsupabaseAnonKey\b/i
+];
+const SERVICE_ROLE_KEY_PATTERNS = [
+  /SERVICE_ROLE_KEY/i,
+  /\bserviceRoleKey\b/i,
+  /\bserviceRole\b/i
+];
+const SUPABASE_CONTEXT_PATTERNS = [
+  /\bcreate(Client|ServerClient|BrowserClient|MiddlewareClient)\s*\(/i,
+  /\bsupabase\.(from|rpc|storage|auth)\b/i
+];
+const ADMIN_CONTEXT_PATTERNS = [
+  /\badmin\b/i,
+  /\bservice\b/i,
+  /\bprivileged\b/i,
+  /\binternal\b/i,
+  /[Aa][Dd][Mm][Ii][Nn](?=$|[_A-Z])/,
+  /\badmin[a-z0-9]+\b/i,
+  /service[\s_-]*role/i
+];
+const NEXT_PUBLIC_SECRET_PATTERNS = [
+  /\bNEXT_PUBLIC_[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE|ADMIN|SIGNING|JWT)(?:_?[A-Z0-9_]*KEY)?\b/i
+];
+const STORAGE_CONTEXT_PATTERNS = [
+  /\bbucket\b/i,
+  /\bstorage\b/i,
+  /\bs3\b/i,
+  /\bblob\b/i,
+  /\bobject\s+storage\b/i,
+  /\bsupabase\.storage\b/i
+];
+const PUBLIC_BUCKET_PATTERNS = [
+  /\bpublic[-_]?read\b/i,
+  /\bpublic[-_]?read[-_]?write\b/i,
+  /\bpublic[-_]?bucket\b/i,
+  /\bpublic[-_]?assets?\b/i,
+  /\bbucket\b[^\n]{0,40}\bpublic\b/i,
+  /\bpublic\b[^\n]{0,40}\bbucket\b/i
 ];
 
 const AUTH_HEADER_PATTERNS = [/\bAuthorization\b/i, /\bBearer\b/i, /\bapikey\b/i];
@@ -578,6 +737,25 @@ const FRONTEND_API_CALL_PATTERNS = [/\bfetch\s*\(/i, /\baxios\b/i];
 const LOGIN_PATH_PATTERNS = [/\/login\b/i, /\/signin\b/i];
 const LOGIN_UI_PATTERNS = [/\blogin\b/i, /\bsignin\b/i, /\bpassword\b/i];
 const CAPTCHA_PATTERNS = [/\bcaptcha\b/i, /\brecaptcha\b/i, /\bturnstile\b/i];
+const LOCKOUT_PATTERNS = [
+  /\blockout\b/i,
+  /\baccount\s*lock/i,
+  /\blocked\s*(?:account|user)?\b/i,
+  /\btoo\s+many\s+attempts?\b/i,
+  /\bfailed\s*attempts?\b/i,
+  /\blogin\s*attempts?\b/i,
+  /\bmax(?:imum)?\s*attempts?\b/i,
+  /\bbrute[- ]?force\b/i
+];
+const LOCKOUT_NEGATION_PATTERNS = [
+  /\bno\s+lockout\b/i,
+  /\bwithout\s+lockout\b/i,
+  /\blockout\s*disabled\b/i,
+  /\bdisable(?:d)?\s+lockout\b/i,
+  /\bunlimited\s+attempts?\b/i,
+  /\bno\s+limit\s+on\s+attempts?\b/i,
+  /\bno\s+account\s+lockout\b/i
+];
 
 const AUTH_FILE_PATTERNS = [
   /auth/i,
@@ -621,6 +799,30 @@ const ROUTER_HANDLER_PATTERNS = [
   /Deno\.serve\s*\(/i,
   /addEventListener\s*\(\s*['"]fetch['"]\s*\)/i
 ];
+const SERVER_ACTION_DIRECTIVE_PATTERN = /(^|\n)\s*["']use server["']\s*;?/i;
+const USE_CLIENT_DIRECTIVE_PATTERN = /(^|\n)\s*["']use client["']\s*;?/i;
+
+const UPLOAD_SIGNAL_PATTERNS = [
+  /\bmultipart\/form-data\b/i,
+  /\bformData\b/i,
+  /\bmulter\b/i,
+  /\bbusboy\b/i,
+  /\bformidable\b/i,
+  /\bfileUpload\b/i,
+  /\breq\.files?\b/i,
+  /\bcreateReadStream\b/i
+];
+const UPLOAD_PATH_PATTERNS = [/\/upload(s)?(\/|$)/i, /file[-_]?upload/i];
+const UPLOAD_SIZE_LIMIT_PATTERNS = [
+  /\bcontent-length\b/i,
+  /\bmax(?:imum)?\s*file\s*size\b/i,
+  /\bmax(?:imum)?\s*bytes\b/i,
+  /\bsizeLimit\b/i,
+  /\bmaxBodySize\b/i,
+  /\bfileSize\b/i,
+  /\bfilesize\b/i,
+  /\blimits?\b[^;\n]*\bfile/i
+];
 
 const MAX_CANDIDATES = 60;
 const MAX_EVIDENCE_LINES = 2;
@@ -632,6 +834,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   permissive_cors: 110,
   missing_webhook_signature: 110,
   webhook_signature_missing: 110,
+  missing_webhook_config_integrity: 112,
   webhook_code_execution: 105,
   jwt_validation_bypass: 105,
   weak_jwt_secret: 100,
@@ -640,7 +843,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   org_id_trust: 95,
   unsafe_query_builder: 90,
   debug_auth_leak: 85,
-  anon_key_bearer: 85,
+  anon_key_bearer: 95,
   missing_bearer_token: 80,
   sensitive_logging: 75,
   command_output_logging: 85,
@@ -648,18 +851,30 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   missing_timeout: 65,
   frontend_only_authorization: 75,
   missing_rate_limiting: 45,
+  missing_lockout: 44,
   missing_audit_logging: 65,
-  frontend_login_rate_limit: 40
+  missing_upload_size_limit: 60,
+  frontend_login_rate_limit: 40,
+  frontend_secret_exposure: 90,
+  missing_least_privilege: 60
 };
 
 const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   sql_injection: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true }
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: {
+      endpointContext: true,
+      sharedContext: true,
+      sinkTypes: ["sql.query"]
+    }
   },
   unsafe_query_builder: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, sinkTypes: ["db.query"] }
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: {
+      endpointContext: true,
+      sharedContext: true,
+      sinkTypes: ["db.query"]
+    }
   },
   command_injection: {
     allowedScopes: ["backend_endpoint"],
@@ -670,8 +885,8 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { endpointContext: true, sinkTypes: ["db.query", "sql.query"] }
   },
   org_id_trust: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, sinkTypes: ["db.write"] }
+    allowedScopes: ["backend_endpoint", "frontend_ui"],
+    requiresEvidence: { sinkTypes: ["db.write", "http.request"] }
   },
   debug_auth_leak: {
     allowedScopes: ["backend_endpoint"],
@@ -681,11 +896,19 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true, sensitiveAction: true }
   },
-  missing_audit_logging: {
+  missing_lockout: {
     allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, destructiveAction: true }
+    requiresEvidence: { endpointContext: true, sensitiveAction: true }
+  },
+  missing_audit_logging: {
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: { endpointContext: true, sharedContext: true, destructiveAction: true }
   },
   missing_webhook_signature: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
+  missing_webhook_config_integrity: {
     allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true }
   },
@@ -718,8 +941,16 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["backend_endpoint", "backend_shared"]
   },
   missing_timeout: {
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: {
+      endpointContext: true,
+      sharedContext: true,
+      sinkTypes: ["http.request", "exec"]
+    }
+  },
+  missing_upload_size_limit: {
     allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, sinkTypes: ["http.request", "exec"] }
+    requiresEvidence: { endpointContext: true }
   },
   dangerous_html_render: {
     allowedScopes: ["frontend_ui"],
@@ -729,13 +960,19 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["frontend_ui", "frontend_util"]
   },
   anon_key_bearer: {
-    allowedScopes: ["frontend_ui", "frontend_util"]
+    allowedScopes: ["frontend_ui", "frontend_util", "backend_shared"]
   },
   missing_bearer_token: {
     allowedScopes: ["frontend_ui", "frontend_util"]
   },
   frontend_login_rate_limit: {
     allowedScopes: ["frontend_ui"]
+  },
+  frontend_secret_exposure: {
+    allowedScopes: ["frontend_ui", "frontend_util", "backend_shared", "config_metadata"]
+  },
+  missing_least_privilege: {
+    allowedScopes: ["backend_shared", "config_metadata"]
   }
 };
 
@@ -756,8 +993,8 @@ const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { endpointContext: true, sensitiveAction: true }
   },
   audit_logging: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true, destructiveAction: true }
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: { endpointContext: true, sharedContext: true, destructiveAction: true }
   },
   secure_token_handling: {
     allowedScopes: ["backend_endpoint", "backend_shared"]
@@ -771,14 +1008,18 @@ const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { endpointContext: true }
   },
   timeout: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { sinkTypes: ["http.request", "exec"] }
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: {
+      endpointContext: true,
+      sharedContext: true,
+      sinkTypes: ["http.request", "exec"]
+    }
   },
   secure_rendering: {
     allowedScopes: ["frontend_ui"]
   },
   no_frontend_only_auth: {
-    allowedScopes: ["frontend_ui", "frontend_util"]
+    allowedScopes: ["frontend_ui", "frontend_util", "backend_endpoint"]
   },
   no_sensitive_secrets: {
     allowedScopes: ["frontend_ui", "frontend_util"]
@@ -800,9 +1041,17 @@ function ruleGateAllows(
 }
 
 function evidenceMatchesGate(gate: RuleEvidenceGate, evidence: FileScopeEvidence): boolean {
-  if (gate.endpointContext && !evidence.isEndpoint) return false;
-  if (gate.sharedContext && !evidence.isShared) return false;
-  if (gate.sensitiveAction && evidence.sensitiveActionHints.length === 0) return false;
+  const requiresEndpoint = Boolean(gate.endpointContext);
+  const requiresShared = Boolean(gate.sharedContext);
+  if (requiresEndpoint && requiresShared) {
+    if (!evidence.isEndpoint && !evidence.isShared) return false;
+  } else {
+    if (requiresEndpoint && !evidence.isEndpoint) return false;
+    if (requiresShared && !evidence.isShared) return false;
+  }
+  if (gate.sensitiveAction && evidence.sensitiveActionHints.length === 0 && !evidence.isServerAction) {
+    return false;
+  }
   if (gate.destructiveAction && !evidence.sensitiveActionHints.includes("destructive")) {
     return false;
   }
@@ -830,13 +1079,26 @@ function collectGateMismatches(
     mismatches.push("evidence");
     return mismatches;
   }
-  if (gate.requiresEvidence.endpointContext && !evidence.isEndpoint) {
-    mismatches.push("endpoint");
+  const requiresEndpoint = Boolean(gate.requiresEvidence.endpointContext);
+  const requiresShared = Boolean(gate.requiresEvidence.sharedContext);
+  if (requiresEndpoint && requiresShared) {
+    if (!evidence.isEndpoint && !evidence.isShared) {
+      mismatches.push("endpoint");
+      mismatches.push("shared");
+    }
+  } else {
+    if (requiresEndpoint && !evidence.isEndpoint) {
+      mismatches.push("endpoint");
+    }
+    if (requiresShared && !evidence.isShared) {
+      mismatches.push("shared");
+    }
   }
-  if (gate.requiresEvidence.sharedContext && !evidence.isShared) {
-    mismatches.push("shared");
-  }
-  if (gate.requiresEvidence.sensitiveAction && evidence.sensitiveActionHints.length === 0) {
+  if (
+    gate.requiresEvidence.sensitiveAction &&
+    evidence.sensitiveActionHints.length === 0 &&
+    !evidence.isServerAction
+  ) {
     mismatches.push("sensitive");
   }
   if (
@@ -955,10 +1217,11 @@ export function buildCandidateFindings(
     const roles = assignment?.roles ?? [];
     const content = file.content ?? "";
     const startLine = file.startLine ?? 1;
-    const backendCandidate = isLikelyBackendFile(file.path, roles);
     const scopeAssignment = scopeByPath.get(normalizePath(file.path));
     const scopeValue = scopeAssignment?.scope ?? "unknown";
     const scopeEvidence = scopeAssignment?.evidence;
+    const backendCandidate =
+      isLikelyBackendFile(file.path, roles) || Boolean(scopeEvidence?.isShared);
     const canRunRule = (ruleId: string) =>
       ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
 
@@ -971,7 +1234,7 @@ export function buildCandidateFindings(
       }
 
       if (canRunRule("org_id_trust")) {
-        const orgTrust = detectOrgIdTrustCandidate(file, roles);
+        const orgTrust = detectOrgIdTrustCandidate(file, roles, scopeEvidence);
         if (orgTrust) {
           candidates.push(orgTrust);
         }
@@ -979,21 +1242,32 @@ export function buildCandidateFindings(
 
       if (canRunRule("sql_injection")) {
         const sqlLine = findFirstLineMatch(content, SQL_INJECTION_PATTERNS, startLine);
-        if (sqlLine) {
+        const rawSqlLine = sqlLine
+          ? null
+          : findFirstLineMatch(content, RAW_SQL_HELPER_PATTERNS, startLine);
+        if (sqlLine || rawSqlLine) {
+          const matchLine = sqlLine ?? rawSqlLine;
+          const summary = rawSqlLine
+            ? "Unsafe raw SQL execution helper without parameterization"
+            : "SQL injection via raw SQL string concatenation";
+          const rationale = rawSqlLine
+            ? "Raw SQL helpers increase injection risk when request input is passed through without parameterization."
+            : "Raw SQL appears to include user-controlled input via string concatenation or template interpolation.";
           candidates.push({
-            id: `sql-injection:${file.path}:${sqlLine.line}`,
+            id: `sql-injection:${file.path}:${matchLine?.line ?? startLine}`,
             type: "sql_injection",
-            summary: "SQL injection via raw SQL string concatenation",
-            rationale:
-              "Raw SQL appears to include user-controlled input via string concatenation or template interpolation.",
+            summary,
+            rationale,
             filepath: file.path,
             evidence: [
               {
                 filepath: file.path,
-                startLine: sqlLine.line,
-                endLine: sqlLine.line,
-                excerpt: sqlLine.text,
-                note: "Raw SQL with interpolated request input"
+                startLine: matchLine?.line ?? startLine,
+                endLine: matchLine?.line ?? startLine,
+                excerpt: matchLine?.text,
+                note: rawSqlLine
+                  ? "Raw SQL helper detected"
+                  : "Raw SQL with interpolated request input"
               }
             ],
             relatedFileRoles: roles
@@ -1059,6 +1333,13 @@ export function buildCandidateFindings(
           ]),
           relatedFileRoles: roles
         });
+      }
+    }
+
+    if (canRunRule("org_id_trust") && scopeValue === "frontend_ui") {
+      const orgTrust = detectFrontendOrgIdTrustCandidate(file, roles);
+      if (orgTrust) {
+        candidates.push(orgTrust);
       }
     }
 
@@ -1211,20 +1492,31 @@ export function buildCandidateFindings(
 
     if (canRunRule("sensitive_logging")) {
       const sensitiveLogLine = findLogLineWithKeywords(content, startLine, SENSITIVE_LOG_PATTERNS);
-      if (sensitiveLogLine) {
+      const requestBodyLogLine = sensitiveLogLine
+        ? null
+        : hasRequestBodySignal(content)
+          ? findLogLineWithKeywords(content, startLine, REQUEST_BODY_LOG_PATTERNS)
+          : null;
+      const logLine = sensitiveLogLine ?? requestBodyLogLine;
+      if (logLine) {
+        const summary = requestBodyLogLine
+          ? "Sensitive request body logged without redaction"
+          : "Sensitive data (plaintext tokens/secrets) written to logs";
         candidates.push({
-          id: `sensitive-log:${file.path}:${sensitiveLogLine.line}`,
+          id: `sensitive-log:${file.path}:${logLine.line}`,
           type: "sensitive_logging",
-          summary: "Sensitive data (plaintext tokens/secrets) written to logs",
-          rationale: "Logging statements appear to include tokens, secrets, or credentials.",
+          summary,
+          rationale: requestBodyLogLine
+            ? "Request bodies often contain sensitive data and should not be logged without redaction."
+            : "Logging statements appear to include tokens, secrets, or credentials.",
           filepath: file.path,
           evidence: [
             {
               filepath: file.path,
-              startLine: sensitiveLogLine.line,
-              endLine: sensitiveLogLine.line,
-              excerpt: sensitiveLogLine.text,
-              note: "Sensitive value logged"
+              startLine: logLine.line,
+              endLine: logLine.line,
+              excerpt: logLine.text,
+              note: requestBodyLogLine ? "Request body logged" : "Sensitive value logged"
             }
           ],
           relatedFileRoles: roles
@@ -1297,6 +1589,35 @@ export function buildCandidateFindings(
             endLine: line?.line ?? startLine,
             excerpt: line?.text,
             note: "Webhook handler without signature verification"
+          }
+        ],
+        relatedFileRoles: roles
+      });
+    }
+
+    if (
+      canRunRule("missing_webhook_config_integrity") &&
+      roles.includes("WEBHOOK_ENDPOINT") &&
+      hasWebhookConfigFetch(content) &&
+      !hasWebhookConfigIntegrityCheck(content, startLine)
+    ) {
+      const line =
+        findFirstLineMatch(content, WEBHOOK_CONFIG_PATTERNS, startLine) ??
+        findFirstLineMatch(content, EXTERNAL_CALL_PATTERNS, startLine);
+      candidates.push({
+        id: `webhook-config-integrity:${file.path}:${line?.line ?? startLine}`,
+        type: "missing_webhook_config_integrity",
+        summary: "Webhook config payload fetched without integrity verification",
+        rationale:
+          "Webhook handlers should verify the integrity of external configuration payloads before applying them.",
+        filepath: file.path,
+        evidence: [
+          {
+            filepath: file.path,
+            startLine: line?.line ?? startLine,
+            endLine: line?.line ?? startLine,
+            excerpt: line?.text,
+            note: "Webhook config fetched without integrity checks"
           }
         ],
         relatedFileRoles: roles
@@ -1376,6 +1697,22 @@ export function buildCandidateFindings(
       });
     }
 
+    if (canRunRule("anon_key_bearer") && !(roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE"))) {
+      const adminEvidence = findAnonKeyAdminEvidence(content, startLine, file.path);
+      if (adminEvidence) {
+        candidates.push({
+          id: `anon-key-admin:${file.path}:${adminEvidence[0]?.startLine ?? startLine}`,
+          type: "anon_key_bearer",
+          summary: "Supabase anon key used for privileged server client",
+          rationale:
+            "Shared helpers appear to use a public anon key in an admin/service context, which can grant unintended access.",
+          filepath: file.path,
+          evidence: trimEvidence(adminEvidence),
+          relatedFileRoles: roles
+        });
+      }
+    }
+
     if (
       canRunRule("missing_bearer_token") &&
       (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
@@ -1400,6 +1737,58 @@ export function buildCandidateFindings(
         ],
         relatedFileRoles: roles
       });
+    }
+
+    if (canRunRule("frontend_secret_exposure")) {
+      const secretLine = findNextPublicSecretLine(content, startLine);
+      if (secretLine) {
+        const hasServiceRole = /SERVICE_ROLE/i.test(secretLine.text);
+        const summary = hasServiceRole
+          ? "NEXT_PUBLIC env var exposes a service role key"
+          : "NEXT_PUBLIC env var exposes a privileged secret";
+        candidates.push({
+          id: `frontend-secret:${file.path}:${secretLine.line}`,
+          type: "frontend_secret_exposure",
+          summary,
+          rationale:
+            "Environment variables prefixed with NEXT_PUBLIC are bundled into client code and should not contain secrets.",
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: secretLine.line,
+              endLine: secretLine.line,
+              excerpt: secretLine.text,
+              note: "NEXT_PUBLIC secret exposure"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      }
+    }
+
+    if (canRunRule("missing_least_privilege")) {
+      const bucketLine = findPublicBucketLine(content, startLine);
+      if (bucketLine) {
+        candidates.push({
+          id: `public-bucket:${file.path}:${bucketLine.line}`,
+          type: "missing_least_privilege",
+          summary: "Public storage bucket configured without access controls",
+          rationale:
+            "Storage buckets configured as public can expose sensitive data without least-privilege constraints.",
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: bucketLine.line,
+              endLine: bucketLine.line,
+              excerpt: bucketLine.text,
+              note: "Public bucket configuration detected"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      }
     }
 
     if (
@@ -1497,7 +1886,7 @@ export function buildCandidateFindings(
     }
 
     if (canRunRule("missing_rate_limiting") && isEndpointRole(roles)) {
-      const sensitive = isSensitiveAction(content, roles);
+      const sensitive = isSensitiveAction(content, roles, file.path, scopeEvidence);
       if (sensitive && !hasRateLimit(content)) {
         const line = findFirstLineMatch(content, SENSITIVE_ACTION_PATTERNS, startLine);
         const tokenRelated = isTokenRelated(content, file.path);
@@ -1525,16 +1914,24 @@ export function buildCandidateFindings(
       }
     }
 
-    if (canRunRule("missing_audit_logging") && roles.includes("ADMIN_ENDPOINT") && isDestructiveAction(content, file.path)) {
-      const auditDisabled = matchesAny(content, AUDIT_DISABLE_PATTERNS);
-      if (!hasAuditLogging(content) || auditDisabled) {
-        const line = findFirstLineMatch(content, DESTRUCTIVE_PATTERNS, startLine);
+    if (canRunRule("missing_lockout") && isEndpointRole(roles)) {
+      const lowerPath = file.path ? file.path.toLowerCase() : "";
+      const scopeAuthHint = scopeEvidence?.sensitiveActionHints.includes("auth") ?? false;
+      const loginSignal =
+        roles.includes("AUTH_ENDPOINT") ||
+        scopeAuthHint ||
+        AUTH_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content)) ||
+        LOGIN_PATH_PATTERNS.some((pattern) => pattern.test(lowerPath));
+      if (loginSignal && !hasLockout(content) && !hasCaptcha(content)) {
+        const line =
+          findFirstLineMatch(content, AUTH_ACTION_HINT_PATTERNS, startLine) ??
+          findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine);
         candidates.push({
-          id: `missing-audit-log:${file.path}:${line?.line ?? startLine}`,
-          type: "missing_audit_logging",
-          summary: "No audit log recorded for destructive admin action",
+          id: `missing-lockout:${file.path}:${line?.line ?? startLine}`,
+          type: "missing_lockout",
+          summary: "Login flow missing account lockout protections",
           rationale:
-            "Admin endpoint appears to perform destructive actions without emitting audit logs that capture actor + target.",
+            "Login endpoints should enforce lockout or brute-force defenses to prevent repeated credential stuffing attempts.",
           filepath: file.path,
           evidence: [
             {
@@ -1542,7 +1939,72 @@ export function buildCandidateFindings(
               startLine: line?.line ?? startLine,
               endLine: line?.line ?? startLine,
               excerpt: line?.text,
-              note: "Destructive action without audit logging"
+              note: "Login handling without lockout safeguards"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      }
+    }
+
+    if (
+      canRunRule("missing_upload_size_limit") &&
+      isEndpointRole(roles) &&
+      hasUploadSignal(content, file.path) &&
+      !hasUploadSizeLimit(content)
+    ) {
+      const line =
+        findFirstLineMatch(content, UPLOAD_SIGNAL_PATTERNS, startLine) ??
+        findFirstLineMatch(content, REQUEST_JSON_PATTERNS, startLine);
+      candidates.push({
+        id: `missing-upload-size:${file.path}:${line?.line ?? startLine}`,
+        type: "missing_upload_size_limit",
+        summary: "Large uploads accepted without size limits",
+        rationale:
+          "Upload handlers should enforce file size limits to prevent resource exhaustion and abuse.",
+        filepath: file.path,
+        evidence: [
+          {
+            filepath: file.path,
+            startLine: line?.line ?? startLine,
+            endLine: line?.line ?? startLine,
+            excerpt: line?.text,
+            note: "Upload handler without size limits"
+          }
+        ],
+        relatedFileRoles: roles
+      });
+    }
+
+    if (canRunRule("missing_audit_logging")) {
+      const auditDisabled = matchesAny(content, AUDIT_DISABLE_PATTERNS);
+      const destructiveAdmin =
+        roles.includes("ADMIN_ENDPOINT") && isDestructiveAction(content, file.path);
+      if (auditDisabled || (destructiveAdmin && !hasAuditLogging(content))) {
+        const line = auditDisabled
+          ? findFirstLineMatch(content, AUDIT_DISABLE_PATTERNS, startLine)
+          : findFirstLineMatch(content, DESTRUCTIVE_PATTERNS, startLine);
+        const summary = auditDisabled
+          ? "Audit logging can be disabled or skipped for sensitive actions"
+          : "No audit log recorded for destructive admin action";
+        const rationale = auditDisabled
+          ? "Audit logging appears to be bypassable, which can leave sensitive actions without a trail."
+          : "Admin endpoint appears to perform destructive actions without emitting audit logs that capture actor + target.";
+        candidates.push({
+          id: `missing-audit-log:${file.path}:${line?.line ?? startLine}`,
+          type: "missing_audit_logging",
+          summary,
+          rationale,
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: line?.line ?? startLine,
+              endLine: line?.line ?? startLine,
+              excerpt: line?.text,
+              note: auditDisabled
+                ? "Audit logging can be bypassed"
+                : "Destructive action without audit logging"
             }
           ],
           relatedFileRoles: roles
@@ -1572,30 +2034,28 @@ export function buildCandidateFindings(
       });
     }
 
-    if (
-      canRunRule("missing_timeout") &&
-      (hasExternalCall(content) || roles.includes("HIGH_RISK_EXEC")) &&
-      !hasTimeout(content)
-    ) {
-      const line = findFirstLineMatch(content, [...EXTERNAL_CALL_PATTERNS, ...EXEC_PATTERNS], startLine);
-      candidates.push({
-        id: `missing-timeout:${file.path}:${line?.line ?? startLine}`,
-        type: "missing_timeout",
-        summary: "No timeout on external call or subprocess",
-        rationale:
-          "External requests or subprocesses appear to run without a timeout or abort signal.",
-        filepath: file.path,
-        evidence: [
-          {
-            filepath: file.path,
-            startLine: line?.line ?? startLine,
-            endLine: line?.line ?? startLine,
-            excerpt: line?.text,
-            note: "External call or exec without timeout"
-          }
-        ],
-        relatedFileRoles: roles
-      });
+    if (canRunRule("missing_timeout")) {
+      const line = findMissingTimeoutLine(content, startLine);
+      if (line) {
+        candidates.push({
+          id: `missing-timeout:${file.path}:${line.line}`,
+          type: "missing_timeout",
+          summary: "No timeout on external call or subprocess",
+          rationale:
+            "External requests or subprocesses appear to run without a timeout or abort signal.",
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: line.line,
+              endLine: line.line,
+              excerpt: line.text,
+              note: "External call or exec without timeout"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      }
     }
   }
 
@@ -1608,18 +2068,70 @@ export function buildCandidateFindings(
     const scopeEvidence = scopeAssignment?.evidence;
     const canRunRule = (ruleId: string) =>
       ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
-    const backendCandidate = isLikelyBackendFile(path, roles);
-    if (!isEndpointRole(roles) && !backendCandidate) {
+    const backendCandidate = isLikelyBackendFile(path, roles) || Boolean(scopeEvidence?.isShared);
+    const frontendOrgTrustCandidate = scopeValue === "frontend_ui" && canRunRule("org_id_trust");
+    if (!isEndpointRole(roles) && !backendCandidate && !frontendOrgTrustCandidate) {
       continue;
     }
-    if (canRunRule("idor")) {
-      const idor = detectIdorCandidateAcrossChunks(group, roles);
-      if (idor) {
-        candidates.push(idor);
+    if (isEndpointRole(roles) || backendCandidate) {
+      if (canRunRule("idor")) {
+        const idor = detectIdorCandidateAcrossChunks(group, roles);
+        if (idor) {
+          candidates.push(idor);
+        }
+      }
+      if (canRunRule("org_id_trust")) {
+        const orgTrust = detectOrgIdTrustCandidateAcrossChunks(group, roles, scopeEvidence);
+        if (orgTrust) {
+          candidates.push(orgTrust);
+        }
+      }
+      if (
+        canRunRule("missing_webhook_config_integrity") &&
+        roles.includes("WEBHOOK_ENDPOINT") &&
+        hasWebhookConfigFetchAcrossSamples(group) &&
+        !hasWebhookConfigIntegrityAcrossSamples(group)
+      ) {
+        const configLine = findFirstLineMatchAcrossSamples(group, WEBHOOK_CONFIG_PATTERNS);
+        const fetchLine = findFirstLineMatchAcrossSamples(group, EXTERNAL_CALL_PATTERNS);
+        const evidence = trimEvidence([
+          ...(configLine
+            ? [
+                {
+                  filepath: configLine.filepath,
+                  startLine: configLine.line,
+                  endLine: configLine.line,
+                  excerpt: configLine.text,
+                  note: "Webhook config reference"
+                }
+              ]
+            : []),
+          ...(fetchLine
+            ? [
+                {
+                  filepath: fetchLine.filepath,
+                  startLine: fetchLine.line,
+                  endLine: fetchLine.line,
+                  excerpt: fetchLine.text,
+                  note: "External config fetch"
+                }
+              ]
+            : [])
+        ]);
+        candidates.push({
+          id: `webhook-config-integrity:${path}:${configLine?.line ?? fetchLine?.line ?? group[0]?.startLine ?? 1}`,
+          type: "missing_webhook_config_integrity",
+          summary: "Webhook config payload fetched without integrity verification",
+          rationale:
+            "Webhook handlers should verify the integrity of external configuration payloads before applying them.",
+          filepath: path,
+          evidence,
+          relatedFileRoles: roles
+        });
       }
     }
-    if (canRunRule("org_id_trust")) {
-      const orgTrust = detectOrgIdTrustCandidateAcrossChunks(group, roles);
+    if (frontendOrgTrustCandidate) {
+      const orgTrust = detectFrontendOrgIdTrustCandidateAcrossChunks(group, roles);
       if (orgTrust) {
         candidates.push(orgTrust);
       }
@@ -1634,13 +2146,23 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
   const roles = new Set<FileRole>();
   const path = file.path || "";
   const lowerPath = path.toLowerCase();
+  const pathForHints = lowerPath.startsWith("/") ? lowerPath : `/${lowerPath}`;
   const base = lowerPath.split("/").pop() ?? "";
   const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
   const content = file.content ?? "";
   const isFrontend =
     FRONTEND_EXTENSIONS.has(ext) || FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  const isServerAction =
+    hasServerActionDirective(content) ||
+    SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
 
   if (lowerPath.includes("/migrations/") || lowerPath.includes("/migration/")) {
+    roles.add("MIGRATION");
+  }
+  if (
+    ext === "sql" &&
+    (lowerPath.includes("/db/") || lowerPath.includes("/schema/") || base.includes("schema"))
+  ) {
     roles.add("MIGRATION");
   }
 
@@ -1674,6 +2196,10 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
 
   if (hasHighRiskExec(content)) {
     roles.add("HIGH_RISK_EXEC");
+  }
+
+  if (isServerAction) {
+    roles.add("USER_WRITE_ENDPOINT");
   }
 
   const methods = detectHttpMethods(content);
@@ -1763,8 +2289,10 @@ type PathHints = {
   isFrontendUi: boolean;
   isFrontendUtil: boolean;
   isBackend: boolean;
+  isAppRouterApiPath: boolean;
   isBackendEndpointHint: boolean;
   isBackendShared: boolean;
+  isServerActionPath: boolean;
   isDestructivePathHint: boolean;
 };
 
@@ -1787,13 +2315,16 @@ function normalizePath(value: string): string {
 function buildPathHints(path: string): PathHints {
   const normalized = normalizePath(path);
   const lowerPath = normalized.toLowerCase();
+  const pathForHints = lowerPath.startsWith("/") ? lowerPath : `/${lowerPath}`;
   const base = lowerPath.split("/").pop() ?? "";
   const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
   const isConfig = isConfigPath(lowerPath, base, ext);
   const isDocsTests = isDocsTestsPath(lowerPath, base, ext);
+  const isAppRouterApiPath = APP_ROUTER_API_PATH_PATTERN.test(pathForHints);
   const isFrontend =
-    FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint)) ||
-    FRONTEND_UI_EXTENSIONS.has(ext);
+    !isAppRouterApiPath &&
+    (FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint)) ||
+      FRONTEND_UI_EXTENSIONS.has(ext));
   const isFrontendUi =
     isFrontend &&
     (FRONTEND_UI_EXTENSIONS.has(ext) ||
@@ -1801,11 +2332,13 @@ function buildPathHints(path: string): PathHints {
   const isFrontendUtil =
     isFrontend && FRONTEND_UTIL_PATH_HINTS.some((hint) => lowerPath.includes(hint));
   const isBackend =
-    BACKEND_PATH_HINTS.some((hint) => lowerPath.includes(hint)) ||
-    BACKGROUND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
-  const isBackendShared = BACKEND_SHARED_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+    BACKEND_PATH_HINTS.some((hint) => pathForHints.includes(hint)) ||
+    BACKGROUND_PATH_HINTS.some((hint) => pathForHints.includes(hint));
+  const isBackendShared = BACKEND_SHARED_PATH_HINTS.some((hint) => pathForHints.includes(hint));
   const isBackendEndpointHint =
-    !isBackendShared && BACKEND_ENDPOINT_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+    isAppRouterApiPath ||
+    (!isBackendShared && BACKEND_ENDPOINT_PATH_HINTS.some((hint) => pathForHints.includes(hint)));
+  const isServerActionPath = SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
   const isDestructivePathHint = DESTRUCTIVE_PATH_HINT_PATTERNS.some((pattern) => pattern.test(lowerPath));
 
   return {
@@ -1818,8 +2351,10 @@ function buildPathHints(path: string): PathHints {
     isFrontendUi,
     isFrontendUtil,
     isBackend,
+    isAppRouterApiPath,
     isBackendEndpointHint,
     isBackendShared,
+    isServerActionPath,
     isDestructivePathHint
   };
 }
@@ -1864,7 +2399,11 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
   const headerIsEndpoint = header.hasHeader ? isEndpointEntryType(header.entryPointType) : false;
   const contentIsEndpoint = header.hasHeader ? false : matchesAny(body, ROUTER_HANDLER_PATTERNS);
   const pathIsEndpoint = header.hasHeader ? false : pathHints.isBackendEndpointHint;
-  const isEndpoint = header.hasHeader ? headerIsEndpoint : contentIsEndpoint || pathIsEndpoint;
+  const detectedServerAction = pathHints.isServerActionPath || hasServerActionDirective(body);
+  const isServerAction = detectedServerAction;
+  const isEndpoint = header.hasHeader
+    ? headerIsEndpoint || detectedServerAction
+    : contentIsEndpoint || pathIsEndpoint || detectedServerAction;
   const isShared = pathHints.isBackendShared || isSharedEntryType(header.entryPointType);
 
   return {
@@ -1874,6 +2413,7 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
     entryPointHints,
     sinks,
     sensitiveActionHints,
+    isServerAction,
     fromSecurityHeader: header.hasHeader
   };
 }
@@ -1889,6 +2429,11 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
   );
   const isShared = evidenceList.some((evidence) => evidence.isShared);
   const isConfig = evidenceList.some((evidence) => evidence.isConfig);
+  const isServerAction = evidenceList.some((evidence) => evidence.isServerAction);
+  const mergedSensitiveActionHints =
+    isServerAction && !sensitiveActionHints.includes("server.action")
+      ? [...sensitiveActionHints, "server.action"]
+      : sensitiveActionHints;
 
   return {
     isEndpoint,
@@ -1896,7 +2441,8 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
     isConfig,
     entryPointHints,
     sinks,
-    sensitiveActionHints,
+    sensitiveActionHints: mergedSensitiveActionHints,
+    isServerAction,
     fromSecurityHeader: headerEvidence.length > 0
   };
 }
@@ -1907,6 +2453,15 @@ function decideFileScope(pathHints: PathHints, evidence: FileScopeEvidence): Fil
   }
   if (pathHints.isDocsTests) {
     return "docs_tests";
+  }
+  if (pathHints.isAppRouterApiPath) {
+    return "backend_endpoint";
+  }
+  if (evidence.isServerAction || pathHints.isServerActionPath) {
+    return "backend_endpoint";
+  }
+  if (evidence.isEndpoint && (pathHints.isBackendEndpointHint || pathHints.isBackend)) {
+    return "backend_endpoint";
   }
   if (pathHints.isFrontend) {
     if (pathHints.isFrontendUtil && !pathHints.isFrontendUi) {
@@ -2015,6 +2570,9 @@ function collectEntryPointHints(content: string, header: SecurityHeaderHints): s
   }
 
   const hints: string[] = [];
+  if (hasServerActionDirective(content)) {
+    hints.push("server.action");
+  }
   if (/Deno\.serve\s*\(/i.test(content)) {
     hints.push("deno.serve");
   }
@@ -2045,7 +2603,7 @@ function collectSinkHints(content: string, header: SecurityHeaderHints): string[
   if (matchesAny(content, DB_ID_PATTERNS) || matchesAny(content, QUERY_BUILDER_PATTERNS)) {
     hints.push("db.query");
   }
-  if (matchesAny(content, SQL_INJECTION_PATTERNS)) {
+  if (matchesAny(content, SQL_INJECTION_PATTERNS) || matchesAny(content, RAW_SQL_HELPER_PATTERNS)) {
     hints.push("sql.query");
   }
   if (matchesAny(content, EXEC_PATTERNS) || matchesAny(content, COMMAND_INJECTION_PATTERNS)) {
@@ -2064,6 +2622,15 @@ function collectSensitiveActionHints(content: string, pathHints?: PathHints): st
   const hints: string[] = [];
   if (AUTH_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
     hints.push("auth");
+  }
+  if (SENSITIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content))) {
+    hints.push("action");
+  }
+  if (matchesAny(content, DB_WRITE_PATTERNS)) {
+    hints.push("db.write");
+  }
+  if (hasServerActionDirective(content) || pathHints?.isServerActionPath) {
+    hints.push("server.action");
   }
   const destructiveByContent = DESTRUCTIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content));
   const destructiveByPath = pathHints
@@ -2102,6 +2669,7 @@ function isEndpointRole(roles: FileRole[]): boolean {
 function isLikelyBackendFile(path: string, roles: FileRole[]): boolean {
   if (!path) return false;
   const lowerPath = path.toLowerCase();
+  const pathForHints = lowerPath.startsWith("/") ? lowerPath : `/${lowerPath}`;
   const base = lowerPath.split("/").pop() ?? "";
   const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
   if (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) {
@@ -2110,7 +2678,13 @@ function isLikelyBackendFile(path: string, roles: FileRole[]): boolean {
   if (FRONTEND_EXTENSIONS.has(ext)) {
     return false;
   }
-  return BACKEND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
+  if (SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints))) {
+    return true;
+  }
+  return (
+    BACKEND_PATH_HINTS.some((hint) => pathForHints.includes(hint)) ||
+    BACKEND_SHARED_PATH_HINTS.some((hint) => pathForHints.includes(hint))
+  );
 }
 
 function hasHighRiskExec(content: string): boolean {
@@ -2122,12 +2696,64 @@ function hasRoleCheck(content: string): boolean {
 }
 
 function hasRateLimit(content: string): boolean {
-  return RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(content));
+  if (!content) return false;
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (!RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+    if (RATE_LIMIT_NEGATION_PATTERNS.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
-function isSensitiveAction(content: string, roles: FileRole[]): boolean {
+function hasLockout(content: string): boolean {
+  if (!content) return false;
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (!LOCKOUT_PATTERNS.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+    if (LOCKOUT_NEGATION_PATTERNS.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function isSensitiveAction(
+  content: string,
+  roles: FileRole[],
+  filepath?: string,
+  scopeEvidence?: FileScopeEvidence
+): boolean {
   if (roles.includes("AUTH_ENDPOINT")) {
     return true;
+  }
+  if (scopeEvidence) {
+    if (scopeEvidence.isServerAction) {
+      return true;
+    }
+    if (scopeEvidence.sensitiveActionHints.length > 0) {
+      return true;
+    }
+  }
+  if (matchesAny(content, DB_WRITE_PATTERNS)) {
+    return true;
+  }
+  if (hasServerActionDirective(content)) {
+    return true;
+  }
+  if (filepath) {
+    const normalized = normalizePath(filepath);
+    const pathForHints = normalized.startsWith("/") ? normalized : `/${normalized}`;
+    if (SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints))) {
+      return true;
+    }
   }
   return SENSITIVE_ACTION_PATTERNS.some((pattern) => pattern.test(content));
 }
@@ -2153,11 +2779,50 @@ function hasAuditLogging(content: string): boolean {
   return AUDIT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
+function collectSelectQueryVariables(content: string): string[] {
+  const vars = new Set<string>();
+  const assignmentPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]{0,200}?)(?:;|\n)/g;
+  for (const match of content.matchAll(assignmentPattern)) {
+    const varName = match[1];
+    const expression = match[2] ?? "";
+    if (!varName || !expression) continue;
+    if (!UNBOUNDED_SELECT_PATTERNS.some((pattern) => pattern.test(expression))) {
+      continue;
+    }
+    if (LIMIT_PATTERNS.some((pattern) => pattern.test(expression))) {
+      continue;
+    }
+    vars.add(varName);
+  }
+  return Array.from(vars);
+}
+
 function hasUnboundedSelect(content: string): boolean {
   if (!UNBOUNDED_SELECT_PATTERNS.some((pattern) => pattern.test(content))) {
     return false;
   }
-  return !LIMIT_PATTERNS.some((pattern) => pattern.test(content));
+  const selectPattern = /\.select\s*\(/gi;
+  let match: RegExpExecArray | null = selectPattern.exec(content);
+  while (match) {
+    const start = match.index ?? 0;
+    const window = content.slice(start, start + 240);
+    if (!LIMIT_PATTERNS.some((pattern) => pattern.test(window))) {
+      return true;
+    }
+    match = selectPattern.exec(content);
+  }
+
+  const queryVars = collectSelectQueryVariables(content);
+  for (const queryVar of queryVars) {
+    const escaped = queryVar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const awaitPattern = new RegExp(`\\bawait\\s+${escaped}\\b(?!\\s*\\.)`, "i");
+    if (awaitPattern.test(content)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function hasExternalCall(content: string): boolean {
@@ -2167,6 +2832,26 @@ function hasExternalCall(content: string): boolean {
 
 function hasTimeout(content: string): boolean {
   return TIMEOUT_PATTERNS.some((pattern) => pattern.test(content));
+}
+
+function findMissingTimeoutLine(
+  content: string,
+  startLine: number
+): { line: number; text: string } | null {
+  if (!content) return null;
+  const matches = findLineMatches(content, [...EXTERNAL_CALL_PATTERNS, ...EXEC_PATTERNS], startLine);
+  for (const match of matches) {
+    if (TIMEOUT_PATTERNS.some((pattern) => pattern.test(match.text))) {
+      continue;
+    }
+    if (match.text.includes(")")) {
+      return match;
+    }
+    if (!hasPatternNearLine(content, match.line, startLine, TIMEOUT_PATTERNS, 4)) {
+      return match;
+    }
+  }
+  return null;
 }
 
 function hasPermissiveCors(content: string): boolean {
@@ -2205,8 +2890,68 @@ function isTokenRelated(content: string, path: string): boolean {
     lowerPath.includes("secret");
 }
 
+function hasServerActionDirective(content: string): boolean {
+  if (!content) return false;
+  return SERVER_ACTION_DIRECTIVE_PATTERN.test(content);
+}
+
+function hasUseClientDirective(content: string): boolean {
+  if (!content) return false;
+  return USE_CLIENT_DIRECTIVE_PATTERN.test(content);
+}
+
 function hasWebhookSignatureCheck(content: string): boolean {
   return WEBHOOK_SIGNATURE_PATTERNS.some((pattern) => pattern.test(content));
+}
+
+function hasWebhookConfigFetch(content: string): boolean {
+  const hasConfigReference = matchesAny(content, WEBHOOK_CONFIG_PATTERNS);
+  if (!hasConfigReference) {
+    return false;
+  }
+  return matchesAny(content, EXTERNAL_CALL_PATTERNS);
+}
+
+function hasWebhookConfigIntegrityCheck(content: string, startLine = 1): boolean {
+  const matches = findLineMatches(content, WEBHOOK_CONFIG_INTEGRITY_PATTERNS, startLine);
+  if (matches.length === 0) {
+    return false;
+  }
+  for (const match of matches) {
+    if (!hasPatternNearLine(content, match.line, startLine, WEBHOOK_CONFIG_PATTERNS, 6)) {
+      continue;
+    }
+    if (hasPatternNearLine(content, match.line, startLine, EXTERNAL_CALL_PATTERNS, 6)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasWebhookConfigFetchAcrossSamples(samples: RepositoryFileSample[]): boolean {
+  const hasConfigReference = matchesAnyAcrossSamples(samples, WEBHOOK_CONFIG_PATTERNS);
+  if (!hasConfigReference) {
+    return false;
+  }
+  return matchesAnyAcrossSamples(samples, EXTERNAL_CALL_PATTERNS);
+}
+
+function hasWebhookConfigIntegrityAcrossSamples(samples: RepositoryFileSample[]): boolean {
+  return samples.some((sample) =>
+    hasWebhookConfigIntegrityCheck(sample.content ?? "", sample.startLine ?? 1)
+  );
+}
+
+function hasUploadSignal(content: string, path: string): boolean {
+  const lowerPath = path.toLowerCase();
+  if (UPLOAD_PATH_PATTERNS.some((pattern) => pattern.test(lowerPath))) {
+    return true;
+  }
+  return UPLOAD_SIGNAL_PATTERNS.some((pattern) => pattern.test(content));
+}
+
+function hasUploadSizeLimit(content: string): boolean {
+  return UPLOAD_SIZE_LIMIT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function hasCodeExecution(content: string): boolean {
@@ -2229,6 +2974,85 @@ function hasMissingBearerToken(content: string): boolean {
     return false;
   }
   return !matchesAny(content, AUTH_HEADER_PATTERNS) && !matchesAny(content, ACCESS_TOKEN_PATTERNS);
+}
+
+function hasRequestBodySignal(content: string): boolean {
+  if (matchesAny(content, REQUEST_BODY_PATTERNS) || matchesAny(content, REQUEST_JSON_PATTERNS)) {
+    return true;
+  }
+  return Boolean(findLogLineWithKeywords(content, 1, REQUEST_BODY_LOG_PATTERNS));
+}
+
+function findAnonKeyAdminEvidence(
+  content: string,
+  startLine: number,
+  filepath: string
+): CandidateEvidence[] | null {
+  if (!matchesAny(content, ANON_KEY_PATTERNS)) {
+    return null;
+  }
+  if (!matchesAny(content, SUPABASE_CONTEXT_PATTERNS)) {
+    return null;
+  }
+  const hasAdminContext = matchesAny(content, ADMIN_CONTEXT_PATTERNS);
+  const hasServiceRoleContext = matchesAny(content, SERVICE_ROLE_KEY_PATTERNS);
+  if (!hasAdminContext && !hasServiceRoleContext) {
+    return null;
+  }
+  const anonLine = findFirstLineMatch(content, ANON_KEY_PATTERNS, startLine);
+  const adminLine = hasAdminContext ? findFirstLineMatch(content, ADMIN_CONTEXT_PATTERNS, startLine) : null;
+  const serviceLine = hasServiceRoleContext
+    ? findFirstLineMatch(content, SERVICE_ROLE_KEY_PATTERNS, startLine)
+    : null;
+  const evidence: CandidateEvidence[] = [];
+  if (adminLine) {
+    evidence.push({
+      filepath,
+      startLine: adminLine.line,
+      endLine: adminLine.line,
+      excerpt: adminLine.text,
+      note: "Admin/service context detected"
+    });
+  }
+  if (anonLine) {
+    evidence.push({
+      filepath,
+      startLine: anonLine.line,
+      endLine: anonLine.line,
+      excerpt: anonLine.text,
+      note: "Anon key referenced"
+    });
+  }
+  if (serviceLine) {
+    evidence.push({
+      filepath,
+      startLine: serviceLine.line,
+      endLine: serviceLine.line,
+      excerpt: serviceLine.text,
+      note: "Service role key available in shared config"
+    });
+  }
+  if (evidence.length === 0) {
+    return null;
+  }
+  return evidence;
+}
+
+function findNextPublicSecretLine(
+  content: string,
+  startLine: number
+): { line: number; text: string } | null {
+  return findFirstLineMatch(content, NEXT_PUBLIC_SECRET_PATTERNS, startLine);
+}
+
+function findPublicBucketLine(
+  content: string,
+  startLine: number
+): { line: number; text: string } | null {
+  if (!matchesAny(content, STORAGE_CONTEXT_PATTERNS)) {
+    return null;
+  }
+  return findFirstLineMatch(content, PUBLIC_BUCKET_PATTERNS, startLine);
 }
 
 function isLoginPage(path: string, content: string): boolean {
@@ -2348,12 +3172,17 @@ function detectIdorCandidate(file: RepositoryFileSample, roles: FileRole[]): Can
   };
 }
 
-function detectOrgIdTrustCandidate(file: RepositoryFileSample, roles: FileRole[]): CandidateFinding | null {
+function detectOrgIdTrustCandidate(
+  file: RepositoryFileSample,
+  roles: FileRole[],
+  scopeEvidence?: FileScopeEvidence
+): CandidateFinding | null {
   const content = file.content ?? "";
   const startLine = file.startLine ?? 1;
 
+  const isServerAction = hasServerActionDirective(content) || Boolean(scopeEvidence?.isServerAction);
   const hasRequestJson = matchesAny(content, REQUEST_JSON_PATTERNS);
-  const hasBodyOrg = hasRequestJson && matchesAny(content, BODY_ORG_PATTERNS);
+  const hasBodyOrg = matchesAny(content, BODY_ORG_PATTERNS) && (hasRequestJson || isServerAction);
   if (!matchesAny(content, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg) {
     return null;
   }
@@ -2392,6 +3221,58 @@ function detectOrgIdTrustCandidate(file: RepositoryFileSample, roles: FileRole[]
     summary: "Trusting client-provided orgId for tenant routing",
     rationale:
       "orgId appears to be taken from request input and used in a write path without server-side derivation.",
+    filepath: file.path,
+    evidence: trimEvidence(evidence),
+    relatedFileRoles: roles
+  };
+}
+
+function detectFrontendOrgIdTrustCandidate(
+  file: RepositoryFileSample,
+  roles: FileRole[]
+): CandidateFinding | null {
+  const content = file.content ?? "";
+  const startLine = file.startLine ?? 1;
+
+  if (hasUseClientDirective(content)) {
+    return null;
+  }
+  if (!matchesAny(content, FRONTEND_ORG_ID_INPUT_PATTERNS)) {
+    return null;
+  }
+  if (!matchesAny(content, EXTERNAL_CALL_PATTERNS)) {
+    return null;
+  }
+
+  const inputLine = findFirstLineMatch(content, FRONTEND_ORG_ID_INPUT_PATTERNS, startLine);
+  const fetchLine = findFirstLineMatch(content, EXTERNAL_CALL_PATTERNS, startLine);
+  if (!inputLine || !fetchLine) {
+    return null;
+  }
+
+  const evidence: CandidateEvidence[] = [
+    {
+      filepath: file.path,
+      startLine: inputLine.line,
+      endLine: inputLine.line,
+      excerpt: inputLine.text,
+      note: "orgId sourced from URL/search params"
+    },
+    {
+      filepath: file.path,
+      startLine: fetchLine.line,
+      endLine: fetchLine.line,
+      excerpt: fetchLine.text,
+      note: "Server-side fetch uses URL orgId"
+    }
+  ];
+
+  return {
+    id: `orgid-trust-frontend:${file.path}:${inputLine.line}`,
+    type: "org_id_trust",
+    summary: "Tenant isolation risk: orgId from URL used in server-side fetch",
+    rationale:
+      "Server-rendered code uses orgId from URL/search params to fetch tenant data without deriving it from server-side auth.",
     filepath: file.path,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles
@@ -2525,11 +3406,20 @@ function detectIdorCandidateAcrossChunks(
 
 function detectOrgIdTrustCandidateAcrossChunks(
   samples: RepositoryFileSample[],
-  roles: FileRole[]
+  roles: FileRole[],
+  scopeEvidence?: FileScopeEvidence
 ): CandidateFinding | null {
   const sorted = [...samples].sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+  const filepath = sorted[0]?.path ?? "";
+  const normalizedPath = normalizePath(filepath);
+  const pathForHints = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+  const isServerAction =
+    Boolean(scopeEvidence?.isServerAction) ||
+    SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints)) ||
+    sorted.some((sample) => hasServerActionDirective(sample.content ?? ""));
   const hasRequestJson = matchesAnyAcrossSamples(sorted, REQUEST_JSON_PATTERNS);
-  const hasBodyOrg = hasRequestJson && matchesAnyAcrossSamples(sorted, BODY_ORG_PATTERNS);
+  const hasBodyOrg =
+    matchesAnyAcrossSamples(sorted, BODY_ORG_PATTERNS) && (hasRequestJson || isServerAction);
   if (!matchesAnyAcrossSamples(sorted, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg) {
     return null;
   }
@@ -2545,7 +3435,6 @@ function detectOrgIdTrustCandidateAcrossChunks(
     return null;
   }
 
-  const filepath = sorted[0]?.path ?? "";
   const evidence: CandidateEvidence[] = [];
   if (inputLine) {
     evidence.push({
@@ -2572,6 +3461,57 @@ function detectOrgIdTrustCandidateAcrossChunks(
     summary: "Trusting client-provided orgId for tenant routing",
     rationale:
       "orgId appears to be taken from request input and used in a write path without server-side derivation.",
+    filepath,
+    evidence: trimEvidence(evidence),
+    relatedFileRoles: roles
+  };
+}
+
+function detectFrontendOrgIdTrustCandidateAcrossChunks(
+  samples: RepositoryFileSample[],
+  roles: FileRole[]
+): CandidateFinding | null {
+  const sorted = [...samples].sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+  if (matchesAnyAcrossSamples(sorted, [USE_CLIENT_DIRECTIVE_PATTERN])) {
+    return null;
+  }
+  if (!matchesAnyAcrossSamples(sorted, FRONTEND_ORG_ID_INPUT_PATTERNS)) {
+    return null;
+  }
+  if (!matchesAnyAcrossSamples(sorted, EXTERNAL_CALL_PATTERNS)) {
+    return null;
+  }
+
+  const inputLine = findFirstLineMatchAcrossSamples(sorted, FRONTEND_ORG_ID_INPUT_PATTERNS);
+  const fetchLine = findFirstLineMatchAcrossSamples(sorted, EXTERNAL_CALL_PATTERNS);
+  if (!inputLine || !fetchLine) {
+    return null;
+  }
+
+  const filepath = sorted[0]?.path ?? "";
+  const evidence: CandidateEvidence[] = [
+    {
+      filepath: inputLine.filepath,
+      startLine: inputLine.line,
+      endLine: inputLine.line,
+      excerpt: inputLine.text,
+      note: "orgId sourced from URL/search params"
+    },
+    {
+      filepath: fetchLine.filepath,
+      startLine: fetchLine.line,
+      endLine: fetchLine.line,
+      excerpt: fetchLine.text,
+      note: "Server-side fetch uses URL orgId"
+    }
+  ];
+
+  return {
+    id: `orgid-trust-frontend:${filepath}:${inputLine.line}`,
+    type: "org_id_trust",
+    summary: "Tenant isolation risk: orgId from URL used in server-side fetch",
+    rationale:
+      "Server-rendered code uses orgId from URL/search params to fetch tenant data without deriving it from server-side auth.",
     filepath,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles

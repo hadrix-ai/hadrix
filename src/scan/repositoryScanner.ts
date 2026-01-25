@@ -32,7 +32,10 @@ import {
   type RuleGateMismatch,
   REQUIRED_CONTROLS
 } from "./repositoryHeuristics.js";
-import { buildFindingIdentityKey, extractFindingIdentityType } from "./dedupeKey.js";
+import {
+  buildFindingIdentityKey,
+  extractFindingIdentityType
+} from "./dedupeKey.js";
 import type { DedupeDebug } from "./debugLog.js";
 
 export interface RepositoryDescriptor {
@@ -126,6 +129,7 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "permissive_cors",
   "debug_auth_leak",
   "missing_webhook_signature",
+  "missing_webhook_config_integrity",
   "webhook_code_execution",
   "jwt_validation_bypass",
   "weak_jwt_secret",
@@ -142,7 +146,11 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "frontend_only_authorization",
   "frontend_login_rate_limit",
   "missing_rate_limiting",
-  "missing_audit_logging"
+  "missing_lockout",
+  "missing_audit_logging",
+  "missing_upload_size_limit",
+  "frontend_secret_exposure",
+  "missing_least_privilege"
 ]);
 
 const CANDIDATE_PROMOTION_SUMMARY_THRESHOLD = 0.45;
@@ -154,6 +162,7 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   permissive_cors: "medium",
   debug_auth_leak: "medium",
   missing_webhook_signature: "high",
+  missing_webhook_config_integrity: "medium",
   webhook_code_execution: "high",
   jwt_validation_bypass: "high",
   weak_jwt_secret: "high",
@@ -170,7 +179,11 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   frontend_only_authorization: "medium",
   frontend_login_rate_limit: "medium",
   missing_rate_limiting: "medium",
-  missing_audit_logging: "medium"
+  missing_lockout: "medium",
+  missing_audit_logging: "medium",
+  missing_upload_size_limit: "medium",
+  frontend_secret_exposure: "high",
+  missing_least_privilege: "medium"
 };
 
 const CANDIDATE_CATEGORY: Record<string, string> = {
@@ -180,6 +193,7 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   permissive_cors: "configuration",
   debug_auth_leak: "authentication",
   missing_webhook_signature: "authentication",
+  missing_webhook_config_integrity: "configuration",
   webhook_code_execution: "authentication",
   jwt_validation_bypass: "authentication",
   weak_jwt_secret: "authentication",
@@ -196,7 +210,11 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   frontend_only_authorization: "access_control",
   frontend_login_rate_limit: "authentication",
   missing_rate_limiting: "configuration",
-  missing_audit_logging: "configuration"
+  missing_lockout: "authentication",
+  missing_audit_logging: "configuration",
+  missing_upload_size_limit: "configuration",
+  frontend_secret_exposure: "secrets",
+  missing_least_privilege: "configuration"
 };
 
 export async function scanRepository(input: RepositoryScanInput): Promise<RepositoryScanFinding[]> {
@@ -901,7 +919,11 @@ function promoteCandidateFindings(args: {
     if (isCandidateCovered(candidate, llmFindings, existingFindings)) {
       continue;
     }
-    const finding = buildFindingFromCandidate(candidate, repository);
+    const scopeEvidence = candidate.filepath
+      ? insights.fileInsights.get(candidate.filepath)?.scopeEvidence
+      : undefined;
+    const entryPoint = deriveCandidateEntryPoint(candidate, scopeEvidence);
+    const finding = buildFindingFromCandidate(candidate, repository, entryPoint);
     if (finding) {
       promoted.push(finding);
     }
@@ -918,6 +940,9 @@ function shouldPromoteCandidate(candidate: CandidateFinding): boolean {
   if (typeKey === "missing_rate_limiting") {
     return shouldPromoteRateLimitCandidate(candidate);
   }
+  if (typeKey === "missing_lockout") {
+    return shouldPromoteLockoutCandidate(candidate);
+  }
   if (typeKey === "missing_audit_logging") {
     return shouldPromoteAuditCandidate(candidate);
   }
@@ -932,7 +957,18 @@ function shouldPromoteRateLimitCandidate(candidate: CandidateFinding): boolean {
   const filepath =
     typeof candidate.filepath === "string" ? candidate.filepath.toLowerCase() : "";
   const text = `${candidate.summary ?? ""} ${filepath} ${collectEvidenceText(candidate)}`.toLowerCase();
-  return /(token|login|signin|signup|auth|password|reset|invite|delete|admin)/i.test(text);
+  return /(token|login|signin|signup|auth|password|reset|invite|delete|admin|create|project|write|update|insert|upsert|revoke|issue|generate|api[_-]?token|access[_-]?token|refresh[_-]?token)/i.test(text);
+}
+
+function shouldPromoteLockoutCandidate(candidate: CandidateFinding): boolean {
+  const roles = candidate.relatedFileRoles ?? [];
+  if (roles.includes("AUTH_ENDPOINT")) {
+    return true;
+  }
+  const filepath =
+    typeof candidate.filepath === "string" ? candidate.filepath.toLowerCase() : "";
+  const text = `${candidate.summary ?? ""} ${filepath} ${collectEvidenceText(candidate)}`.toLowerCase();
+  return /(login|signin|signup|auth|password|credential|token|attempt|brute|lockout)/i.test(text);
 }
 
 function shouldPromoteAuditCandidate(candidate: CandidateFinding): boolean {
@@ -957,6 +993,48 @@ function collectEvidenceText(candidate: CandidateFinding): string {
   return parts.join(" ");
 }
 
+function stripExtension(value: string): string {
+  if (!value) return "";
+  const index = value.lastIndexOf(".");
+  if (index <= 0) return value;
+  return value.slice(0, index);
+}
+
+function deriveServerActionSymbol(filepath: string): string {
+  const normalized = normalizePath(filepath);
+  if (!normalized) return "";
+  const match = normalized.match(/(?:^|\/)app\/(?:[^/]+\/)*actions\/(.+)$/i);
+  if (match?.[1]) {
+    return stripExtension(match[1]);
+  }
+  const base = normalized.split("/").pop() ?? "";
+  return stripExtension(base);
+}
+
+function deriveCandidateEntryPoint(
+  candidate: CandidateFinding,
+  scopeEvidence?: FileScopeEvidence
+): { entryPoint?: string; primarySymbol?: string } {
+  const hints = scopeEvidence?.entryPointHints ?? [];
+  const idHint = hints.find((hint) => hint.toLowerCase().startsWith("id:"));
+  if (idHint) {
+    const identifier = idHint.slice("id:".length).trim();
+    if (identifier) {
+      return { entryPoint: identifier, primarySymbol: identifier };
+    }
+  }
+  const isServerAction = Boolean(scopeEvidence?.isServerAction) ||
+    hints.some((hint) => hint.toLowerCase() === "server.action");
+  if (isServerAction) {
+    const symbol = deriveServerActionSymbol(candidate.filepath ?? "");
+    if (symbol) {
+      return { entryPoint: `server.action:${symbol}`, primarySymbol: symbol };
+    }
+    return { entryPoint: "server.action" };
+  }
+  return {};
+}
+
 function isCandidateCovered(
   candidate: CandidateFinding,
   llmFindings: RepositoryScanFinding[],
@@ -968,18 +1046,37 @@ function isCandidateCovered(
     return false;
   }
   const candidateType = typeof candidate.type === "string" ? candidate.type.trim().toLowerCase() : "";
+  const candidateTypeToken = normalizeMergeIdentityToken(candidateType);
   const candidateTokens = summaryTokenSet(candidate.summary ?? "");
+  const candidateText = `${candidate.summary ?? ""} ${collectEvidenceText(candidate)}`.toLowerCase();
 
   for (const finding of llmFindings) {
     const filepath = extractFindingPath(finding);
     if (!filepath || filepath !== candidatePath) {
       continue;
     }
-    const findingType = normalizeFindingTypeKey(finding);
-    if (candidateType && findingType && candidateType === findingType) {
+    const findingType = normalizeMergeIdentityToken(normalizeFindingTypeKey(finding));
+    const findingRuleId = extractRuleIdForMerge(finding);
+    const findingCandidateType = extractCandidateTypeForMerge(finding);
+    if (
+      candidateTypeToken &&
+      (candidateTypeToken === findingType ||
+        candidateTypeToken === findingRuleId ||
+        candidateTypeToken === findingCandidateType)
+    ) {
       return true;
     }
-    if (isSummarySimilar(candidateTokens, finding.summary ?? "")) {
+    const entryPoint = extractEntryPointForMerge(finding);
+    const hasAlignment =
+      Boolean(candidateTypeToken &&
+        (candidateTypeToken === findingType ||
+          candidateTypeToken === findingRuleId ||
+          candidateTypeToken === findingCandidateType)) ||
+      Boolean(entryPoint && candidateText.includes(entryPoint));
+    if (!hasAlignment) {
+      continue;
+    }
+    if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
       return true;
     }
   }
@@ -990,11 +1087,32 @@ function isCandidateCovered(
       continue;
     }
     const details = toRecord(finding.details);
-    const findingType = normalizeFindingTypeKeyFromValues(finding.type, details);
-    if (candidateType && findingType && candidateType === findingType) {
+    const findingType = normalizeMergeIdentityToken(normalizeFindingTypeKeyFromValues(finding.type, details));
+    const findingRuleId = normalizeMergeIdentityToken(
+      details.ruleId ?? details.rule_id ?? details.ruleID ?? details.findingType ?? details.finding_type ?? ""
+    );
+    const findingCandidateType = normalizeMergeIdentityToken(
+      details.candidateType ?? details.candidate_type ?? ""
+    );
+    if (
+      candidateTypeToken &&
+      (candidateTypeToken === findingType ||
+        candidateTypeToken === findingRuleId ||
+        candidateTypeToken === findingCandidateType)
+    ) {
       return true;
     }
-    if (isSummarySimilar(candidateTokens, finding.summary ?? "")) {
+    const entryPoint = extractEntryPointFromDetails(details);
+    const hasAlignment =
+      Boolean(candidateTypeToken &&
+        (candidateTypeToken === findingType ||
+          candidateTypeToken === findingRuleId ||
+          candidateTypeToken === findingCandidateType)) ||
+      Boolean(entryPoint && candidateText.includes(entryPoint));
+    if (!hasAlignment) {
+      continue;
+    }
+    if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
       return true;
     }
   }
@@ -1004,7 +1122,8 @@ function isCandidateCovered(
 
 function buildFindingFromCandidate(
   candidate: CandidateFinding,
-  repository: RepositoryDescriptor
+  repository: RepositoryDescriptor,
+  entryPoint?: { entryPoint?: string; primarySymbol?: string }
 ): RepositoryScanFinding | null {
   const filepath =
     typeof candidate.filepath === "string" ? normalizePath(candidate.filepath) : "";
@@ -1021,6 +1140,12 @@ function buildFindingFromCandidate(
     candidateType: candidate.type,
     candidateId: candidate.id
   };
+  if (entryPoint?.entryPoint) {
+    details.entryPoint = entryPoint.entryPoint;
+  }
+  if (entryPoint?.primarySymbol) {
+    details.primarySymbol = entryPoint.primarySymbol;
+  }
   if (evidence.length > 0) {
     details.evidence = evidence;
   }
@@ -1522,6 +1647,117 @@ function logDebug(debug: DedupeDebug | undefined, event: Record<string, unknown>
   debug.log({ stage: debug.stage, ...event });
 }
 
+function normalizeTypeToken(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeMergeIdentityToken(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return normalizeTypeToken(trimmed);
+}
+
+function normalizeEntryPointIdentity(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/\s+/g, " ")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+function extractRuleIdForMerge(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const ruleId =
+    details.ruleId ??
+    details.rule_id ??
+    details.ruleID ??
+    details.findingType ??
+    details.finding_type ??
+    null;
+  return normalizeMergeIdentityToken(ruleId);
+}
+
+function extractCandidateTypeForMerge(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const candidateType = details.candidateType ?? details.candidate_type ?? null;
+  return normalizeMergeIdentityToken(candidateType);
+}
+
+function extractEntryPointForMerge(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const candidates = [
+    details.entryPoint,
+    details.entry_point,
+    details.entryPointIdentifier,
+    details.entry_point_identifier,
+    details.entryPointId,
+    details.entry_point_id,
+    details.primarySymbol,
+    details.primary_symbol
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return normalizeEntryPointIdentity(trimmed);
+  }
+  return "";
+}
+
+function extractEntryPointFromDetails(details: Record<string, unknown>): string {
+  const candidates = [
+    details.entryPoint,
+    details.entry_point,
+    details.entryPointIdentifier,
+    details.entry_point_identifier,
+    details.entryPointId,
+    details.entry_point_id,
+    details.primarySymbol,
+    details.primary_symbol
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    return normalizeEntryPointIdentity(trimmed);
+  }
+  return "";
+}
+
+function shouldMergeRepositoryFindings(
+  left: RepositoryScanFinding,
+  right: RepositoryScanFinding
+): { merge: boolean; reason?: string } {
+  const leftRuleId = extractRuleIdForMerge(left);
+  const rightRuleId = extractRuleIdForMerge(right);
+  if (leftRuleId && rightRuleId && leftRuleId !== rightRuleId) {
+    return { merge: false, reason: "rule_id_mismatch" };
+  }
+  const leftCandidateType = extractCandidateTypeForMerge(left);
+  const rightCandidateType = extractCandidateTypeForMerge(right);
+  if (leftCandidateType && rightCandidateType && leftCandidateType !== rightCandidateType) {
+    return { merge: false, reason: "candidate_type_mismatch" };
+  }
+  const leftIdentity = leftRuleId || leftCandidateType;
+  const rightIdentity = rightRuleId || rightCandidateType;
+  if (leftIdentity && rightIdentity && leftIdentity !== rightIdentity) {
+    return { merge: false, reason: "identity_mismatch" };
+  }
+  const leftEntryPoint = extractEntryPointForMerge(left);
+  const rightEntryPoint = extractEntryPointForMerge(right);
+  if (leftEntryPoint && rightEntryPoint && leftEntryPoint !== rightEntryPoint) {
+    return { merge: false, reason: "entry_point_mismatch" };
+  }
+  return { merge: true };
+}
+
 function buildRepositoryDebugFinding(finding: RepositoryScanFinding): Record<string, unknown> {
   const details = toRecord(finding.details);
   const location = toRecord(finding.location);
@@ -1554,6 +1790,8 @@ function buildRepositoryDebugFinding(finding: RepositoryScanFinding): Record<str
     details.findingType ??
     details.finding_type ??
     null;
+  const candidateType = details.candidateType ?? details.candidate_type ?? null;
+  const entryPoint = extractEntryPointForMerge(finding);
 
   return {
     summary: finding.summary,
@@ -1561,6 +1799,8 @@ function buildRepositoryDebugFinding(finding: RepositoryScanFinding): Record<str
     type: finding.type ?? null,
     identityType: identityType || null,
     ruleId: typeof ruleId === "string" ? ruleId.trim() : null,
+    candidateType: typeof candidateType === "string" ? candidateType.trim() : null,
+    entryPoint: entryPoint || null,
     dedupeKey: buildFindingIdentityKey(finding) || null,
     repositoryFullName: finding.repositoryFullName ?? null,
     location: {
@@ -1592,6 +1832,20 @@ export function reduceRepositoryFindings(
     const existing = deduped.get(fingerprint);
     if (!existing) {
       deduped.set(fingerprint, finding);
+      continue;
+    }
+    const decision = shouldMergeRepositoryFindings(existing, finding);
+    if (!decision.merge) {
+      if (debug) {
+        logDebug(debug, {
+          event: "merge_reduce_skip",
+          fingerprint,
+          reason: decision.reason ?? "mismatch",
+          left: buildRepositoryDebugFinding(existing),
+          right: buildRepositoryDebugFinding(finding)
+        });
+      }
+      passthrough.push(finding);
       continue;
     }
     const merged = mergeRepositoryFindings(existing, finding);
@@ -1709,6 +1963,97 @@ function normalizeFindingTypeKeyFromValues(typeValue: unknown, details: Record<s
   });
 }
 
+const SUMMARY_GENERIC_TOKENS = new Set([
+  "a",
+  "an",
+  "the",
+  "of",
+  "for",
+  "to",
+  "on",
+  "in",
+  "with",
+  "without",
+  "and",
+  "or",
+  "no",
+  "not",
+  "missing",
+  "lack",
+  "lacking",
+  "is",
+  "are",
+  "be",
+  "as",
+  "by",
+  "via",
+  "from",
+  "into",
+  "this",
+  "that",
+  "these",
+  "those",
+  "should",
+  "must",
+  "needs",
+  "need",
+  "required",
+  "require",
+  "requires",
+  "ensure",
+  "ensures",
+  "ensured",
+  "using",
+  "use",
+  "uses",
+  "used",
+  "allow",
+  "allows",
+  "allowed",
+  "endpoint",
+  "endpoints",
+  "route",
+  "routes",
+  "handler",
+  "handlers",
+  "api",
+  "apis",
+  "server",
+  "servers",
+  "client",
+  "clients",
+  "backend",
+  "frontend",
+  "request",
+  "requests",
+  "user",
+  "users",
+  "data",
+  "input",
+  "function",
+  "functions",
+  "file",
+  "files",
+  "code",
+  "check",
+  "checks",
+  "validation",
+  "validate",
+  "validated",
+  "enforce",
+  "enforced",
+  "enforcement"
+]);
+
+const SUMMARY_TYPE_TOKENS_TO_IGNORE = new Set([
+  "missing",
+  "weak",
+  "frontend",
+  "backend",
+  "only",
+  "no"
+]);
+
 function summaryTokenSet(value: string): Set<string> {
   if (!value) return new Set<string>();
   const normalized = value
@@ -1718,16 +2063,66 @@ function summaryTokenSet(value: string): Set<string> {
     .replace(/\s+/g, " ")
     .trim();
   if (!normalized) return new Set<string>();
-  return new Set(normalized.split(" ").filter(Boolean));
+  const tokens = normalized.split(" ").filter(Boolean);
+  const filtered = tokens.filter((token) => !SUMMARY_GENERIC_TOKENS.has(token));
+  return new Set(filtered.length > 0 ? filtered : tokens);
 }
 
-function isSummarySimilar(candidateTokens: Set<string>, summary: string): boolean {
+function typeTokenSet(value: string): Set<string> {
+  if (!value) return new Set<string>();
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return new Set<string>();
+  const tokens = normalized
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => !SUMMARY_TYPE_TOKENS_TO_IGNORE.has(token));
+  return new Set(tokens);
+}
+
+function isSummarySimilar(
+  candidateTokens: Set<string>,
+  summary: string,
+  candidateType?: string
+): boolean {
   const summaryTokens = summaryTokenSet(summary);
   if (candidateTokens.size === 0 || summaryTokens.size === 0) {
     return false;
   }
+  let overlap = 0;
+  for (const token of candidateTokens) {
+    if (summaryTokens.has(token)) {
+      overlap += 1;
+      break;
+    }
+  }
+  if (overlap === 0) {
+    return false;
+  }
   const score = jaccard(candidateTokens, summaryTokens);
-  return score >= CANDIDATE_PROMOTION_SUMMARY_THRESHOLD;
+  if (score < CANDIDATE_PROMOTION_SUMMARY_THRESHOLD) {
+    return false;
+  }
+  if (candidateType) {
+    const typeTokens = typeTokenSet(candidateType);
+    if (typeTokens.size > 0) {
+      let typeOverlap = 0;
+      for (const token of typeTokens) {
+        if (summaryTokens.has(token)) {
+          typeOverlap += 1;
+          break;
+        }
+      }
+      if (typeOverlap === 0 && score < CANDIDATE_PROMOTION_SUMMARY_THRESHOLD + 0.15) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function jaccard(a: Set<string>, b: Set<string>): number {
