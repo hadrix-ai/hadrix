@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import { loadConfig } from "../config/loadConfig.js";
 import { discoverFiles } from "../fs/discover.js";
-import { chunkFile, hashFile, toRelative } from "../chunking/chunker.js";
+import { hashFile, toRelative } from "../chunking/chunker.js";
 import { securityChunkFile } from "../chunking/securityChunker.js";
 import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
@@ -42,7 +42,6 @@ export interface RunScanOptions {
   repoPath?: string | null;
   inferRepoPath?: boolean;
   skipStatic?: boolean;
-  skipJellyAnchors?: boolean;
   existingFindings?: ExistingScanFinding[];
   repoFullName?: string | null;
   repositoryId?: string | null;
@@ -1041,34 +1040,27 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       : await runStaticScanners(config, scanRoot, log);
     log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
   
-    const jellySkipRequested = Boolean(options.skipJellyAnchors);
-    const jellyAnchorsEnabled =
-      config.flags.enableJellyAnchors && !jellySkipRequested;
     let jellyResult: JellyAnchorComputation | null = null;
     let jellyIndex: AnchorIndex | null = null;
-    if (jellyAnchorsEnabled) {
-      log("Computing jelly anchors...");
-      jellyResult = await computeJellyAnchors({
-        repoRoot,
-        scanRoot,
-        commitSha
-      });
-      jellyIndex = jellyResult.index;
-      if (jellyIndex) {
-        log(
-          `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
-        );
-      } else {
-        const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
-        log(`Jelly anchors unavailable${reason}.`);
-      }
-    } else if (config.flags.enableJellyAnchors && jellySkipRequested) {
-      log("Jelly anchors skipped by CLI flag.");
+    log("Computing jelly anchors...");
+    jellyResult = await computeJellyAnchors({
+      repoRoot,
+      scanRoot,
+      commitSha
+    });
+    jellyIndex = jellyResult.index;
+    if (jellyIndex) {
+      log(
+        `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
+      );
+    } else {
+      const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
+      log(`Jelly anchors unavailable${reason}.`);
     }
-    if (config.flags.enableJellyAnchors) {
+    {
       const jellyReport = buildJellyAnchorsReport({
-        enabled: jellyAnchorsEnabled,
-        skipped: jellySkipRequested,
+        enabled: true,
+        skipped: false,
         repoRoot,
         scanRoot,
         repoPath: repoPath ?? null,
@@ -1148,10 +1140,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       vectorMaxElements: config.vector.maxElements,
       logger: log
     });
-    const desiredChunkFormat = config.flags.enableSecurityChunking ? "security_semantic" : "line_window";
-    if (config.flags.enableSecurityChunking) {
-      log("Security chunking enabled.");
-    }
+    const desiredChunkFormat = "security_semantic";
+    log("Security chunking enabled.");
   
     const newEmbeddings: Array<{ chunkId: number; content: string }> = [];
   
@@ -1183,25 +1173,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
         db.deleteChunksForFile(fileRow.id);
   
-        let chunks = config.flags.enableSecurityChunking
-          ? securityChunkFile({
-              filePath: file,
-              idPath: relPath,
-              repoPath,
-              sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
-            })
-          : chunkFile(file, {
-              maxChars: config.chunking.maxChars,
-              overlapChars: config.chunking.overlapChars,
-              idPath: relPath
-            });
-        if (config.flags.enableSecurityChunking && chunks.length === 0) {
-          log(`Security chunking produced no chunks for ${relPath}; falling back to line window.`);
-          chunks = chunkFile(file, {
-            maxChars: config.chunking.maxChars,
-            overlapChars: config.chunking.overlapChars,
-            idPath: relPath
-          });
+        const chunks = securityChunkFile({
+          filePath: file,
+          idPath: relPath,
+          repoPath,
+          sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
+        });
+        if (chunks.length === 0) {
+          log(`Security chunking produced no chunks for ${relPath}; skipping file.`);
+          continue;
         }
   
         const inserted = db.insertChunks(
@@ -1214,7 +1194,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
             endLine: chunk.endLine,
             content: chunk.content,
             contentHash: chunk.contentHash,
-            chunkFormat: chunk.chunkFormat ?? "line_window",
+            chunkFormat: chunk.chunkFormat ?? "security_semantic",
             securityHeader: chunk.securityHeader ?? null,
             primarySymbol: chunk.primarySymbol ?? null,
             entryPoint: chunk.entryPoint ?? null,

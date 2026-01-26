@@ -160,16 +160,12 @@ Scan reports are written under `<scan-target>/.hadrix/reports`, including:
 - `--format json` (or `--json`) outputs machine-readable JSON and disables the spinner.
 - `--repo-path <path>` scopes a monorepo scan to a subdirectory.
 - `--no-repo-path-inference` disables monorepo repoPath inference.
-- `--skip-jelly-anchors` skips jelly call-graph anchors for this run.
 - `--debug` enables debug logging to a file.
 - `--debug-log <path>` sets the debug log file path (implies `--debug`).
 
-## Feature flags
+## Chunking and anchors
 
-These flags control optional features; both are enabled by default and can be disabled if needed.
-
-- `ENABLE_SECURITY_CHUNKING=true|false` (default: true)
-- `ENABLE_JELLY_ANCHORS=true|false` (default: true)
+Security chunking is always used for scans. Jelly anchors run by default and will report availability in the jelly anchors report.
 
 ## Architecture
 
