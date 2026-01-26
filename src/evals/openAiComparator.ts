@@ -559,7 +559,7 @@ export function createOpenAiSummaryComparator(options?: {
   const apiKey = resolveOpenAiApiKey(options?.apiKey);
   if (!apiKey) {
     throw new Error(
-      "Missing OpenAI API key for eval comparator. Set HADRIX_EVALS_OPENAI_API_KEY or OPENAI_API_KEY."
+      "Missing OpenAI API key for eval comparator. Set HADRIX_LLM_API_KEY or OPENAI_API_KEY (or use HADRIX_API_KEY when HADRIX_PROVIDER=openai)."
     );
   }
   const baseUrl = resolveOpenAiBaseUrl(options?.baseUrl).replace(/\/+$/, "");
