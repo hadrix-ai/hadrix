@@ -246,7 +246,7 @@ async function installJelly(logger?: (message: string) => void): Promise<Install
     throw new Error("jelly install failed; binary not found.");
   }
   log(logger, `Installed jelly to ${jellyPath}`);
-  return { tool: "jelly", installed: true, path: jellyPath, optional: true };
+  return { tool: "jelly", installed: true, path: jellyPath };
 }
 
 async function promptYesNo(question: string, autoYes: boolean): Promise<boolean> {
@@ -265,7 +265,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   const autoYes = options.autoYes ?? false;
   const results: InstallResult[] = [];
 
-  log(logger, "Hadrix setup: installing required static scanners.");
+  log(logger, "Hadrix setup: installing required scanners and jelly call graph analyzer.");
 
   if (!isEslintAvailable()) {
     const ok = await promptYesNo("Install eslint scanner dependencies (npm)?", autoYes);
@@ -321,11 +321,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   const existingJelly = resolveJellyPath();
   if (existingJelly) {
     log(logger, `jelly already available at ${existingJelly}`);
-    results.push({ tool: "jelly", installed: true, path: existingJelly, optional: true });
+    results.push({ tool: "jelly", installed: true, path: existingJelly });
   } else {
-    const ok = await promptYesNo("Install jelly call graph analyzer (optional)?", autoYes);
+    const ok = await promptYesNo("Install jelly call graph analyzer?", autoYes);
     if (!ok) {
-      results.push({ tool: "jelly", installed: false, optional: true });
+      results.push({ tool: "jelly", installed: false });
     } else {
       try {
         const result = await installJelly(logger);
@@ -333,7 +333,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log(logger, `Failed to install jelly: ${message}`);
-        results.push({ tool: "jelly", installed: false, optional: true });
+        results.push({ tool: "jelly", installed: false });
       }
     }
   }

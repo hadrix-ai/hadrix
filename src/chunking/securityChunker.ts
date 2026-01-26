@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Chunk, SecurityHeader } from "../types.js";
+import type { ReachabilityIndex, ReachabilityInfo } from "../scan/jellyReachability.js";
 import { renderSecurityHeader } from "../scan/securityHeader.js";
 
 type AnchorNode = {
@@ -66,6 +67,7 @@ export interface SecurityChunkFileOptions {
   minChunkSize?: number;
   anchors?: AnchorNode[];
   sastFindings?: SastFindingHint[] | null;
+  reachabilityIndex?: ReachabilityIndex | null;
 }
 
 const MAX_CHUNK_LINES = 160;
@@ -829,6 +831,7 @@ function buildSecurityHeader(params: {
   sinks: string[];
   inputSources: string[];
   entryTypeHint?: string | null;
+  reachability?: ReachabilityInfo | null;
 }): SecurityHeader {
   const lowerPath = params.filepath.toLowerCase();
   const isWebhook = lowerPath.includes("webhook");
@@ -927,6 +930,7 @@ function buildSecurityHeader(params: {
     input_sources: params.inputSources,
     data_sensitivity: dataSensitivity,
     sinks: params.sinks,
+    reachability: params.reachability ?? undefined,
     security_assumptions: securityAssumptions
   };
 }
@@ -1042,13 +1046,20 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
     const { sinks: sastSinks } = collectSastSinkHints(fileSastHints, 1, file.lines.length);
     const sinks = mergeUniqueStrings(rawSinks, sastSinks);
     const entryTypeHint = collectSastEntryTypeHint(fileSastHints, 1, file.lines.length);
+    const reachability = options.reachabilityIndex?.getReachability({
+      filepath: file.filepath,
+      repoPath,
+      startLine: 1,
+      endLine: file.lines.length
+    });
     const header = buildSecurityHeader({
       content: file.content,
       filepath: file.filepath,
       primarySymbol,
       sinks,
       inputSources,
-      entryTypeHint
+      entryTypeHint,
+      reachability
     });
     for (const range of ranges) {
       addChunkForRange({
@@ -1087,13 +1098,20 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
     const sinks = mergeUniqueStrings(rawSinks, sastSinks);
     const mergedSinkLines = mergeLineNumbers(sinkLines, sastSinkLines);
     const entryTypeHint = collectSastEntryTypeHint(fileSastHints, startLine, endLine);
+    const reachability = options.reachabilityIndex?.getReachability({
+      filepath: file.filepath,
+      repoPath,
+      startLine,
+      endLine
+    });
     const header = buildSecurityHeader({
       content: anchorContent,
       filepath: file.filepath,
       primarySymbol,
       sinks,
       inputSources,
-      entryTypeHint
+      entryTypeHint,
+      reachability
     });
 
     const baseRanges = buildChunkRanges(startLine, endLine);
@@ -1194,13 +1212,20 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
     const { sinks: sastSinks } = collectSastSinkHints(fileSastHints, 1, file.lines.length);
     const sinks = mergeUniqueStrings(rawSinks, sastSinks);
     const entryTypeHint = collectSastEntryTypeHint(fileSastHints, 1, file.lines.length);
+    const reachability = options.reachabilityIndex?.getReachability({
+      filepath: file.filepath,
+      repoPath,
+      startLine: 1,
+      endLine: file.lines.length
+    });
     const header = buildSecurityHeader({
       content: file.content,
       filepath: file.filepath,
       primarySymbol,
       sinks,
       inputSources,
-      entryTypeHint
+      entryTypeHint,
+      reachability
     });
     for (const range of ranges) {
       addChunkForRange({

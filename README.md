@@ -105,7 +105,7 @@ Hadrix runs ESLint security rules for JS/TS and uses these scanners:
 - gitleaks
 - osv-scanner
 
-ESLint security rules are bundled with the CLI; no extra setup required. Run `hadrix setup` to install the external scanners (semgrep, gitleaks, osv-scanner) interactively. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
+ESLint security rules are bundled with the CLI; no extra setup required. Run `hadrix setup` to install the external scanners (semgrep, gitleaks, osv-scanner) and the required Jelly call graph analyzer. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
 
 ## Vector search modes
 
@@ -165,7 +165,7 @@ Scan reports are written under `<scan-target>/.hadrix/reports`, including:
 
 ## Chunking and anchors
 
-Security chunking is always used for scans. Jelly anchors run by default and will report availability in the jelly anchors report.
+Security chunking is always used for scans. Jelly anchors are required; scans fail if Jelly is unavailable (non-JS/TS repos will skip Jelly and note the reason in the jelly anchors report).
 
 ## Architecture
 

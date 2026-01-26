@@ -19,6 +19,10 @@ export type SecurityHeader = {
   input_sources: string[];
   data_sensitivity: string[];
   sinks: string[];
+  reachability?: {
+    entry_points: string[];
+    min_depth?: number | null;
+  };
   security_assumptions: string[];
 };
 

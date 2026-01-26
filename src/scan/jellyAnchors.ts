@@ -8,6 +8,10 @@ import { isJellyAvailable, runJellyCallGraph } from "./jelly.js";
 type JellyCallGraph = {
   files?: unknown;
   functions?: unknown;
+  edges?: unknown;
+  calls?: unknown;
+  callgraph?: unknown;
+  callGraph?: unknown;
 };
 
 type AnchorNode = {
@@ -32,6 +36,7 @@ export type AnchorIndex = {
   anchorCount: number;
   fileCount: number;
   getAnchorId: (lookup: AnchorLookup) => string | null;
+  callGraph?: JellyCallGraphIndex | null;
 };
 
 export type JellyAnchorComputation = {
@@ -59,6 +64,24 @@ const SKIP_DIRS = new Set([
 ]);
 
 const anchorCache = new Map<string, Promise<JellyAnchorComputation>>();
+
+export type JellyFunctionNode = {
+  id: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  startColumn: number;
+  endColumn: number;
+  anchorId: string;
+};
+
+export type JellyCallGraphIndex = {
+  functionById: Map<string, JellyFunctionNode>;
+  anchorIdByFunctionId: Map<string, string>;
+  functionIdByAnchorId: Map<string, string>;
+  edgesByCaller: Map<string, string[]>;
+  edgesByCallee: Map<string, string[]>;
+};
 
 function formatJellyRunError(runResult: {
   exitCode: number | null;
@@ -206,6 +229,63 @@ function coerceStringArray(value: unknown): string[] {
   return [];
 }
 
+function extractRawEdges(callGraph: JellyCallGraph): unknown {
+  if (callGraph.edges) return callGraph.edges;
+  if (callGraph.calls) return callGraph.calls;
+  const nested = (callGraph.callgraph ?? callGraph.callGraph) as Record<string, unknown> | null;
+  if (nested && typeof nested === "object") {
+    if (nested.edges) return nested.edges;
+    if (nested.calls) return nested.calls;
+  }
+  return null;
+}
+
+function coerceEdgePairs(raw: unknown): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        pairs.push([String(entry[0]), String(entry[1])]);
+        continue;
+      }
+      if (isPlainObject(entry)) {
+        const from =
+          (entry as any).from ??
+          (entry as any).caller ??
+          (entry as any).source ??
+          (entry as any).src;
+        const to =
+          (entry as any).to ??
+          (entry as any).callee ??
+          (entry as any).target ??
+          (entry as any).dst;
+        if (from != null && to != null) {
+          pairs.push([String(from), String(to)]);
+        }
+      }
+    }
+    return pairs;
+  }
+  if (isPlainObject(raw)) {
+    for (const [key, value] of Object.entries(raw)) {
+      if (Array.isArray(value)) {
+        for (const target of value) {
+          if (target == null) continue;
+          pairs.push([String(key), String(target)]);
+        }
+        continue;
+      }
+      if (isPlainObject(value) && Array.isArray((value as any).calls)) {
+        for (const target of (value as any).calls) {
+          if (target == null) continue;
+          pairs.push([String(key), String(target)]);
+        }
+      }
+    }
+  }
+  return pairs;
+}
+
 function parseLocationJson(value: string): {
   fileIndex: number;
   startLine: number | null;
@@ -242,6 +322,9 @@ function buildAnchorIndex(callGraph: JellyCallGraph, repoRoot: string): AnchorIn
   if (entries.length === 0) return null;
 
   const anchorsByFile = new Map<string, AnchorNode[]>();
+  const functionById = new Map<string, JellyFunctionNode>();
+  const anchorIdByFunctionId = new Map<string, string>();
+  const functionIdByAnchorId = new Map<string, string>();
   let anchorCount = 0;
 
   for (const [idx, loc] of entries) {
@@ -272,6 +355,20 @@ function buildAnchorIndex(callGraph: JellyCallGraph, repoRoot: string): AnchorIn
       anchorsByFile.set(filePath, []);
     }
     anchorsByFile.get(filePath)!.push(anchor);
+    const functionNode: JellyFunctionNode = {
+      id: idx,
+      filePath,
+      startLine: parsed.startLine,
+      endLine: parsed.endLine,
+      startColumn,
+      endColumn,
+      anchorId
+    };
+    functionById.set(idx, functionNode);
+    anchorIdByFunctionId.set(idx, anchorId);
+    if (!functionIdByAnchorId.has(anchorId)) {
+      functionIdByAnchorId.set(anchorId, idx);
+    }
     anchorCount += 1;
   }
 
@@ -286,10 +383,18 @@ function buildAnchorIndex(callGraph: JellyCallGraph, repoRoot: string): AnchorIn
     });
   }
 
+  const callGraphIndex = buildCallGraphIndex({
+    callGraph,
+    functionById,
+    anchorIdByFunctionId,
+    functionIdByAnchorId
+  });
+
   return createAnchorIndex({
     repoRoot,
     anchorCount,
-    anchorsByFile
+    anchorsByFile,
+    callGraph: callGraphIndex
   });
 }
 
@@ -297,6 +402,7 @@ function createAnchorIndex(params: {
   repoRoot: string;
   anchorCount: number;
   anchorsByFile: Map<string, AnchorNode[]>;
+  callGraph?: JellyCallGraphIndex | null;
 }): AnchorIndex {
   const { repoRoot, anchorsByFile, anchorCount } = params;
   const fileCount = anchorsByFile.size;
@@ -350,7 +456,51 @@ function createAnchorIndex(params: {
     repoRoot,
     anchorCount,
     fileCount,
-    getAnchorId
+    getAnchorId,
+    callGraph: params.callGraph ?? null
+  };
+}
+
+function buildCallGraphIndex(params: {
+  callGraph: JellyCallGraph;
+  functionById: Map<string, JellyFunctionNode>;
+  anchorIdByFunctionId: Map<string, string>;
+  functionIdByAnchorId: Map<string, string>;
+}): JellyCallGraphIndex | null {
+  if (params.functionById.size === 0) return null;
+  const rawEdges = extractRawEdges(params.callGraph);
+  const edgePairs = coerceEdgePairs(rawEdges);
+  const callerSetMap = new Map<string, Set<string>>();
+  const calleeSetMap = new Map<string, Set<string>>();
+  for (const [from, to] of edgePairs) {
+    if (!params.functionById.has(from) || !params.functionById.has(to)) {
+      continue;
+    }
+    if (!callerSetMap.has(from)) {
+      callerSetMap.set(from, new Set());
+    }
+    callerSetMap.get(from)!.add(to);
+    if (!calleeSetMap.has(to)) {
+      calleeSetMap.set(to, new Set());
+    }
+    calleeSetMap.get(to)!.add(from);
+  }
+
+  const edgesByCaller = new Map<string, string[]>();
+  for (const [caller, targets] of callerSetMap.entries()) {
+    edgesByCaller.set(caller, Array.from(targets));
+  }
+  const edgesByCallee = new Map<string, string[]>();
+  for (const [callee, callers] of calleeSetMap.entries()) {
+    edgesByCallee.set(callee, Array.from(callers));
+  }
+
+  return {
+    functionById: params.functionById,
+    anchorIdByFunctionId: params.anchorIdByFunctionId,
+    functionIdByAnchorId: params.functionIdByAnchorId,
+    edgesByCaller,
+    edgesByCallee
   };
 }
 

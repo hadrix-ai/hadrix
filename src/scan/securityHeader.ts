@@ -39,6 +39,20 @@ export function renderSecurityHeader(header: SecurityHeader): string {
   lines.push("");
   renderList(lines, "SINKS", header.sinks ?? []);
   lines.push("");
+  lines.push("REACHABILITY:");
+  const entryPoints = header.reachability?.entry_points ?? [];
+  if (entryPoints.length === 0) {
+    lines.push("  entry_points: none");
+  } else {
+    lines.push("  entry_points:");
+    for (const entryPoint of entryPoints) {
+      lines.push(`    - ${entryPoint}`);
+    }
+  }
+  if (typeof header.reachability?.min_depth === "number") {
+    lines.push(`  min_depth: ${header.reachability.min_depth}`);
+  }
+  lines.push("");
   renderList(lines, "SECURITY_ASSUMPTIONS", header.security_assumptions ?? []);
   return lines.join("\n");
 }

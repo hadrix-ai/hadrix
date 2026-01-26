@@ -93,7 +93,10 @@ async function promptYesNo(question: string): Promise<boolean> {
 }
 
 function isMissingScannersError(message: string): boolean {
-  return message.includes("Missing required static scanners:");
+  return (
+    message.includes("Missing required static scanners:") ||
+    message.includes("Missing required jelly call graph analyzer.")
+  );
 }
 
 program
@@ -384,7 +387,7 @@ program
 
 program
   .command("setup")
-  .description("Install required static scanners")
+  .description("Install required scanners and jelly call graph analyzer")
   .option("-y, --yes", "Install without prompting")
   .action(async (options: { yes?: boolean }) => {
     try {

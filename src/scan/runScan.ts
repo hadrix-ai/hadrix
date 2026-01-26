@@ -15,6 +15,9 @@ import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } fr
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
 import { attachJellyAnchors, computeJellyAnchors } from "./jellyAnchors.js";
+import { isJellyAvailable } from "./jelly.js";
+import { discoverEntryPoints } from "./entryPoints.js";
+import { buildJellyReachabilityIndex } from "./jellyReachability.js";
 import { buildFindingIdentityKey } from "./dedupeKey.js";
 import {
   dedupeFindings,
@@ -24,6 +27,7 @@ import {
   normalizeRepositoryFinding
 } from "./postProcessing.js";
 import type { AnchorIndex, JellyAnchorComputation } from "./jellyAnchors.js";
+import type { ReachabilityIndex } from "./jellyReachability.js";
 import type {
   CoreFinding,
   ExistingScanFinding,
@@ -1034,6 +1038,13 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         configPath: options.configPath ?? null
       });
     }
+
+    const jellyAvailable = await isJellyAvailable();
+    if (!jellyAvailable) {
+      throw new Error(
+        "Missing required jelly call graph analyzer. Run 'hadrix setup' to install it."
+      );
+    }
   
     const rawStaticFindings = options.skipStatic
       ? []
@@ -1077,6 +1088,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         const message = err instanceof Error ? err.message : String(err);
         log(`Failed to persist jelly anchors report: ${message}`);
       }
+    }
+
+    if (!jellyIndex && jellyResult.reason !== "repo_not_js_ts") {
+      const reason = jellyResult.reason ?? "unknown";
+      const details = jellyResult.error ? `: ${jellyResult.error}` : "";
+      throw new Error(`Jelly call graph required but failed (${reason})${details}.`);
     }
   
     const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);
@@ -1132,6 +1149,23 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       exclude: config.chunking.exclude,
       maxFileSizeBytes: config.chunking.maxFileSizeBytes
     });
+
+    let reachabilityIndex: ReachabilityIndex | null = null;
+    if (jellyIndex?.callGraph) {
+      const entryPoints = await discoverEntryPoints({ repoRoot, files });
+      if (entryPoints.length > 0) {
+        reachabilityIndex = buildJellyReachabilityIndex({
+          anchorIndex: jellyIndex,
+          entryPoints,
+          repoPath: repoPath ?? null
+        });
+        if (reachabilityIndex) {
+          log(`Jelly reachability mapped to ${entryPoints.length} entry points.`);
+        } else {
+          log("Jelly reachability unavailable (entry points did not match call graph).");
+        }
+      }
+    }
   
     const db = new HadrixDb({
       stateDir: config.stateDir,
@@ -1177,7 +1211,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           filePath: file,
           idPath: relPath,
           repoPath,
-          sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null
+          sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null,
+          reachabilityIndex
         });
         if (chunks.length === 0) {
           log(`Security chunking produced no chunks for ${relPath}; skipping file.`);
