@@ -1,0 +1,61 @@
+import { corsHeaders } from "./_shared/cors.ts";
+import { getAuthContext } from "./_shared/auth.ts";
+import { supabaseAdmin } from "./_shared/supabase.ts";
+import { vulnEnabled } from "./_shared/hadrix.ts";
+
+function insecureToken() {
+  // HADRIX_VULN: A04 Cryptographic Failures
+  // Insecure random token generation (predictable / low entropy).
+  return `${Math.random().toString(36).slice(2)}.${Date.now()}`;
+}
+
+function secureToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(input: string) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(req.headers.get("origin") ?? "") });
+
+  const auth = await getAuthContext(req);
+  if (!auth.userId) {
+    return new Response(JSON.stringify({ error: "unauthenticated" }), {
+      status: 401,
+      headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
+    });
+  }
+
+  // HADRIX_VULN: A05 Insecure Design
+  // No rate limiting on token issuance.
+
+  const useInsecure = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens");
+  const token = useInsecure ? insecureToken() : secureToken();
+  const sb = supabaseAdmin();
+
+  // HADRIX_VULN: A04 Cryptographic Failures
+  // Store tokens in plaintext (see schema).
+  const storePlaintext = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db");
+  const storedValue = storePlaintext ? token : await sha256Hex(token);
+
+  const { data, error } = await sb
+    .from("api_tokens")
+    .insert({ user_id: auth.userId, token_plaintext: storedValue })
+    .select("id, user_id, token_plaintext, created_at")
+    .single();
+
+  // HADRIX_VULN: A08 Logging & Monitoring Failures
+  // Log the plaintext token.
+  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+    console.log("issued token:", token);
+  }
+
+  return new Response(JSON.stringify({ token: storePlaintext ? data?.token_plaintext ?? null : token, error: error?.message ?? null }), {
+    headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
+  });
+});

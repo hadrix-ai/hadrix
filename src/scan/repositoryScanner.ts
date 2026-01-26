@@ -139,6 +139,7 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "unsafe_query_builder",
   "anon_key_bearer",
   "missing_bearer_token",
+  "frontend_direct_db_write",
   "sensitive_logging",
   "command_output_logging",
   "unbounded_query",
@@ -172,6 +173,7 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   unsafe_query_builder: "high",
   anon_key_bearer: "medium",
   missing_bearer_token: "high",
+  frontend_direct_db_write: "medium",
   sensitive_logging: "medium",
   command_output_logging: "medium",
   unbounded_query: "medium",
@@ -203,6 +205,7 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   unsafe_query_builder: "injection",
   anon_key_bearer: "authentication",
   missing_bearer_token: "authentication",
+  frontend_direct_db_write: "access_control",
   sensitive_logging: "secrets",
   command_output_logging: "secrets",
   unbounded_query: "configuration",
@@ -1140,6 +1143,9 @@ function buildFindingFromCandidate(
     candidateType: candidate.type,
     candidateId: candidate.id
   };
+  if (typeof candidate.recommendation === "string" && candidate.recommendation.trim()) {
+    details.recommendation = candidate.recommendation.trim();
+  }
   if (entryPoint?.entryPoint) {
     details.entryPoint = entryPoint.entryPoint;
   }

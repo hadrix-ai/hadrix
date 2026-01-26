@@ -15,7 +15,7 @@ import type {
   ExpectedFinding
 } from "./types.js";
 
-const DEFAULT_EVAL_DIR = ".hadrix-eval-fixtures";
+const DEFAULT_EVAL_DIR = "evals";
 const DEFAULT_SUMMARY_MATCH_THRESHOLD = 0.45;
 const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
 

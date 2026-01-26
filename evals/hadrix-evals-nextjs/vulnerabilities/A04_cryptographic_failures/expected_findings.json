@@ -1,0 +1,38 @@
+[
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "lib/auth.ts",
+    "description": "Weak/fallback JWT secret and decoding without verification",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "app/api/tokens/route.ts",
+    "description": "Insecure random token generation and plaintext token storage",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "app/actions/createApiToken.ts",
+    "description": "Insecure random token generation in server action",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "db/schema.sql",
+    "description": "Plaintext token column in database schema",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "app/login/page.tsx",
+    "description": "Magic link accepted without expiration validation",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "app/api/webhook/route.ts",
+    "description": "Webhook signature verification uses weak/fallback secret",
+    "severity": "medium"
+  }
+]

@@ -1,0 +1,9 @@
+# Minimal Supabase config placeholder for realism.
+# This repo focuses on static analysis / scanner evals.
+
+[api]
+enabled = true
+
+[functions]
+enabled = true
+

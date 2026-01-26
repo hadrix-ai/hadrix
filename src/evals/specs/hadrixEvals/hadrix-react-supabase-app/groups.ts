@@ -159,6 +159,19 @@ export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
     ],
   },
   {
+    id: "Orbit-Projects-DB-Write-Gating",
+    description: "Frontend DB writes should be gated behind edge/API + RLS in hadrix-react-supabase-app",
+    allowUnexpected: true,
+    expectedFindings: [
+      {
+        filepath: `${P}/frontend/components/CreateProjectForm.tsx`,
+        expectation:
+          "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+        ruleId: "frontend_direct_db_write",
+      },
+    ],
+  },
+  {
     id: "Orbit-Projects-A10",
     description: "A10 Vulnerable and Outdated Components in hadrix-react-supabase-app",
     allowUnexpected: true,

@@ -114,6 +114,19 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     ]
   },
   {
+    id: "frontend_direct_db_write",
+    title: "Frontend performs direct database writes",
+    category: "access_control",
+    description:
+      "Client-side code writes to the database directly instead of using server or edge functions.",
+    candidateTypes: ["frontend_direct_db_write"],
+    guidance: [
+      "Move write operations behind API/edge functions or server actions.",
+      "Enforce strict RLS policies on tables touched by client writes.",
+      "Add server-side rate limiting and audit logging for write endpoints."
+    ]
+  },
+  {
     id: "dangerous_html_render",
     title: "Dangerous HTML rendering (XSS risk)",
     category: "injection",
@@ -230,7 +243,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description: "Row-level security policies do not enforce tenant isolation.",
     requiredControls: ["secure_rls_policies"],
     guidance: [
-      "Policies should constrain access by tenant or owner context."
+      "Policies should constrain access by tenant or owner context.",
+      "Prefer routing writes through API/edge functions even with RLS to enable rate limiting and auditing."
     ]
   },
   {

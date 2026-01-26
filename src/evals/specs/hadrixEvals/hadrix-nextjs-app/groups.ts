@@ -303,6 +303,19 @@ export const ORBIT_NEXT_GROUPS: EvalGroupSpec[] = [
     ],
   },
   {
+    id: "Orbit-Next-DB-Write-Gating",
+    description: "Frontend DB writes should be gated behind edge/API + RLS in hadrix-evals-nextjs",
+    allowUnexpected: true,
+    expectedFindings: [
+      {
+        filepath: "components/ClientCreateProject.tsx",
+        expectation:
+          "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+        ruleId: "frontend_direct_db_write",
+      },
+    ],
+  },
+  {
     id: "Orbit-Next-A10",
     description: "A10 Vulnerable and Outdated Components in hadrix-evals-nextjs",
     allowUnexpected: true,

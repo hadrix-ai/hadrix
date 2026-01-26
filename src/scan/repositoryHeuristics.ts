@@ -34,6 +34,7 @@ export type CandidateFinding = {
   type: string;
   summary: string;
   rationale: string;
+  recommendation?: string;
   filepath?: string;
   evidence: CandidateEvidence[];
   relatedFileRoles?: FileRole[];
@@ -402,6 +403,10 @@ const OWNERSHIP_FILTER_PATTERNS = [
 ];
 
 const DB_WRITE_PATTERNS = [/\.(insert|update|upsert|create(?:Many|One)?)\s*\(/i, /\.rpc\s*\(/i];
+const FRONTEND_DB_WRITE_PATTERNS = [
+  /\bsupabase\.from\([^)]*\)\.(insert|update|delete|upsert)\b/i,
+  /\bsupabase\.rpc\s*\(/i
+];
 
 const SENSITIVE_ACTION_PATTERNS = [
   /\blogin\b/i,
@@ -851,6 +856,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   debug_auth_leak: 85,
   anon_key_bearer: 95,
   missing_bearer_token: 80,
+  frontend_direct_db_write: 80,
   sensitive_logging: 75,
   command_output_logging: 85,
   unbounded_query: 70,
@@ -969,6 +975,9 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["frontend_ui", "frontend_util", "backend_shared"]
   },
   missing_bearer_token: {
+    allowedScopes: ["frontend_ui", "frontend_util"]
+  },
+  frontend_direct_db_write: {
     allowedScopes: ["frontend_ui", "frontend_util"]
   },
   frontend_login_rate_limit: {
@@ -1749,6 +1758,34 @@ export function buildCandidateFindings(
             endLine: line?.line ?? startLine,
             excerpt: line?.text,
             note: "API call without authorization header"
+          }
+        ],
+        relatedFileRoles: roles
+      });
+    }
+
+    if (
+      canRunRule("frontend_direct_db_write") &&
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      matchesAny(content, FRONTEND_DB_WRITE_PATTERNS)
+    ) {
+      const writeLine = findFirstLineMatch(content, FRONTEND_DB_WRITE_PATTERNS, startLine);
+      candidates.push({
+        id: `frontend-db-write:${file.path}:${writeLine?.line ?? startLine}`,
+        type: "frontend_direct_db_write",
+        summary: "Frontend writes directly to the database without a server/edge gate",
+        rationale:
+          "Client-side database writes rely entirely on RLS and bypass server-side protections such as rate limiting and audit logging.",
+        recommendation:
+          "Move write operations behind API or edge functions, enforce strong RLS policies, and add server-side rate limiting and auditing.",
+        filepath: file.path,
+        evidence: [
+          {
+            filepath: file.path,
+            startLine: writeLine?.line ?? startLine,
+            endLine: writeLine?.line ?? startLine,
+            excerpt: writeLine?.text,
+            note: "Client-side database write detected"
           }
         ],
         relatedFileRoles: roles

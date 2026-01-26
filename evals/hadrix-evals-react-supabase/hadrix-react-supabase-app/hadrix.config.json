@@ -1,0 +1,68 @@
+{
+  "appName": "orbit-projects",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A01_broken_access_control": {
+      "idor_get_project": true,
+      "admin_endpoint_missing_role_check": true,
+      "frontend_only_role_enforcement": true,
+      "cross_org_leakage_trusting_org_id": true,
+      "rls_permissive_policies": true
+    },
+    "A02_security_misconfiguration": {
+      "cors_allow_all": true,
+      "log_secrets": true,
+      "debug_endpoint_enabled": true,
+      "overprivileged_anon_key_usage": true,
+      "public_storage_bucket": true
+    },
+    "A03_injection": {
+      "sql_injection_raw_query": true,
+      "unsafe_query_builder_filter": true,
+      "command_injection_scan_repo": true,
+      "xss_dangerously_set_inner_html": true
+    },
+    "A04_cryptographic_failures": {
+      "weak_jwt_secret_fallback": true,
+      "insecure_random_tokens": true,
+      "plaintext_tokens_in_db": true,
+      "magic_link_no_expiration_assumption": true
+    },
+    "A05_insecure_design": {
+      "no_rate_limit_sensitive_actions": true,
+      "no_tenant_isolation_by_design": true,
+      "no_separation_of_duties": true,
+      "trust_client_org_id": true,
+      "frontend_direct_db_write": true
+    },
+    "A06_authentication_failures": {
+      "trust_frontend_auth_state": true,
+      "jwt_not_validated_in_edge": true,
+      "no_mfa_for_admin": true,
+      "unlimited_login_attempts": true
+    },
+    "A07_software_data_integrity_failures": {
+      "unsigned_webhooks": true,
+      "execute_user_supplied_config": true,
+      "missing_integrity_checks": true
+    },
+    "A08_logging_monitoring_failures": {
+      "no_audit_logs": true,
+      "sensitive_data_in_logs": true,
+      "no_alerts_for_privilege_escalation": true,
+      "logs_retention_too_short": true
+    },
+    "A09_dos_and_resilience": {
+      "no_timeouts_external_calls": true,
+      "retry_storms": true,
+      "unbounded_db_queries": true,
+      "resource_exhaustion_large_payloads": true
+    },
+    "A10_vulnerable_dependencies": {
+      "axios_redos": true,
+      "lodash_command_injection": true,
+      "lodash_prototype_pollution": true,
+      "jsonwebtoken_key_confusion": true
+    }
+  }
+}

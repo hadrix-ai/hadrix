@@ -1,0 +1,38 @@
+[
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/api/projects/route.ts",
+    "description": "No rate limiting and client-controlled orgId for project creation",
+    "severity": "medium"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/actions/createProject.ts",
+    "description": "Server action trusts client orgId and lacks rate limiting",
+    "severity": "medium"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/api/tokens/route.ts",
+    "description": "API token creation lacks rate limiting",
+    "severity": "medium"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/actions/createApiToken.ts",
+    "description": "Server action creates API tokens without rate limiting",
+    "severity": "low"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/dashboard/page.tsx",
+    "description": "No tenant isolation by design (all orgs visible)",
+    "severity": "medium"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "app/api/orgs/members/route.ts",
+    "description": "No separation of duties: any user can add members to any org",
+    "severity": "high"
+  }
+]

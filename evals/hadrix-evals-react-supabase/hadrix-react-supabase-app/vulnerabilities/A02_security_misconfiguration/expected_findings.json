@@ -1,0 +1,33 @@
+[
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "backend/supabase/functions/_shared/cors.ts",
+    "description": "Overly permissive CORS: Access-Control-Allow-Origin set to '*' when toggle enabled",
+    "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "backend/supabase/functions/get-project.ts",
+    "description": "Debug mode leaks auth context and headers in API response when toggle enabled",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "backend/supabase/functions/admin-delete-user.ts",
+    "description": "Secrets logged to console (service role key) when toggle enabled",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "frontend/utils/api.ts",
+    "description": "Over-privileged anon key usage: anon key used as bearer token in requests to Edge Functions",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "backend/supabase/migrations/002_rls.sql",
+    "description": "Public webhook events RLS policy exposes operational data to all authenticated users (using true)",
+    "severity": "medium"
+  }
+]
+

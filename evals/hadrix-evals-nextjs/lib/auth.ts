@@ -1,0 +1,74 @@
+import jwt from "jsonwebtoken";
+import { env } from "@/lib/env";
+import { vulnEnabled } from "@/lib/hadrix";
+
+export type AuthContext = {
+  userId: string | null;
+  email: string | null;
+  role: string;
+  orgId: string | null;
+  rawToken: string | null;
+};
+
+export function getAuthContext(req: Request): AuthContext {
+  const authHeader = req.headers.get("authorization") ?? "";
+  const rawToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
+
+  const headerUserId = req.headers.get("x-user-id");
+  const headerOrgId = req.headers.get("x-org-id");
+
+  // HADRIX_VULN: A06 Authentication Failures
+  // Trust client-provided headers as authenticated context.
+  if (vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state") && headerUserId) {
+    return { userId: headerUserId, email: null, role: "member", orgId: headerOrgId, rawToken };
+  }
+
+  if (!rawToken) {
+    return { userId: null, email: null, role: "anon", orgId: null, rawToken };
+  }
+
+  // HADRIX_VULN: A04 Cryptographic Failures
+  // Weak/fallback secret and decoding without verifying signature.
+  if (vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback")) {
+    const secret = env.jwtSecret || "dev-secret";
+    console.log("jwt secret (fallback):", secret);
+    const decoded = jwt.decode(rawToken) as any;
+    return {
+      userId: decoded?.sub ?? null,
+      email: decoded?.email ?? null,
+      role: decoded?.role ?? "member",
+      orgId: decoded?.org_id ?? null,
+      rawToken
+    };
+  }
+
+  // HADRIX_VULN: A06 Authentication Failures
+  // When enabled, do not validate JWT; treat token presence as authenticated.
+  if (vulnEnabled("vulnerabilities.A06_authentication_failures.jwt_not_validated_in_edge")) {
+    return { userId: rawToken ? "unknown-user" : null, email: null, role: "member", orgId: null, rawToken };
+  }
+
+  try {
+    const payload = jwt.verify(rawToken, env.jwtSecret) as any;
+    return {
+      userId: payload?.sub ?? null,
+      email: payload?.email ?? null,
+      role: payload?.role ?? "member",
+      orgId: payload?.org_id ?? null,
+      rawToken
+    };
+  } catch {
+    return { userId: null, email: null, role: "anon", orgId: null, rawToken };
+  }
+}
+
+export function signSession(payload: Record<string, unknown>): string {
+  const useFallback = vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback");
+  const secret = useFallback ? env.jwtSecret || "dev-secret" : env.jwtSecret;
+  // HADRIX_VULN: A04 Cryptographic Failures
+  // Weak secret fallback for JWT signing.
+  if (!secret) {
+    throw new Error("JWT_SECRET missing");
+  }
+  return jwt.sign(payload, secret, { algorithm: "HS256" });
+}

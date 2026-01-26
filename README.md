@@ -61,15 +61,7 @@ You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
 
 Hadrix can run the same eval suites used in CI, but using the local CLI scan logic.
 
-1) Clone the fixture repos into a local directory (default: `./.hadrix-eval-fixtures`):
-
-```bash
-mkdir -p .hadrix-eval-fixtures
-git clone https://github.com/hadrix-ai/hadrix-evals-react-supabase .hadrix-eval-fixtures/hadrix-evals-react-supabase
-git clone https://github.com/hadrix-ai/hadrix-evals-nextjs .hadrix-eval-fixtures/hadrix-evals-nextjs
-```
-
-2) Run the evals:
+Fixtures are vendored under `./evals` by default, so you can run:
 
 ```bash
 HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix evals
@@ -85,6 +77,7 @@ Optional flags:
   - `hadrix-evals-react-supabase`
   - `hadrix-evals-nextjs`
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
+- `HADRIX_EVALS_DIR=<dir>` to override the default fixtures directory.
 - `--repo <path>` to run a single spec against a specific repo path (requires `--spec`).
 - `--json` for machine-readable output.
 - `--debug` to enable debug logs (written under `--out-dir/logs` by default).
