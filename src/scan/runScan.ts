@@ -328,6 +328,21 @@ type DedupeReport = {
   missingOverlapPercent: number;
 };
 
+type JellyAnchorsReport = {
+  enabled: boolean;
+  skipped: boolean;
+  ran: boolean;
+  reason?: string;
+  error?: string;
+  durationMs?: number;
+  anchorCount: number | null;
+  fileCount: number | null;
+  repoRoot: string;
+  scanRoot: string;
+  repoPath: string | null;
+  commitSha: string | null;
+};
+
 function parseLineNumberForReport(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -384,6 +399,55 @@ function formatCountMap(values: Record<string, number>): string {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([key, count]) => `${key}: ${count}`)
     .join(", ");
+}
+
+function buildJellyAnchorsReport(params: {
+  enabled: boolean;
+  skipped: boolean;
+  repoRoot: string;
+  scanRoot: string;
+  repoPath: string | null;
+  commitSha: string | null;
+  result?: JellyAnchorComputation | null;
+  index?: AnchorIndex | null;
+}): JellyAnchorsReport {
+  let ran = false;
+  let reason = "";
+  let error: string | undefined;
+  let durationMs: number | undefined;
+
+  if (!params.enabled) {
+    reason = "disabled";
+  } else if (params.skipped) {
+    reason = "skipped";
+  }
+
+  if (params.result) {
+    ran = params.result.ran;
+    durationMs = params.result.durationMs;
+    if (params.result.reason) {
+      reason = params.result.reason;
+    }
+    if (params.result.error) {
+      error = params.result.error;
+    }
+  }
+
+  const report: JellyAnchorsReport = {
+    enabled: params.enabled,
+    skipped: params.skipped,
+    ran,
+    anchorCount: params.index ? params.index.anchorCount : null,
+    fileCount: params.index ? params.index.fileCount : null,
+    repoRoot: params.repoRoot,
+    scanRoot: params.scanRoot,
+    repoPath: params.repoPath,
+    commitSha: params.commitSha
+  };
+  if (reason) report.reason = reason;
+  if (error) report.error = error;
+  if (typeof durationMs === "number") report.durationMs = durationMs;
+  return report;
 }
 
 function buildDedupeReport(rawFindings: CoreFinding[], finalCount: number): DedupeReport {
@@ -488,6 +552,23 @@ async function writeDedupeReport(
   const relative = path.relative(process.cwd(), filePath);
   log(
     `Dedupe report saved to ${relative && !relative.startsWith("..") ? relative : filePath}.`
+  );
+}
+
+async function writeJellyAnchorsReport(
+  stateDir: string,
+  report: JellyAnchorsReport,
+  log: (message: string) => void
+): Promise<void> {
+  const dir = path.join(stateDir, "reports");
+  await mkdir(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `jelly-anchors-report-${timestamp}.json`;
+  const filePath = path.join(dir, filename);
+  await writeFile(filePath, JSON.stringify(report, null, 2), "utf-8");
+  const relative = path.relative(process.cwd(), filePath);
+  log(
+    `Jelly anchors report saved to ${relative && !relative.startsWith("..") ? relative : filePath}.`
   );
 }
 
@@ -960,8 +1041,9 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       : await runStaticScanners(config, scanRoot, log);
     log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
   
+    const jellySkipRequested = Boolean(options.skipJellyAnchors);
     const jellyAnchorsEnabled =
-      config.flags.enableJellyAnchors && !(options.skipJellyAnchors ?? false);
+      config.flags.enableJellyAnchors && !jellySkipRequested;
     let jellyResult: JellyAnchorComputation | null = null;
     let jellyIndex: AnchorIndex | null = null;
     if (jellyAnchorsEnabled) {
@@ -980,8 +1062,29 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
         log(`Jelly anchors unavailable${reason}.`);
       }
-    } else if (config.flags.enableJellyAnchors && options.skipJellyAnchors) {
+    } else if (config.flags.enableJellyAnchors && jellySkipRequested) {
       log("Jelly anchors skipped by CLI flag.");
+    }
+    if (config.flags.enableJellyAnchors) {
+      const jellyReport = buildJellyAnchorsReport({
+        enabled: jellyAnchorsEnabled,
+        skipped: jellySkipRequested,
+        repoRoot,
+        scanRoot,
+        repoPath: repoPath ?? null,
+        commitSha,
+        result: jellyResult,
+        index: jellyIndex
+      });
+      if (debugWriter) {
+        debugWriter.log({ event: "jelly_anchors", ...jellyReport });
+      }
+      try {
+        await writeJellyAnchorsReport(config.stateDir, jellyReport, log);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`Failed to persist jelly anchors report: ${message}`);
+      }
     }
   
     const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);

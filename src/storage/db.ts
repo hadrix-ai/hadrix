@@ -183,9 +183,13 @@ export class HadrixDb {
     return this.embeddingReset;
   }
 
+  private log(message: string) {
+    this.options.logger?.(message);
+  }
+
   private notifyFallback() {
     if (this.fallbackNotified) return;
-    this.options.logger?.("Fast vector search unavailable; using portable mode.");
+    this.log("Fast vector search unavailable; using portable mode.");
     this.fallbackNotified = true;
   }
 
@@ -211,6 +215,35 @@ export class HadrixDb {
     } catch {
       return null;
     }
+  }
+
+  private normalizeRowId(value: unknown): number | null {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return null;
+      const truncated = Math.trunc(value);
+      if (!Number.isSafeInteger(truncated)) return null;
+      return truncated;
+    }
+    if (typeof value === "bigint") {
+      const asNumber = Number(value);
+      if (!Number.isSafeInteger(asNumber)) return null;
+      return asNumber;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return null;
+      const truncated = Math.trunc(parsed);
+      if (!Number.isSafeInteger(truncated)) return null;
+      return truncated;
+    }
+    return null;
+  }
+
+  private toSqliteInteger(value: unknown): number | bigint | null {
+    const normalized = this.normalizeRowId(value);
+    if (normalized == null) return null;
+    if (this.vectorMode !== "fast") return normalized;
+    return BigInt(normalized);
   }
 
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -419,12 +452,29 @@ export class HadrixDb {
       .all(fileId) as Array<{ id: number }>;
 
     if (rows.length) {
-      const ids = rows.map((row) => row.id);
+      const ids = rows
+        .map((row) => this.toSqliteInteger(row.id))
+        .filter((id): id is number | bigint => id !== null);
+      const invalidCount = rows.length - ids.length;
+      if (invalidCount > 0) {
+        this.log(`Skipping ${invalidCount} non-integer chunk ids for embeddings delete (fileId=${fileId}).`);
+      }
+      if (!ids.length) {
+        this.log(`Skipping embeddings delete: no valid chunk ids (fileId=${fileId}).`);
+        this.db.prepare("DELETE FROM chunks WHERE file_id = ?").run(fileId);
+        return;
+      }
       const placeholder = ids.map(() => "?").join(",");
-      if (this.vectorMode === "fast") {
-        this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
-      } else {
-        this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
+      try {
+        if (this.vectorMode === "fast") {
+          this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...ids);
+        } else {
+          this.db.prepare(`DELETE FROM chunk_embeddings WHERE chunk_id IN (${placeholder})`).run(...ids);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log(`Embeddings delete failed (mode=${this.vectorMode}, fileId=${fileId}): ${message}`);
+        throw err;
       }
     }
 
@@ -501,7 +551,18 @@ export class HadrixDb {
 
     const tx = this.db.transaction(() => {
       for (const row of rows) {
-        insert.run(row.chunkId, row.embedding);
+        const chunkId = this.toSqliteInteger(row.chunkId);
+        if (chunkId == null) {
+          this.log(`Skipping embedding insert: invalid chunkId (${typeof row.chunkId}).`);
+          continue;
+        }
+        try {
+          insert.run(chunkId, row.embedding);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.log(`Embedding insert failed (mode=${this.vectorMode}, chunkId=${chunkId}): ${message}`);
+          throw err;
+        }
       }
     });
 

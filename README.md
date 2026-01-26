@@ -148,6 +148,13 @@ By default logs are written under `<scan-target>/.hadrix/logs` with a timestampe
 hadrix scan /path/to/repo --debug-log ./scan-debug.jsonl
 ```
 
+## Reports
+
+Scan reports are written under `<scan-target>/.hadrix/reports`, including:
+
+- `dedupe-report-<timestamp>.json` for dedupe counts and coverage stats.
+- `jelly-anchors-report-<timestamp>.json` for jelly anchor status and counts.
+
 ## CLI options
 
 - `--format json` (or `--json`) outputs machine-readable JSON and disables the spinner.
@@ -159,10 +166,10 @@ hadrix scan /path/to/repo --debug-log ./scan-debug.jsonl
 
 ## Feature flags
 
-These flags gate upcoming parity features and are off by default until the CLI wiring lands.
+These flags control optional features; both are enabled by default and can be disabled if needed.
 
-- `ENABLE_SECURITY_CHUNKING=true|false` (default: false)
-- `ENABLE_JELLY_ANCHORS=true|false` (default: false)
+- `ENABLE_SECURITY_CHUNKING=true|false` (default: true)
+- `ENABLE_JELLY_ANCHORS=true|false` (default: true)
 
 ## Architecture
 

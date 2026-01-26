@@ -269,11 +269,11 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   const enableSecurityChunking =
     rawSecurityChunking != null
       ? parseLooseBoolean(rawSecurityChunking)
-      : configFile.flags?.enableSecurityChunking ?? false;
+      : configFile.flags?.enableSecurityChunking ?? true;
   const enableJellyAnchors =
     rawJellyAnchors != null
       ? parseStrictBoolean(rawJellyAnchors)
-      : configFile.flags?.enableJellyAnchors ?? false;
+      : configFile.flags?.enableJellyAnchors ?? true;
 
   const embeddingsModelRaw =
     readEnv("HADRIX_EMBEDDINGS_MODEL") || configFile.embeddings?.model || defaultEmbeddingModel(embeddingsProvider);
