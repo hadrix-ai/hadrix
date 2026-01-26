@@ -287,6 +287,25 @@ function applyFindingIdentityKey<T extends { details?: Record<string, unknown> |
   fallbackRepoPath?: string | null
 ): T {
   const details = { ...toRecord(finding.details) };
+  const existingIdentityKey =
+    typeof details.identityKey === "string" ? details.identityKey.trim() : "";
+  const existingDedupeKey =
+    typeof details.dedupeKey === "string" ? details.dedupeKey.trim() : "";
+  if (existingIdentityKey || existingDedupeKey) {
+    if (existingIdentityKey) {
+      details.identityKey = existingIdentityKey;
+    }
+    if (existingDedupeKey) {
+      details.dedupeKey = existingDedupeKey;
+    }
+    if (existingIdentityKey && !existingDedupeKey) {
+      details.dedupeKey = existingIdentityKey;
+    }
+    if (existingDedupeKey && !existingIdentityKey) {
+      details.identityKey = existingDedupeKey;
+    }
+    return { ...finding, details };
+  }
   const identityKey = buildFindingIdentityKey(finding as any, {
     fallbackRepoPath: fallbackRepoPath ?? null
   });

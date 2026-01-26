@@ -174,6 +174,10 @@ function rangesOverlap(
 
 const NON_CODE_FILE_EXTENSIONS = new Set([".json", ".lock", ".md", ".yaml", ".yml"]);
 const FRONTEND_PATH_SEGMENTS = ["frontend", "components", "app", "pages"];
+const APP_ROUTER_PATH_PATTERN = /(^|\/)(src\/)?app(\/|$)/i;
+const APP_ROUTER_API_PATH_PATTERN = /(^|\/)(src\/)?app\/api(\/|$)/i;
+const APP_ROUTER_SERVER_COMPONENT_FILE_PATTERN =
+  /(?:^|\/)(page|layout|template|error|loading|not-found)\.[tj]sx?$/i;
 const SERVER_PATH_SEGMENTS = ["api", "functions", "server", "backend"];
 const SERVER_ACTION_PATH_PATTERNS = [
   /^app\/actions(?:\/|$|\.)/i,
@@ -278,12 +282,29 @@ function hasServerActionEntryPoint(details: Record<string, unknown>): boolean {
     normalized.includes("use server");
 }
 
+function isAppRouterServerComponentPath(filepath: string): boolean {
+  const normalized = filepath.startsWith("/") ? filepath : `/${filepath}`;
+  if (!APP_ROUTER_PATH_PATTERN.test(normalized)) {
+    return false;
+  }
+  if (APP_ROUTER_API_PATH_PATTERN.test(normalized)) {
+    return false;
+  }
+  if (SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+  return APP_ROUTER_SERVER_COMPONENT_FILE_PATTERN.test(normalized);
+}
+
 function isFrontendOnlyPath(filepath: string, details?: Record<string, unknown>): boolean {
   const lower = filepath.toLowerCase();
   if (details && hasServerActionEntryPoint(details)) {
     return false;
   }
   if (SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(lower))) {
+    return false;
+  }
+  if (isAppRouterServerComponentPath(lower)) {
     return false;
   }
   const hasFrontendSegment = FRONTEND_PATH_SEGMENTS.some((segment) => hasPathSegment(lower, segment));

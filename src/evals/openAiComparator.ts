@@ -141,6 +141,25 @@ const normalizeText = (value: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+const ALIAS_TOKEN_RE = /\b(?:GHSA-[A-Za-z0-9-]+|CVE-\d{4}-\d{4,})\b/gi;
+const PACKAGE_AT_VERSION_RE = /\b([a-z0-9_.-]+)@([0-9][^\s,)]*)\b/i;
+
+const normalizeAliasToken = (value: string): string => value.trim().toUpperCase();
+const normalizePackageName = (value: string): string => value.trim().toLowerCase();
+const normalizePackageVersion = (value: string): string => value.trim().toLowerCase();
+
+const extractPackageSpecFromText = (
+  value: string
+): { packageName: string; packageVersion: string } | null => {
+  if (!value) return null;
+  const match = value.match(PACKAGE_AT_VERSION_RE);
+  if (!match) return null;
+  return {
+    packageName: match[1]?.trim() ?? "",
+    packageVersion: match[2]?.trim() ?? "",
+  };
+};
+
 const tokenSet = (value: string): Set<string> => {
   const tokens = normalizeText(value)
     .split(" ")
@@ -259,6 +278,20 @@ const uniqueList = (values: string[]): string[] => {
   return result;
 };
 
+const extractAliasTokens = (value: string): string[] => {
+  if (!value) return [];
+  const matches = value.match(ALIAS_TOKEN_RE) ?? [];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const normalized = normalizeAliasToken(match);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+};
+
 const normalizeRuleId = (value: string): string => value.trim().toLowerCase();
 const normalizeRuleIdAlias = (value: string): string => {
   const normalized = normalizeRuleId(value);
@@ -316,6 +349,77 @@ const extractActualRuleIds = (actual: { details?: Record<string, unknown> | null
     ...collectRuleIds(details.mergedRuleIds),
     ...collectRuleIds(details.merged_rule_ids)
   ]);
+};
+
+const collectExpectedAliases = (expected: {
+  expectation: string;
+  ruleId?: string | null;
+}): string[] => {
+  const result = new Set<string>();
+  for (const alias of extractAliasTokens(expected.expectation)) {
+    result.add(alias);
+  }
+  if (typeof expected.ruleId === "string" && expected.ruleId.trim()) {
+    for (const alias of extractAliasTokens(expected.ruleId)) {
+      result.add(alias);
+    }
+  }
+  return Array.from(result);
+};
+
+const collectActualAliases = (actual: { details?: Record<string, unknown> | null }): string[] => {
+  const result = new Set<string>();
+  for (const ruleId of extractActualRuleIds(actual)) {
+    for (const alias of extractAliasTokens(ruleId)) {
+      result.add(alias);
+    }
+  }
+  return Array.from(result);
+};
+
+const extractExpectedPackageSpec = (expected: {
+  expectation: string;
+}): { packageName: string; packageVersion: string } | null => {
+  const parsed = extractPackageSpecFromText(expected.expectation);
+  if (!parsed || !parsed.packageName || !parsed.packageVersion) return null;
+  return parsed;
+};
+
+const extractActualPackageSpec = (actual: {
+  details?: Record<string, unknown> | null;
+}): { packageName: string; packageVersion: string } | null => {
+  const details = (actual.details ?? {}) as Record<string, unknown>;
+  const packageName =
+    typeof details.packageName === "string" ? details.packageName.trim() : "";
+  const packageVersion =
+    typeof details.packageVersion === "string" ? details.packageVersion.trim() : "";
+  if (!packageName || !packageVersion) return null;
+  return { packageName, packageVersion };
+};
+
+const osvPackageAliasMatch = (
+  expected: { expectation: string; ruleId?: string | null },
+  actual: { details?: Record<string, unknown> | null }
+): boolean => {
+  const expectedAliases = collectExpectedAliases(expected);
+  if (expectedAliases.length === 0) return false;
+  const expectedPackage = extractExpectedPackageSpec(expected);
+  if (!expectedPackage) return false;
+  const actualPackage = extractActualPackageSpec(actual);
+  if (!actualPackage) return false;
+  if (normalizePackageName(expectedPackage.packageName) !== normalizePackageName(actualPackage.packageName)) {
+    return false;
+  }
+  if (
+    normalizePackageVersion(expectedPackage.packageVersion) !==
+    normalizePackageVersion(actualPackage.packageVersion)
+  ) {
+    return false;
+  }
+  const actualAliases = collectActualAliases(actual);
+  if (actualAliases.length === 0) return false;
+  const actualSet = new Set(actualAliases.map((alias) => normalizeAliasToken(alias)));
+  return expectedAliases.some((alias) => actualSet.has(normalizeAliasToken(alias)));
 };
 
 const extractRuleHintsFromText = (value: string): string[] => {
@@ -466,6 +570,13 @@ export function createOpenAiSummaryComparator(options?: {
   const supportsTemperature = !model.toLowerCase().startsWith("gpt-5-");
 
   return async ({ expected, actual }): Promise<SummaryComparison> => {
+    if (osvPackageAliasMatch(expected, actual)) {
+      return {
+        match: true,
+        score: 1,
+        rationale: "osv_package_alias_match",
+      };
+    }
     const expectedHints = collectExpectedRuleHints(expected);
     const actualHints = collectActualRuleHints(actual);
     const hintConflict = hasRuleHintConflict(expectedHints, actualHints);

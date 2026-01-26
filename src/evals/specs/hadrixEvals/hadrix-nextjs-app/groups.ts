@@ -309,42 +309,18 @@ export const ORBIT_NEXT_GROUPS: EvalGroupSpec[] = [
     expectedFindings: [
       {
         filepath: "package-lock.json",
-        expectation:
-          "axios@0.21.1: Inefficient Regular Expression Complexity (ReDoS) in trim function",
-        severity: "high",
-        ruleId: "GHSA-cph5-m8f7-6c5x",
+        expectation: "axios@0.21.1 - 4 known vulnerabilities (HIGH:2, MEDIUM:2)",
+        ruleId: "osv:axios@0.21.1",
       },
       {
         filepath: "package-lock.json",
-        expectation: "lodash@4.17.20: Command Injection via template function",
-        severity: "high",
-        ruleId: "GHSA-35jh-r3h4-6jhm",
+        expectation: "lodash@4.17.20 - 2 known vulnerabilities (HIGH:1, MEDIUM:1)",
+        ruleId: "osv:lodash@4.17.20",
       },
       {
         filepath: "package-lock.json",
-        expectation: "lodash@4.17.20: Regular Expression Denial of Service (ReDoS)",
-        severity: "medium",
-        ruleId: "GHSA-p6mc-m468-83gw",
-      },
-      {
-        filepath: "package-lock.json",
-        expectation: "lodash@4.17.20: Prototype Pollution in zipObjectDeep",
-        severity: "high",
-        ruleId: "GHSA-4xc9-xhrj-v574",
-      },
-      {
-        filepath: "package-lock.json",
-        expectation:
-          "jsonwebtoken@8.5.1: Unrestricted key type could lead to signature validation bypass",
-        severity: "high",
-        ruleId: "GHSA-hjrf-2m68-5959",
-      },
-      {
-        filepath: "package-lock.json",
-        expectation:
-          "jsonwebtoken@8.5.1: Algorithm confusion when using asymmetric keys",
-        severity: "medium",
-        ruleId: "GHSA-c7hr-j4mj-j2w6",
+        expectation: "jsonwebtoken@8.5.1 - 3 known vulnerabilities (HIGH:1, MEDIUM:2)",
+        ruleId: "osv:jsonwebtoken@8.5.1",
       },
     ],
   },

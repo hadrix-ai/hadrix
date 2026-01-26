@@ -505,48 +505,52 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
         const cveAliases = uniqueStrings(
           advisoryIds.filter((alias) => /^CVE-/i.test(alias))
         );
+        const aliasIds = uniqueStrings([...ghsaAliases, ...cveAliases]);
         const packageRuleId = `osv:${packageName}@${packageVersion}`;
         const ecosystemRuleId = `osv:${ecosystem}:${packageName}@${packageVersion}`;
-        const ruleId = primaryId || advisoryId || ecosystemRuleId;
-        const dedupeId = advisoryId || primaryId || summary;
-        const dedupeKey = `${filepath}|${dedupeId}|${packageRuleId}`;
-        if (seen.has(dedupeKey)) {
-          continue;
-        }
-        seen.add(dedupeKey);
         const severity = mapSeverity("osv-scanner", extractCvssSeverity(vuln));
-        const messageId = primaryId || advisoryId;
-        const message = messageId
-          ? `${messageId}: ${summary} in ${packageName}@${packageVersion}`
-          : `${summary} in ${packageName}@${packageVersion}`;
         const mergedRuleIds = uniqueStrings([
-          ...advisoryIds,
           ...ghsaAliases,
           ...cveAliases,
           packageRuleId,
           ecosystemRuleId
         ]);
         const snippet = `Vulnerable package: ${packageName}@${packageVersion} (${ecosystem})`;
+        const fallbackAlias = primaryId || advisoryId;
+        const targetAliases = aliasIds.length > 0
+          ? aliasIds
+          : (fallbackAlias ? [fallbackAlias] : [ecosystemRuleId]);
 
-        findings.push({
-          tool: "osv-scanner",
-          ruleId,
-          message,
-          severity,
-          filepath,
-          startLine: 0,
-          endLine: 0,
-          snippet,
-          details: {
-            packageName,
-            packageVersion,
-            ecosystem,
-            advisoryId: primaryId || advisoryId || null,
-            summary,
-            aliases: aliases.length ? aliases : undefined,
-            mergedRuleIds
+        for (const alias of targetAliases) {
+          const dedupeKey = `osv|${packageName}@${packageVersion}|${alias}|${filepath}`;
+          if (seen.has(dedupeKey)) {
+            continue;
           }
-        });
+          seen.add(dedupeKey);
+          const message = `${alias}: ${summary} in ${packageName}@${packageVersion}`;
+
+          findings.push({
+            tool: "osv-scanner",
+            ruleId: alias,
+            message,
+            severity,
+            filepath,
+            startLine: 0,
+            endLine: 0,
+            snippet,
+            details: {
+              packageName,
+              packageVersion,
+              ecosystem,
+              advisoryId: alias || null,
+              summary,
+              aliases: aliases.length ? aliases : undefined,
+              mergedRuleIds,
+              dedupeKey,
+              identityKey: dedupeKey
+            }
+          });
+        }
       }
     }
   }

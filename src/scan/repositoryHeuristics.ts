@@ -10,6 +10,7 @@ export type FileRole =
   | "BACKGROUND_JOB"
   | "FRONTEND_PAGE"
   | "FRONTEND_ADMIN_PAGE"
+  | "SERVER_COMPONENT"
   | "MIGRATION"
   | "SHARED_AUTH_LIB"
   | "HIGH_RISK_EXEC";
@@ -41,6 +42,7 @@ export type CandidateFinding = {
 export type FileScope =
   | "frontend_ui"
   | "frontend_util"
+  | "server_component"
   | "backend_endpoint"
   | "backend_shared"
   | "config_metadata"
@@ -55,6 +57,7 @@ export type FileScopeEvidence = {
   sinks: string[];
   sensitiveActionHints: string[];
   isServerAction: boolean;
+  isClientComponent: boolean;
   fromSecurityHeader: boolean;
 };
 
@@ -119,6 +122,7 @@ export const REQUIRED_CONTROLS: Record<FileRole, string[]> = {
     "no_sensitive_secrets"
   ],
   FRONTEND_ADMIN_PAGE: ["secure_rendering", "no_frontend_only_auth"],
+  SERVER_COMPONENT: [],
   MIGRATION: ["no_plaintext_secrets", "secure_rls_policies"],
   SHARED_AUTH_LIB: ["authentication", "secure_token_handling"],
   HIGH_RISK_EXEC: ["input_validation", "timeout", "output_sanitization"]
@@ -135,6 +139,7 @@ const FRONTEND_PATH_HINTS = [
   "/frontend/",
   "/src/app/"
 ];
+const APP_ROUTER_PATH_PATTERN = /(^|\/)(src\/)?app(\/|$)/i;
 const BACKEND_PATH_HINTS = [
   "/backend/",
   "/server/",
@@ -146,7 +151,7 @@ const BACKEND_PATH_HINTS = [
   "/db/",
   "/schema/"
 ];
-const APP_ROUTER_API_PATH_PATTERN = /(^|\/)app\/api(\/|$)/i;
+const APP_ROUTER_API_PATH_PATTERN = /(^|\/)(src\/)?app\/api(\/|$)/i;
 const SERVER_ACTION_PATH_PATTERNS = [
   /^app\/actions(?:\/|$|\.)/i,
   /\/app\/actions(?:\/|$|\.)/i
@@ -172,6 +177,7 @@ const FRONTEND_UI_EXTENSIONS = new Set([
   "scss",
   "less"
 ]);
+const SERVER_COMPONENT_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mdx"]);
 const FRONTEND_UI_PATH_HINTS = ["/pages/", "/app/", "/components/", "/ui/", "/views/", "/src/app/"];
 const FRONTEND_UTIL_PATH_HINTS = ["/utils/", "/lib/", "/hooks/", "/services/", "/store/"];
 const BACKEND_ENDPOINT_PATH_HINTS = ["/api/", "/functions/", "/routes/", "/edge/"];
@@ -1034,10 +1040,20 @@ function ruleGateAllows(
 ): boolean {
   const gate = gateMap[ruleId];
   if (!gate) return true;
-  if (!gate.allowedScopes.includes(scope)) return false;
+  if (!scopeMatchesGate(scope, gate.allowedScopes)) return false;
   if (!gate.requiresEvidence) return true;
   if (!evidence) return false;
   return evidenceMatchesGate(gate.requiresEvidence, evidence);
+}
+
+function scopeMatchesGate(scope: FileScope, allowedScopes: FileScope[]): boolean {
+  if (allowedScopes.includes(scope)) return true;
+  if (scope !== "server_component") return false;
+  return (
+    allowedScopes.includes("frontend_ui") ||
+    allowedScopes.includes("frontend_util") ||
+    allowedScopes.includes("backend_endpoint")
+  );
 }
 
 function evidenceMatchesGate(gate: RuleEvidenceGate, evidence: FileScopeEvidence): boolean {
@@ -1069,7 +1085,7 @@ function collectGateMismatches(
   evidence: FileScopeEvidence | undefined
 ): RuleGateMismatch[] {
   const mismatches: RuleGateMismatch[] = [];
-  if (!gate.allowedScopes.includes(scope)) {
+  if (!scopeMatchesGate(scope, gate.allowedScopes)) {
     mismatches.push("scope");
   }
   if (!gate.requiresEvidence) {
@@ -1336,7 +1352,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (canRunRule("org_id_trust") && scopeValue === "frontend_ui") {
+    if (canRunRule("org_id_trust") && (scopeValue === "frontend_ui" || scopeValue === "server_component")) {
       const orgTrust = detectFrontendOrgIdTrustCandidate(file, roles);
       if (orgTrust) {
         candidates.push(orgTrust);
@@ -2069,7 +2085,8 @@ export function buildCandidateFindings(
     const canRunRule = (ruleId: string) =>
       ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
     const backendCandidate = isLikelyBackendFile(path, roles) || Boolean(scopeEvidence?.isShared);
-    const frontendOrgTrustCandidate = scopeValue === "frontend_ui" && canRunRule("org_id_trust");
+    const frontendOrgTrustCandidate =
+      (scopeValue === "frontend_ui" || scopeValue === "server_component") && canRunRule("org_id_trust");
     if (!isEndpointRole(roles) && !backendCandidate && !frontendOrgTrustCandidate) {
       continue;
     }
@@ -2152,9 +2169,14 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
   const content = file.content ?? "";
   const isFrontend =
     FRONTEND_EXTENSIONS.has(ext) || FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
-  const isServerAction =
-    hasServerActionDirective(content) ||
-    SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
+  const isServerActionPath = SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
+  const isServerAction = hasServerActionDirective(content) || isServerActionPath;
+  const isAppRouterPath = APP_ROUTER_PATH_PATTERN.test(pathForHints);
+  const isServerComponentPath =
+    isAppRouterPath &&
+    !APP_ROUTER_API_PATH_PATTERN.test(pathForHints) &&
+    !isServerActionPath &&
+    SERVER_COMPONENT_EXTENSIONS.has(ext);
 
   if (lowerPath.includes("/migrations/") || lowerPath.includes("/migration/")) {
     roles.add("MIGRATION");
@@ -2196,6 +2218,10 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
 
   if (hasHighRiskExec(content)) {
     roles.add("HIGH_RISK_EXEC");
+  }
+
+  if (isServerComponentPath && !hasUseClientDirective(content)) {
+    roles.add("SERVER_COMPONENT");
   }
 
   if (isServerAction) {
@@ -2289,10 +2315,12 @@ type PathHints = {
   isFrontendUi: boolean;
   isFrontendUtil: boolean;
   isBackend: boolean;
+  isAppRouterPath: boolean;
   isAppRouterApiPath: boolean;
   isBackendEndpointHint: boolean;
   isBackendShared: boolean;
   isServerActionPath: boolean;
+  isServerComponentPath: boolean;
   isDestructivePathHint: boolean;
 };
 
@@ -2320,6 +2348,7 @@ function buildPathHints(path: string): PathHints {
   const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
   const isConfig = isConfigPath(lowerPath, base, ext);
   const isDocsTests = isDocsTestsPath(lowerPath, base, ext);
+  const isAppRouterPath = APP_ROUTER_PATH_PATTERN.test(pathForHints);
   const isAppRouterApiPath = APP_ROUTER_API_PATH_PATTERN.test(pathForHints);
   const isFrontend =
     !isAppRouterApiPath &&
@@ -2339,6 +2368,10 @@ function buildPathHints(path: string): PathHints {
     isAppRouterApiPath ||
     (!isBackendShared && BACKEND_ENDPOINT_PATH_HINTS.some((hint) => pathForHints.includes(hint)));
   const isServerActionPath = SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
+  const isServerComponentPath = isAppRouterPath &&
+    !isAppRouterApiPath &&
+    !isServerActionPath &&
+    SERVER_COMPONENT_EXTENSIONS.has(ext);
   const isDestructivePathHint = DESTRUCTIVE_PATH_HINT_PATTERNS.some((pattern) => pattern.test(lowerPath));
 
   return {
@@ -2351,10 +2384,12 @@ function buildPathHints(path: string): PathHints {
     isFrontendUi,
     isFrontendUtil,
     isBackend,
+    isAppRouterPath,
     isAppRouterApiPath,
     isBackendEndpointHint,
     isBackendShared,
     isServerActionPath,
+    isServerComponentPath,
     isDestructivePathHint
   };
 }
@@ -2400,6 +2435,7 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
   const contentIsEndpoint = header.hasHeader ? false : matchesAny(body, ROUTER_HANDLER_PATTERNS);
   const pathIsEndpoint = header.hasHeader ? false : pathHints.isBackendEndpointHint;
   const detectedServerAction = pathHints.isServerActionPath || hasServerActionDirective(body);
+  const isClientComponent = hasUseClientDirective(body);
   const isServerAction = detectedServerAction;
   const isEndpoint = header.hasHeader
     ? headerIsEndpoint || detectedServerAction
@@ -2414,6 +2450,7 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
     sinks,
     sensitiveActionHints,
     isServerAction,
+    isClientComponent,
     fromSecurityHeader: header.hasHeader
   };
 }
@@ -2430,6 +2467,7 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
   const isShared = evidenceList.some((evidence) => evidence.isShared);
   const isConfig = evidenceList.some((evidence) => evidence.isConfig);
   const isServerAction = evidenceList.some((evidence) => evidence.isServerAction);
+  const isClientComponent = evidenceList.some((evidence) => evidence.isClientComponent);
   const mergedSensitiveActionHints =
     isServerAction && !sensitiveActionHints.includes("server.action")
       ? [...sensitiveActionHints, "server.action"]
@@ -2443,6 +2481,7 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
     sinks,
     sensitiveActionHints: mergedSensitiveActionHints,
     isServerAction,
+    isClientComponent,
     fromSecurityHeader: headerEvidence.length > 0
   };
 }
@@ -2462,6 +2501,9 @@ function decideFileScope(pathHints: PathHints, evidence: FileScopeEvidence): Fil
   }
   if (evidence.isEndpoint && (pathHints.isBackendEndpointHint || pathHints.isBackend)) {
     return "backend_endpoint";
+  }
+  if (pathHints.isServerComponentPath && !evidence.isClientComponent && !evidence.isEndpoint) {
+    return "server_component";
   }
   if (pathHints.isFrontend) {
     if (pathHints.isFrontendUtil && !pathHints.isFrontendUi) {
