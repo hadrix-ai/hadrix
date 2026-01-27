@@ -1,6 +1,6 @@
 import path from "node:path";
 import os from "node:os";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
@@ -31,17 +31,114 @@ const ESLINT_LOW_CONFIDENCE_RULES = new Set([
 
 
 export function getToolsDir(): string {
+  // Allow explicit override (useful in CI, containers, and sudo scenarios).
+  const override = (process.env.HADRIX_TOOLS_DIR || "").trim();
+  if (override) return override;
   return path.join(os.homedir(), ".hadrix", "tools");
 }
 
-function getManagedBinPath(name: string): string {
-  const binDir = path.join(getToolsDir(), "bin");
+function lookupHomeDir(username: string): string | null {
+  const target = username.trim();
+  if (!target) return null;
+  try {
+    const passwd = readFileSync("/etc/passwd", "utf-8");
+    for (const line of passwd.split("\n")) {
+      if (!line || line.startsWith("#")) continue;
+      const parts = line.split(":");
+      if (parts.length < 6) continue;
+      if (parts[0] !== target) continue;
+      const home = parts[5] ?? "";
+      return home.trim() || null;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function getToolsDirCandidates(): string[] {
+  const candidates: string[] = [];
+  const primary = getToolsDir();
+  if (primary) candidates.push(primary);
+
+  // If running under sudo, also consider the invoking user's home directory.
+  const sudoUser = (process.env.SUDO_USER || "").trim();
+  if (sudoUser) {
+    const sudoHome = lookupHomeDir(sudoUser);
+    if (sudoHome) candidates.push(path.join(sudoHome, ".hadrix", "tools"));
+  }
+
+  // If HOME is set and differs from os.homedir(), consider it too.
+  const envHome = (process.env.HOME || "").trim();
+  if (envHome) candidates.push(path.join(envHome, ".hadrix", "tools"));
+
+  // De-dupe while preserving order.
+  const seen = new Set<string>();
+  return candidates.filter((dir) => {
+    const key = dir.trim();
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function findHomeInstalledTool(tool: "semgrep" | "gitleaks" | "osv-scanner"): string[] {
+  // Best-effort: if the scanner is installed for some other user under /home/*/.hadrix/tools,
+  // try to find it. This helps when the CLI is run under sudo/systemd but the tools were
+  // installed as a regular user.
+  const results: string[] = [];
+  const homeRoot = process.platform === "win32" ? null : "/home";
+  if (!homeRoot) return results;
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(homeRoot);
+  } catch {
+    return results;
+  }
+
+  for (const entry of entries) {
+    const userHome = path.join(homeRoot, entry);
+    let stats;
+    try {
+      stats = statSync(userHome);
+    } catch {
+      continue;
+    }
+    if (!stats.isDirectory()) continue;
+
+    const toolsDir = path.join(userHome, ".hadrix", "tools");
+    const candidate =
+      tool === "semgrep"
+        ? getSemgrepManagedPath(toolsDir)
+        : getManagedBinPath(tool, toolsDir);
+
+    if (existsSync(candidate)) {
+      results.push(candidate);
+    }
+  }
+
+  return results;
+}
+
+function commonSystemToolPaths(tool: string): string[] {
+  if (process.platform === "win32") return [];
+  return [
+    `/usr/local/bin/${tool}`,
+    `/usr/bin/${tool}`,
+    `/bin/${tool}`
+  ];
+}
+
+function getManagedBinPath(name: string, toolsDir: string): string {
+  const binDir = path.join(toolsDir, "bin");
   const ext = process.platform === "win32" ? ".exe" : "";
   return path.join(binDir, `${name}${ext}`);
 }
 
-function getSemgrepManagedPath(): string {
-  const base = path.join(getToolsDir(), "semgrep");
+function getSemgrepManagedPath(toolsDir: string): string {
+  const base = path.join(toolsDir, "semgrep");
   if (process.platform === "win32") {
     return path.join(base, "Scripts", "semgrep.exe");
   }
@@ -96,11 +193,24 @@ function findOnPath(command: string): string | null {
   return null;
 }
 
-export function resolveToolPath(tool: "semgrep" | "gitleaks" | "osv-scanner", override?: string | null): string | null {
+export function resolveToolPath(
+  tool: "semgrep" | "gitleaks" | "osv-scanner",
+  override?: string | null
+): string | null {
   const candidates: string[] = [];
   if (override) candidates.push(override);
-  if (tool === "semgrep") candidates.push(getSemgrepManagedPath());
-  candidates.push(getManagedBinPath(tool));
+
+  for (const toolsDir of getToolsDirCandidates()) {
+    if (tool === "semgrep") candidates.push(getSemgrepManagedPath(toolsDir));
+    candidates.push(getManagedBinPath(tool, toolsDir));
+  }
+
+  // Common absolute install locations (helpful when PATH is minimal).
+  candidates.push(...commonSystemToolPaths(tool));
+
+  // Last resort: tools installed for a different user under /home/*/.hadrix/tools.
+  candidates.push(...findHomeInstalledTool(tool));
+
   const onPath = findOnPath(tool);
   if (onPath) candidates.push(onPath);
 
@@ -184,6 +294,12 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
 }
 
 async function spawnCapture(command: string, args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  // If cwd is invalid, Node will surface it as a spawn ENOENT which is confusing.
+  // Make it explicit.
+  if (!cwd || !existsSync(cwd)) {
+    throw new Error(`Scan root does not exist: ${cwd}`);
+  }
+
   return await new Promise((resolve, reject) => {
     const proc = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
     let stdout = "";
