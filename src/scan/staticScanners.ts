@@ -25,9 +25,6 @@ const ESLINT_LEGACY_CONFIG_FILES = [
   ".eslintrc.yml",
   ".eslintrc.yaml"
 ];
-const ESLINT_LOW_CONFIDENCE_RULES = new Set([
-  "security/detect-object-injection"
-]);
 
 
 export function getToolsDir(): string {
@@ -431,9 +428,6 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
       if (!msg.ruleId || !msg.line) continue;
       const startLine = msg.line;
       const endLine = msg.endLine && msg.endLine > 0 ? msg.endLine : startLine;
-      const details = ESLINT_LOW_CONFIDENCE_RULES.has(msg.ruleId)
-        ? { lowConfidence: true, confidenceReason: "eslint_object_injection_sink" }
-        : undefined;
       findings.push({
         tool: "eslint",
         ruleId: msg.ruleId,
@@ -442,8 +436,7 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
         filepath,
         startLine,
         endLine,
-        snippet: readSnippet(absPath, startLine, endLine),
-        details
+        snippet: readSnippet(absPath, startLine, endLine)
       });
     }
   }

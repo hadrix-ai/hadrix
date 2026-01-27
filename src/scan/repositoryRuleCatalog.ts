@@ -3,7 +3,6 @@ export type RuleScanDefinition = {
   title: string;
   category: string;
   description: string;
-  summaryTemplate?: string;
   guidance?: string[];
   requiredControls?: string[];
   candidateTypes?: string[];
@@ -38,7 +37,6 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "access_control",
     description: "Admin handlers lack server-side role or permission enforcement.",
     requiredControls: ["authorization:role"],
-    candidateTypes: ["missing_role_check"],
     guidance: [
       "Admin endpoints should validate roles/permissions on the server.",
       "Do not accept UI-only gating as sufficient."
@@ -77,17 +75,6 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     guidance: [
       "Require account lockout or escalating delays after repeated failed login attempts.",
       "CAPTCHA or challenge-based defenses can be valid alternatives."
-    ]
-  },
-  {
-    id: "missing_mfa",
-    title: "Missing multi-factor authentication on privileged actions",
-    category: "authentication",
-    description: "Privileged admin actions or authentication flows do not enforce MFA/2FA step-up.",
-    candidateTypes: ["missing_mfa"],
-    guidance: [
-      "Prioritize admin login and member/role management flows that should require step-up MFA.",
-      "Accept OTP/TOTP, WebAuthn/passkeys, or equivalent MFA enforcement."
     ]
   },
   {
@@ -572,32 +559,3 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     ]
   }
 ];
-
-const DEFAULT_SUMMARY_TEMPLATE_SUFFIX = " in {filepath}";
-
-const buildSummaryTemplate = (rule: RuleScanDefinition): string => {
-  if (rule.summaryTemplate && rule.summaryTemplate.trim()) {
-    return rule.summaryTemplate.trim();
-  }
-  return `${rule.title}${DEFAULT_SUMMARY_TEMPLATE_SUFFIX}`;
-};
-
-const RULE_SUMMARY_TEMPLATE_MAP: Map<string, string> = new Map();
-for (const rule of REPOSITORY_SCAN_RULES) {
-  const template = buildSummaryTemplate(rule);
-  RULE_SUMMARY_TEMPLATE_MAP.set(rule.id, template);
-  for (const candidateType of rule.candidateTypes ?? []) {
-    RULE_SUMMARY_TEMPLATE_MAP.set(candidateType, template);
-  }
-}
-
-export function getRuleSummaryTemplate(ruleId?: string | null): string {
-  if (typeof ruleId !== "string") return "";
-  const normalized = ruleId.trim();
-  if (!normalized) return "";
-  return RULE_SUMMARY_TEMPLATE_MAP.get(normalized) ?? "";
-}
-
-export function getRuleSummaryTemplateForRule(rule: RuleScanDefinition): string {
-  return buildSummaryTemplate(rule);
-}

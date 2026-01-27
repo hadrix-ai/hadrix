@@ -117,7 +117,7 @@ export const REQUIRED_CONTROLS: Record<FileRole, string[]> = {
     "authorization:ownership_or_membership",
     "rate_limiting"
   ],
-  AUTH_ENDPOINT: ["rate_limiting", "secure_token_handling", "no_plaintext_secrets"],
+  AUTH_ENDPOINT: ["rate_limiting", "secure_token_handling"],
   WEBHOOK_ENDPOINT: ["signature_verification", "replay_protection"],
   BACKGROUND_JOB: ["input_validation", "least_privilege"],
   FRONTEND_PAGE: [
@@ -128,7 +128,7 @@ export const REQUIRED_CONTROLS: Record<FileRole, string[]> = {
   FRONTEND_ADMIN_PAGE: ["secure_rendering", "no_frontend_only_auth"],
   SERVER_COMPONENT: [],
   MIGRATION: ["no_plaintext_secrets", "secure_rls_policies"],
-  SHARED_AUTH_LIB: ["authentication", "secure_token_handling", "no_plaintext_secrets"],
+  SHARED_AUTH_LIB: ["authentication", "secure_token_handling"],
   HIGH_RISK_EXEC: ["input_validation", "timeout", "output_sanitization"]
 };
 
@@ -481,26 +481,6 @@ const AUTH_ACTION_HINT_PATTERNS = [
   /\breset\b/i,
   /\binvite\b/i
 ];
-const AUTH_FLOW_PATTERNS = [
-  /\blogin\b/i,
-  /\bsignin\b/i,
-  /\bsignup\b/i,
-  /\bregister\b/i,
-  /\bpassword\b/i,
-  /\breset\b/i,
-  /\boauth\b/i,
-  /\bsso\b/i,
-  /\bsession\b/i,
-  /\btoken\b/i
-];
-const ADMIN_STEP_UP_HINT_PATTERNS = [
-  /\bstep[-\s]?up\b/i,
-  /\breauth\b/i,
-  /\bre-auth\b/i,
-  /\belevat(e|ed)\b/i,
-  /\bsudo\b/i,
-  /\bprivileged\b/i
-];
 
 const DESTRUCTIVE_ACTION_HINT_PATTERNS = [
   /\bdelete\b/i,
@@ -546,23 +526,6 @@ const UNBOUNDED_SELECT_PATTERNS = [
   /\.select\s*\(\s*[A-Za-z_$]/i
 ];
 const LIMIT_PATTERNS = [/\.limit\(/i, /\.range\(/i, /\.paginate\(/i, /\.page\(/i];
-const SINGLE_RESULT_PATTERNS = [/\.single\s*\(/i, /\.maybeSingle\s*\(/i];
-const SELECT_WRITE_CHAIN_PATTERNS = [
-  /\.insert\s*\(/i,
-  /\.update\s*\(/i,
-  /\.upsert\s*\(/i,
-  /\.delete\s*\(/i
-];
-const SELECT_TABLE_HINT_PATTERNS = [
-  /\.from\s*\(/i,
-  /\.selectFrom\s*\(/i,
-  /\.table\s*\(/i,
-  /\bfrom\s+['"`][^'"`]+['"`]/i
-];
-const SELECT_USER_FILTER_PATTERNS = [
-  /\.(eq|neq|in|match|filter|ilike|like|contains|overlaps|textSearch)\s*\([^\n]*(req\.|request\.|params\.|query\.|body\.|searchParams|headers\.get)/i,
-  /\bwhere\b[^\n]{0,120}\b(req\.|request\.|params\.|query\.|body\.|searchParams|headers\.get)/i
-];
 
 const EXTERNAL_CALL_PATTERNS = [
   /\bfetch\s*\(/i,
@@ -629,34 +592,8 @@ const JWT_FALLBACK_PATTERNS = [
   /jwtSecret[^\n]*\?\?[^\n]*['"][^'"]+['"]/i
 ];
 
-const JWT_DECODE_PATTERNS = [
-  /jwt\.decode\s*\(/i,
-  /\bjwtDecode\s*\(/i,
-  /decodeJwt\s*\(/i,
-  /decodeJWT\s*\(/i,
-  /parseJwt\s*\(/i,
-  /decodeProtectedHeader\s*\(/i
-];
-const JWT_VERIFY_PATTERNS = [
-  /jwt\.verify\s*\(/i,
-  /\bjwtVerify\s*\(/i,
-  /verifyJwt\s*\(/i,
-  /createVerifier\s*\(/i,
-  /\bjwtDecrypt\s*\(/i
-];
-const JWT_CONTEXT_PATTERNS = [/\bjwt\b/i, /\btoken\b/i, /\baccess[_-]?token\b/i];
-const JWT_BYPASS_TOGGLE_PATTERNS = [
-  /\b(skip|bypass|disable|no)[\w\s-]{0,20}(verify|verification|signature)\b/i,
-  /\bverify(Signature|Jwt|Token)?\s*:\s*false\b/i,
-  /\bverify\s*:\s*false\b/i,
-  /\bnoVerify\b/i,
-  /\bskipJwtVerification\b/i,
-  /\bdisableJwtVerification\b/i,
-  /\bignoreExpiration\s*:\s*true\b/i,
-  /\bignoreExp\s*:\s*true\b/i,
-  /\brequireSignedTokens?\s*:\s*false\b/i,
-  /\balgorithms?\s*:\s*\[\s*['"]none['"]\s*\]/i
-];
+const JWT_DECODE_PATTERNS = [/jwt\.decode\s*\(/i, /decodeJwt\s*\(/i, /parseJwt\s*\(/i];
+const JWT_VERIFY_PATTERNS = [/jwt\.verify\s*\(/i, /verifyJwt\s*\(/i, /createVerifier\s*\(/i];
 
 const SQL_INJECTION_PATTERNS = [
   /\b(query|execute|sql)\s*\(.*\+.*\b(req\.|params\.|query\.|body\.)/i,
@@ -853,19 +790,6 @@ const LOCKOUT_PATTERNS = [
   /\bmax(?:imum)?\s*attempts?\b/i,
   /\bbrute[- ]?force\b/i
 ];
-const MFA_PATTERNS = [
-  /\bmfa\b/i,
-  /\b2fa\b/i,
-  /\btwo[-\s]?factor\b/i,
-  /\bmulti[-\s]?factor\b/i,
-  /\bsecond[-\s]?factor\b/i,
-  /\botp\b/i,
-  /\btotp\b/i,
-  /\bone[-\s]?time\s+pass(code|word)\b/i,
-  /\bauthenticator\b/i,
-  /\bwebauthn\b/i,
-  /\bpasskey\b/i
-];
 const LOCKOUT_NEGATION_PATTERNS = [
   /\bno\s+lockout\b/i,
   /\bwithout\s+lockout\b/i,
@@ -908,41 +832,6 @@ const AUTH_FILE_PATTERNS = [
 const WEBHOOK_FILE_PATTERNS = [/webhook/i, /hook/i];
 
 const ADMIN_PATH_PATTERNS = [/\/(admin|superadmin|staff|root)(\/|\.|_|-)/i, /\badmin\b/i];
-const MEMBER_MANAGEMENT_PATH_PATTERNS = [
-  /\/(members?|membership|memberships|roles?|permissions?|invites?|invitations?|teams?|workspaces?|organizations?|orgs?|accounts?)(\/|$|\.|_|-)/i,
-  /\/(user|users)\/(roles?|permissions?|invites?|members?|membership)/i
-];
-const MEMBER_MANAGEMENT_CONTENT_PATTERNS = [
-  /\bmember(ship)?\b/i,
-  /\binvite\b/i,
-  /\bteam\b/i,
-  /\bworkspace\b/i,
-  /\borganization\b/i,
-  /\bgrant\b/i,
-  /\brevoke\b/i,
-  /\bassign\b/i,
-  /\brole[_-]?id\b/i,
-  /\bpermission[_-]?id\b/i,
-  /\baddMember\b/i,
-  /\bremoveMember\b/i,
-  /\bsetRole\b/i,
-  /\bupdateRole\b/i,
-  /\bchangeRole\b/i,
-  /\bmakeAdmin\b/i,
-  /\bremoveAdmin\b/i
-];
-const MEMBER_MANAGEMENT_STRONG_PATTERNS = [
-  /\binvite\b/i,
-  /\baddMember\b/i,
-  /\bremoveMember\b/i,
-  /\bsetRole\b/i,
-  /\bupdateRole\b/i,
-  /\bchangeRole\b/i,
-  /\bmakeAdmin\b/i,
-  /\bremoveAdmin\b/i,
-  /\bgrant\b/i,
-  /\brevoke\b/i
-];
 
 const SHARED_AUTH_PATH_PATTERNS = [
   /\bauth\./i,
@@ -974,23 +863,13 @@ const USE_CLIENT_DIRECTIVE_PATTERN = /(^|\n)\s*["']use client["']\s*;?/i;
 
 const UPLOAD_SIGNAL_PATTERNS = [
   /\bmultipart\/form-data\b/i,
+  /\bformData\b/i,
   /\bmulter\b/i,
   /\bbusboy\b/i,
   /\bformidable\b/i,
   /\bfileUpload\b/i,
   /\breq\.files?\b/i,
-  /\bcreateReadStream\b/i,
-  /\bReadableStream\b/i,
-  /\bFile\b/i,
-  /\bBlob\b/i
-];
-const UPLOAD_FORMDATA_PATTERNS = [
-  /\bformData\b/i,
-  /\b(request|req)\.formData\s*\(/i
-];
-const UPLOAD_FORMDATA_FILE_PATTERNS = [
-  /\bformData\.(get|getAll)\s*\(\s*['"](?:file|files|upload|attachment|avatar|image|photo|document)s?['"]\s*\)/i,
-  /\bformData\.(get|getAll)\s*\(\s*`[^`]*(file|upload|attachment)[^`]*`\s*\)/i
+  /\bcreateReadStream\b/i
 ];
 const UPLOAD_PATH_PATTERNS = [/\/upload(s)?(\/|$)/i, /file[-_]?upload/i];
 const UPLOAD_SIZE_LIMIT_PATTERNS = [
@@ -1042,7 +921,6 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   frontend_only_authorization: 75,
   missing_rate_limiting: 45,
   missing_lockout: 44,
-  missing_mfa: 43,
   missing_audit_logging: 65,
   missing_upload_size_limit: 60,
   missing_security_headers: 50,
@@ -1098,19 +976,11 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   },
   missing_lockout: {
     allowedScopes: ["backend_endpoint", "server_component"],
-    requiresEvidence: { sensitiveAction: true }
-  },
-  missing_mfa: {
-    allowedScopes: ["backend_endpoint", "server_component"],
-    requiresEvidence: { sensitiveAction: true }
+    requiresEvidence: { endpointContext: true, sensitiveAction: true }
   },
   missing_audit_logging: {
     allowedScopes: ["backend_endpoint", "backend_shared"],
     requiresEvidence: { endpointContext: true, sharedContext: true, destructiveAction: true }
-  },
-  missing_role_check: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: { endpointContext: true }
   },
   missing_webhook_signature: {
     allowedScopes: ["backend_endpoint"],
@@ -1129,15 +999,16 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { sharedContext: true }
   },
   jwt_validation_bypass: {
-    allowedScopes: ["backend_shared", "server_component"]
+    allowedScopes: ["backend_shared"],
+    requiresEvidence: { sharedContext: true }
   },
   weak_jwt_secret: {
     allowedScopes: ["backend_shared"],
     requiresEvidence: { sharedContext: true }
   },
   magic_link_no_expiration: {
-    allowedScopes: ["backend_endpoint", "server_component"],
-    requiresEvidence: { sensitiveAction: true }
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
   },
   weak_token_generation: {
     allowedScopes: ["backend_endpoint", "backend_shared"]
@@ -1500,41 +1371,8 @@ export function buildCandidateFindings(
     const isLayout = isLayoutFile(file.path ?? "");
     const backendCandidate =
       isLikelyBackendFile(file.path, roles) || Boolean(scopeEvidence?.isShared);
-    const canRunRule = (ruleId: string) => {
-      const allowed = ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
-      if (allowed) return true;
-      if (!scopeEvidence) return false;
-      const adminOrMember = roles.includes("ADMIN_ENDPOINT") ||
-        scopeEvidence.sensitiveActionHints.includes("admin") ||
-        scopeEvidence.sensitiveActionHints.includes("member.manage");
-      const authRole = roles.includes("AUTH_ENDPOINT");
-      const relaxableByRule: Partial<Record<string, Set<RuleGateMismatch>>> = {
-        missing_mfa: new Set(["sensitive"]),
-        missing_rate_limiting: new Set(["sensitive"]),
-        missing_role_check: new Set(["endpoint"]),
-        missing_audit_logging: new Set(["destructive", "sensitive"])
-      };
-      const relaxable = relaxableByRule[ruleId];
-      if (!relaxable) {
-        return false;
-      }
-      if (ruleId === "missing_role_check" && !adminOrMember) {
-        return false;
-      }
-      if (
-        (ruleId === "missing_mfa" || ruleId === "missing_rate_limiting") &&
-        !adminOrMember &&
-        !authRole
-      ) {
-        return false;
-      }
-      if (ruleId === "missing_audit_logging" && !adminOrMember && !authRole) {
-        return false;
-      }
-      const gateCheck = evaluateCandidateGate(ruleId, scopeValue, scopeEvidence);
-      if (!gateCheck) return false;
-      return gateCheck.mismatches.every((mismatch) => relaxable.has(mismatch));
-    };
+    const canRunRule = (ruleId: string) =>
+      ruleGateAllows(ruleId, scopeValue, scopeEvidence, CANDIDATE_RULE_GATES);
 
     if (isEndpointRole(roles) || backendCandidate) {
       if (canRunRule("idor")) {
@@ -1756,12 +1594,9 @@ export function buildCandidateFindings(
     if (
       canRunRule("jwt_validation_bypass") &&
       (roles.includes("SHARED_AUTH_LIB") || roles.includes("AUTH_ENDPOINT")) &&
-      hasJwtValidationBypass(content, startLine)
+      hasJwtDecodeWithoutVerify(content)
     ) {
-      const line = findJwtValidationBypassLine(content, startLine);
-      const note = line && JWT_DECODE_PATTERNS.some((pattern) => pattern.test(line.text))
-        ? "JWT decode without verify"
-        : "JWT verification bypass toggle";
+      const line = findFirstLineMatch(content, JWT_DECODE_PATTERNS, startLine);
       candidates.push({
         id: `jwt-no-verify:${file.path}:${line?.line ?? startLine}`,
         type: "jwt_validation_bypass",
@@ -1775,7 +1610,7 @@ export function buildCandidateFindings(
             startLine: line?.line ?? startLine,
             endLine: line?.line ?? startLine,
             excerpt: line?.text,
-            note
+            note: "JWT decode without verify"
           }
         ],
         relatedFileRoles: roles
@@ -2283,36 +2118,6 @@ export function buildCandidateFindings(
       }
     }
 
-    if (
-      canRunRule("missing_role_check") &&
-      roles.includes("ADMIN_ENDPOINT") &&
-      isEndpointRole(roles) &&
-      !hasRoleCheck(content)
-    ) {
-      const adminLine = findFirstLineMatch(content, ADMIN_CONTEXT_PATTERNS, startLine);
-      const handlerLine = findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine);
-      const evidenceLine = adminLine ?? handlerLine;
-      if (evidenceLine) {
-        candidates.push({
-          id: `missing-role-check:${file.path}:${evidenceLine.line ?? startLine}`,
-          type: "missing_role_check",
-          summary: "Missing role checks on admin endpoint",
-          rationale: "Admin endpoints should enforce roles/permissions on the server before performing actions.",
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: evidenceLine.line ?? startLine,
-              endLine: evidenceLine.line ?? startLine,
-              excerpt: evidenceLine.text,
-              note: "Admin endpoint lacks role enforcement in sampled code"
-            }
-          ],
-          relatedFileRoles: roles
-        });
-      }
-    }
-
     if (canRunRule("missing_rate_limiting") && isEndpointRole(roles)) {
       const sensitive = isSensitiveAction(content, roles, file.path, scopeEvidence);
       if (sensitive && !hasRateLimit(content)) {
@@ -2342,11 +2147,7 @@ export function buildCandidateFindings(
       }
     }
 
-    const isServerComponentScope = scopeValue === "server_component";
-    if (
-      canRunRule("missing_lockout") &&
-      (isEndpointRole(roles) || scopeEvidence?.isServerAction || isServerComponentScope)
-    ) {
+    if (canRunRule("missing_lockout") && (isEndpointRole(roles) || scopeEvidence?.isServerAction)) {
       const lowerPath = file.path ? file.path.toLowerCase() : "";
       const scopeAuthHint = scopeEvidence?.sensitiveActionHints.includes("auth") ?? false;
       const loginSignal =
@@ -2372,61 +2173,6 @@ export function buildCandidateFindings(
               endLine: line?.line ?? startLine,
               excerpt: line?.text,
               note: "Login handling without lockout safeguards"
-            }
-          ],
-          relatedFileRoles: roles
-        });
-      }
-    }
-
-    if (
-      canRunRule("missing_mfa") &&
-      (isEndpointRole(roles) || scopeEvidence?.isServerAction || isServerComponentScope)
-    ) {
-      const lowerPath = file.path ? file.path.toLowerCase() : "";
-      const pathForHints = lowerPath.startsWith("/") ? lowerPath : `/${lowerPath}`;
-      const base = lowerPath.split("/").pop() ?? "";
-      const authPathHint =
-        AUTH_FILE_PATTERNS.some((pattern) => pattern.test(lowerPath)) ||
-        LOGIN_PATH_PATTERNS.some((pattern) => pattern.test(lowerPath));
-      const adminPathHint = ADMIN_PATH_PATTERNS.some(
-        (pattern) => pattern.test(pathForHints) || pattern.test(base)
-      );
-      const memberManagementHint = hasMemberManagementContext(pathForHints, base, content);
-      const authFlowSignal =
-        roles.includes("AUTH_ENDPOINT") ||
-        authPathHint ||
-        AUTH_FLOW_PATTERNS.some((pattern) => pattern.test(content));
-      const adminStepUpSignal =
-        (roles.includes("ADMIN_ENDPOINT") || adminPathHint || memberManagementHint) &&
-        (memberManagementHint ||
-          hasRoleCheck(content) ||
-          ADMIN_STEP_UP_HINT_PATTERNS.some((pattern) => pattern.test(content)));
-      if ((authFlowSignal || adminStepUpSignal) && !hasMfa(content)) {
-        const line =
-          findFirstLineMatch(content, AUTH_ACTION_HINT_PATTERNS, startLine) ??
-          findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine);
-        const summary = adminStepUpSignal && !authFlowSignal
-          ? "Missing multi-factor authentication on privileged admin action"
-          : adminStepUpSignal
-            ? "Missing multi-factor authentication on privileged login flow"
-            : "Missing multi-factor authentication on login flow";
-        const rationale = adminStepUpSignal && !authFlowSignal
-          ? "Privileged admin actions should require step-up MFA/2FA verification before completion."
-          : "Privileged authentication flows should enforce MFA/2FA to reduce account takeover risk.";
-        candidates.push({
-          id: `missing-mfa:${file.path}:${line?.line ?? startLine}`,
-          type: "missing_mfa",
-          summary,
-          rationale,
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: line?.line ?? startLine,
-              endLine: line?.line ?? startLine,
-              excerpt: line?.text,
-              note: "Auth flow without MFA/2FA safeguards"
             }
           ],
           relatedFileRoles: roles
@@ -2710,8 +2456,7 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
   const ext = base.includes(".") ? base.split(".").pop() ?? "" : "";
   const content = file.content ?? "";
   const isFrontend =
-    !APP_ROUTER_API_PATH_PATTERN.test(pathForHints) &&
-    (FRONTEND_EXTENSIONS.has(ext) || FRONTEND_PATH_HINTS.some((hint) => pathForHints.includes(hint)));
+    FRONTEND_EXTENSIONS.has(ext) || FRONTEND_PATH_HINTS.some((hint) => lowerPath.includes(hint));
   const isServerActionPath = SERVER_ACTION_PATH_PATTERNS.some((pattern) => pattern.test(pathForHints));
   const isServerAction = hasServerActionDirective(content) || isServerActionPath;
   const isAppRouterPath = APP_ROUTER_PATH_PATTERN.test(pathForHints);
@@ -2731,11 +2476,7 @@ export function classifyFileRoles(file: RepositoryFileSample): FileRole[] {
     roles.add("MIGRATION");
   }
 
-  const adminPathHint = ADMIN_PATH_PATTERNS.some(
-    (pattern) => pattern.test(pathForHints) || pattern.test(base)
-  );
-  const memberManagementHint = hasMemberManagementContext(pathForHints, base, content);
-  if (!isFrontend && (adminPathHint || memberManagementHint)) {
+  if (!isFrontend && ADMIN_PATH_PATTERNS.some((pattern) => pattern.test(lowerPath) || pattern.test(base))) {
     roles.add("ADMIN_ENDPOINT");
   }
 
@@ -3225,31 +2966,8 @@ function collectSensitiveActionHints(content: string, pathHints?: PathHints): st
   if (matchesAny(content, DB_WRITE_PATTERNS)) {
     hints.push("db.write");
   }
-  if (matchesAny(content, ADMIN_CONTEXT_PATTERNS)) {
-    hints.push("admin");
-  }
-  if (matchesAny(content, MEMBER_MANAGEMENT_CONTENT_PATTERNS)) {
-    hints.push("member.manage");
-  }
   if (hasServerActionDirective(content) || pathHints?.isServerActionPath) {
     hints.push("server.action");
-  }
-  if (pathHints) {
-    const pathForHints = pathHints.lowerPath.startsWith("/") ? pathHints.lowerPath : `/${pathHints.lowerPath}`;
-    const adminPathHint = ADMIN_PATH_PATTERNS.some(
-      (pattern) => pattern.test(pathForHints) || pattern.test(pathHints.base)
-    );
-    const memberPathHint = MEMBER_MANAGEMENT_PATH_PATTERNS.some(
-      (pattern) => pattern.test(pathForHints) || pattern.test(pathHints.base)
-    );
-    const memberManagementHint = memberPathHint ||
-      hasMemberManagementContext(pathForHints, pathHints.base, content);
-    if (adminPathHint || memberManagementHint || memberPathHint) {
-      hints.push("admin");
-    }
-    if (memberManagementHint || memberPathHint) {
-      hints.push("member.manage");
-    }
   }
   const destructiveByContent = DESTRUCTIVE_ACTION_HINT_PATTERNS.some((pattern) => pattern.test(content));
   const destructiveByPath = pathHints
@@ -3314,24 +3032,6 @@ function hasRoleCheck(content: string): boolean {
   return ROLE_CHECK_PATTERNS.some((pattern) => pattern.test(content));
 }
 
-function hasMemberManagementContext(pathForHints: string, base: string, content: string): boolean {
-  const hasPathHint = MEMBER_MANAGEMENT_PATH_PATTERNS.some(
-    (pattern) => pattern.test(pathForHints) || pattern.test(base)
-  );
-  const hasContentHint = MEMBER_MANAGEMENT_CONTENT_PATTERNS.some((pattern) => pattern.test(content));
-  const hasStrongContentHint = MEMBER_MANAGEMENT_STRONG_PATTERNS.some((pattern) => pattern.test(content));
-  if (hasPathHint && (hasContentHint || hasRoleCheck(content))) {
-    return true;
-  }
-  if (!hasPathHint && hasContentHint && hasRoleCheck(content)) {
-    return true;
-  }
-  if (!hasPathHint && hasStrongContentHint) {
-    return true;
-  }
-  return false;
-}
-
 function hasRateLimit(content: string): boolean {
   if (!content) return false;
   const lines = content.split("\n");
@@ -3360,11 +3060,6 @@ function hasLockout(content: string): boolean {
     return true;
   }
   return false;
-}
-
-function hasMfa(content: string): boolean {
-  if (!content) return false;
-  return MFA_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function hasMagicLinkExpirationCheck(content: string): boolean {
@@ -3454,28 +3149,6 @@ function hasAuditLogging(content: string): boolean {
   return AUDIT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
-function isUnboundedSelectSnippet(snippet: string): boolean {
-  if (!snippet) return false;
-  if (!UNBOUNDED_SELECT_PATTERNS.some((pattern) => pattern.test(snippet))) {
-    return false;
-  }
-  if (LIMIT_PATTERNS.some((pattern) => pattern.test(snippet))) {
-    return false;
-  }
-  if (SINGLE_RESULT_PATTERNS.some((pattern) => pattern.test(snippet))) {
-    return false;
-  }
-  if (SELECT_WRITE_CHAIN_PATTERNS.some((pattern) => pattern.test(snippet))) {
-    return false;
-  }
-  const hasTableSelect = SELECT_TABLE_HINT_PATTERNS.some((pattern) => pattern.test(snippet));
-  const hasUserFilter = SELECT_USER_FILTER_PATTERNS.some((pattern) => pattern.test(snippet));
-  if (!hasTableSelect && !hasUserFilter) {
-    return false;
-  }
-  return true;
-}
-
 function collectSelectQueryVariables(content: string): string[] {
   const vars = new Set<string>();
   const assignmentPattern =
@@ -3484,7 +3157,10 @@ function collectSelectQueryVariables(content: string): string[] {
     const varName = match[1];
     const expression = match[2] ?? "";
     if (!varName || !expression) continue;
-    if (!isUnboundedSelectSnippet(expression)) {
+    if (!UNBOUNDED_SELECT_PATTERNS.some((pattern) => pattern.test(expression))) {
+      continue;
+    }
+    if (LIMIT_PATTERNS.some((pattern) => pattern.test(expression))) {
       continue;
     }
     vars.add(varName);
@@ -3500,10 +3176,8 @@ function hasUnboundedSelect(content: string): boolean {
   let match: RegExpExecArray | null = selectPattern.exec(content);
   while (match) {
     const start = match.index ?? 0;
-    const before = content.slice(Math.max(0, start - 200), start);
     const window = content.slice(start, start + 240);
-    const snippet = `${before}${window}`;
-    if (isUnboundedSelectSnippet(snippet)) {
+    if (!LIMIT_PATTERNS.some((pattern) => pattern.test(window))) {
       return true;
     }
     match = selectPattern.exec(content);
@@ -3569,27 +3243,6 @@ function hasJwtFallbackSecret(content: string): boolean {
 function hasJwtDecodeWithoutVerify(content: string): boolean {
   return JWT_DECODE_PATTERNS.some((pattern) => pattern.test(content)) &&
     !JWT_VERIFY_PATTERNS.some((pattern) => pattern.test(content));
-}
-
-function findJwtValidationBypassLine(
-  content: string,
-  startLine: number
-): { line: number; text: string } | null {
-  if (!content) return null;
-  if (hasJwtDecodeWithoutVerify(content)) {
-    return findFirstLineMatch(content, JWT_DECODE_PATTERNS, startLine);
-  }
-  const matches = findLineMatches(content, JWT_BYPASS_TOGGLE_PATTERNS, startLine);
-  for (const match of matches) {
-    if (hasPatternNearLine(content, match.line, startLine, JWT_CONTEXT_PATTERNS, 4)) {
-      return match;
-    }
-  }
-  return null;
-}
-
-function hasJwtValidationBypass(content: string, startLine: number): boolean {
-  return Boolean(findJwtValidationBypassLine(content, startLine));
 }
 
 function hasWeakTokenGeneration(content: string): boolean {
@@ -3672,14 +3325,7 @@ function hasUploadSignal(content: string, path: string): boolean {
   if (UPLOAD_PATH_PATTERNS.some((pattern) => pattern.test(lowerPath))) {
     return true;
   }
-  const hasStrongSignal = UPLOAD_SIGNAL_PATTERNS.some((pattern) => pattern.test(content));
-  if (hasStrongSignal) {
-    return true;
-  }
-  if (!UPLOAD_FORMDATA_PATTERNS.some((pattern) => pattern.test(content))) {
-    return false;
-  }
-  return UPLOAD_FORMDATA_FILE_PATTERNS.some((pattern) => pattern.test(content));
+  return UPLOAD_SIGNAL_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function hasUploadSizeLimit(content: string): boolean {
@@ -3970,51 +3616,6 @@ function detectIdorCandidate(file: RepositoryFileSample, roles: FileRole[]): Can
   };
 }
 
-function inferTrustedIdentifierLabel(text: string | null): string {
-  const lower = (text ?? "").toLowerCase();
-  if (/\buser(_?id)?\b/i.test(lower)) {
-    return "userId";
-  }
-  if (/\btenant(_?id)?\b/i.test(lower)) {
-    return "tenantId";
-  }
-  if (/\borganization(_?id)?\b/i.test(lower)) {
-    return "organizationId";
-  }
-  if (/\borg(_?id)?\b/i.test(lower)) {
-    return "orgId";
-  }
-  return "orgId";
-}
-
-function buildTrustedIdSummary(idLabel: string): string {
-  if (idLabel === "userId") {
-    return "Trusting client-provided userId for access control";
-  }
-  return `Trusting client-provided ${idLabel} for tenant routing`;
-}
-
-function buildTrustedIdRationale(idLabel: string): string {
-  if (idLabel === "userId") {
-    return "userId appears to be taken from request input and used in a write path without server-side derivation.";
-  }
-  return `${idLabel} appears to be taken from request input and used in a write path without server-side derivation.`;
-}
-
-function buildFrontendTrustedIdSummary(idLabel: string): string {
-  if (idLabel === "userId") {
-    return "Access control risk: userId from URL used in server-side fetch";
-  }
-  return `Tenant isolation risk: ${idLabel} from URL used in server-side fetch`;
-}
-
-function buildFrontendTrustedIdRationale(idLabel: string): string {
-  if (idLabel === "userId") {
-    return "Server-rendered code uses userId from URL/search params to fetch data without deriving it from server-side auth.";
-  }
-  return `Server-rendered code uses ${idLabel} from URL/search params to fetch tenant data without deriving it from server-side auth.`;
-}
-
 function detectOrgIdTrustCandidate(
   file: RepositoryFileSample,
   roles: FileRole[],
@@ -4026,8 +3627,7 @@ function detectOrgIdTrustCandidate(
   const isServerAction = hasServerActionDirective(content) || Boolean(scopeEvidence?.isServerAction);
   const hasRequestJson = matchesAny(content, REQUEST_JSON_PATTERNS);
   const hasBodyOrg = matchesAny(content, BODY_ORG_PATTERNS) && (hasRequestJson || isServerAction);
-  const hasUserIdInput = matchesAny(content, USER_ID_INPUT_PATTERNS);
-  if (!matchesAny(content, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg && !hasUserIdInput) {
+  if (!matchesAny(content, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg) {
     return null;
   }
   if (!matchesAny(content, DB_WRITE_PATTERNS)) {
@@ -4036,10 +3636,8 @@ function detectOrgIdTrustCandidate(
 
   const inputLine =
     findFirstLineMatch(content, ORG_ID_INPUT_PATTERNS, startLine) ??
-    findFirstLineMatch(content, USER_ID_INPUT_PATTERNS, startLine) ??
     (hasBodyOrg ? findFirstLineMatch(content, BODY_ORG_PATTERNS, startLine) : null);
   const writeLine = findFirstLineMatch(content, DB_WRITE_PATTERNS, startLine);
-  const idLabel = inferTrustedIdentifierLabel(inputLine?.text ?? null);
 
   const evidence: CandidateEvidence[] = [];
   if (inputLine) {
@@ -4048,7 +3646,7 @@ function detectOrgIdTrustCandidate(
       startLine: inputLine.line,
       endLine: inputLine.line,
       excerpt: inputLine.text,
-      note: `Client-provided ${idLabel}`
+      note: "Client-provided orgId"
     });
   }
   if (writeLine) {
@@ -4064,8 +3662,9 @@ function detectOrgIdTrustCandidate(
   return {
     id: `orgid-trust:${file.path}:${inputLine?.line ?? startLine}`,
     type: "org_id_trust",
-    summary: buildTrustedIdSummary(idLabel),
-    rationale: buildTrustedIdRationale(idLabel),
+    summary: "Trusting client-provided orgId for tenant routing",
+    rationale:
+      "orgId appears to be taken from request input and used in a write path without server-side derivation.",
     filepath: file.path,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles
@@ -4095,29 +3694,29 @@ function detectFrontendOrgIdTrustCandidate(
     return null;
   }
 
-  const idLabel = inferTrustedIdentifierLabel(inputLine.text);
   const evidence: CandidateEvidence[] = [
     {
       filepath: file.path,
       startLine: inputLine.line,
       endLine: inputLine.line,
       excerpt: inputLine.text,
-      note: `${idLabel} sourced from URL/search params`
+      note: "orgId sourced from URL/search params"
     },
     {
       filepath: file.path,
       startLine: fetchLine.line,
       endLine: fetchLine.line,
       excerpt: fetchLine.text,
-      note: `Server-side fetch uses URL ${idLabel}`
+      note: "Server-side fetch uses URL orgId"
     }
   ];
 
   return {
     id: `orgid-trust-frontend:${file.path}:${inputLine.line}`,
     type: "org_id_trust",
-    summary: buildFrontendTrustedIdSummary(idLabel),
-    rationale: buildFrontendTrustedIdRationale(idLabel),
+    summary: "Tenant isolation risk: orgId from URL used in server-side fetch",
+    rationale:
+      "Server-rendered code uses orgId from URL/search params to fetch tenant data without deriving it from server-side auth.",
     filepath: file.path,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles
@@ -4265,8 +3864,7 @@ function detectOrgIdTrustCandidateAcrossChunks(
   const hasRequestJson = matchesAnyAcrossSamples(sorted, REQUEST_JSON_PATTERNS);
   const hasBodyOrg =
     matchesAnyAcrossSamples(sorted, BODY_ORG_PATTERNS) && (hasRequestJson || isServerAction);
-  const hasUserIdInput = matchesAnyAcrossSamples(sorted, USER_ID_INPUT_PATTERNS);
-  if (!matchesAnyAcrossSamples(sorted, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg && !hasUserIdInput) {
+  if (!matchesAnyAcrossSamples(sorted, ORG_ID_INPUT_PATTERNS) && !hasBodyOrg) {
     return null;
   }
   if (!matchesAnyAcrossSamples(sorted, DB_WRITE_PATTERNS)) {
@@ -4275,13 +3873,11 @@ function detectOrgIdTrustCandidateAcrossChunks(
 
   const inputLine =
     findFirstLineMatchAcrossSamples(sorted, ORG_ID_INPUT_PATTERNS) ??
-    findFirstLineMatchAcrossSamples(sorted, USER_ID_INPUT_PATTERNS) ??
     (hasBodyOrg ? findFirstLineMatchAcrossSamples(sorted, BODY_ORG_PATTERNS) : null);
   const writeLine = findFirstLineMatchAcrossSamples(sorted, DB_WRITE_PATTERNS);
   if (!writeLine) {
     return null;
   }
-  const idLabel = inferTrustedIdentifierLabel(inputLine?.text ?? null);
 
   const evidence: CandidateEvidence[] = [];
   if (inputLine) {
@@ -4290,7 +3886,7 @@ function detectOrgIdTrustCandidateAcrossChunks(
       startLine: inputLine.line,
       endLine: inputLine.line,
       excerpt: inputLine.text,
-      note: `Client-provided ${idLabel}`
+      note: "Client-provided orgId"
     });
   }
   if (writeLine) {
@@ -4306,8 +3902,9 @@ function detectOrgIdTrustCandidateAcrossChunks(
   return {
     id: `orgid-trust:${filepath}:${inputLine?.line ?? writeLine.line}`,
     type: "org_id_trust",
-    summary: buildTrustedIdSummary(idLabel),
-    rationale: buildTrustedIdRationale(idLabel),
+    summary: "Trusting client-provided orgId for tenant routing",
+    rationale:
+      "orgId appears to be taken from request input and used in a write path without server-side derivation.",
     filepath,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles
@@ -4336,29 +3933,29 @@ function detectFrontendOrgIdTrustCandidateAcrossChunks(
   }
 
   const filepath = sorted[0]?.path ?? "";
-  const idLabel = inferTrustedIdentifierLabel(inputLine.text);
   const evidence: CandidateEvidence[] = [
     {
       filepath: inputLine.filepath,
       startLine: inputLine.line,
       endLine: inputLine.line,
       excerpt: inputLine.text,
-      note: `${idLabel} sourced from URL/search params`
+      note: "orgId sourced from URL/search params"
     },
     {
       filepath: fetchLine.filepath,
       startLine: fetchLine.line,
       endLine: fetchLine.line,
       excerpt: fetchLine.text,
-      note: `Server-side fetch uses URL ${idLabel}`
+      note: "Server-side fetch uses URL orgId"
     }
   ];
 
   return {
     id: `orgid-trust-frontend:${filepath}:${inputLine.line}`,
     type: "org_id_trust",
-    summary: buildFrontendTrustedIdSummary(idLabel),
-    rationale: buildFrontendTrustedIdRationale(idLabel),
+    summary: "Tenant isolation risk: orgId from URL used in server-side fetch",
+    rationale:
+      "Server-rendered code uses orgId from URL/search params to fetch tenant data without deriving it from server-side auth.",
     filepath,
     evidence: trimEvidence(evidence),
     relatedFileRoles: roles

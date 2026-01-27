@@ -30,50 +30,6 @@ const CHUNK_ENDPOINT_PATTERNS = [
   /\breq\.method\b/i,
   /\baddEventListener\s*\(\s*['"]fetch['"]\s*\)/i
 ];
-const CHUNK_HTTP_METHOD_PATTERNS: Record<string, RegExp[]> = {
-  GET: [
-    /\bexport\s+async\s+function\s+GET\b/i,
-    /\brouter\.get\s*\(/i,
-    /\bapp\.get\s*\(/i,
-    /\bmethod\s*===\s*['"]GET['"]/i
-  ],
-  POST: [
-    /\bexport\s+async\s+function\s+POST\b/i,
-    /\brouter\.post\s*\(/i,
-    /\bapp\.post\s*\(/i,
-    /\bmethod\s*===\s*['"]POST['"]/i
-  ],
-  PUT: [
-    /\bexport\s+async\s+function\s+PUT\b/i,
-    /\brouter\.put\s*\(/i,
-    /\bapp\.put\s*\(/i,
-    /\bmethod\s*===\s*['"]PUT['"]/i
-  ],
-  PATCH: [
-    /\bexport\s+async\s+function\s+PATCH\b/i,
-    /\brouter\.patch\s*\(/i,
-    /\bapp\.patch\s*\(/i,
-    /\bmethod\s*===\s*['"]PATCH['"]/i
-  ],
-  DELETE: [
-    /\bexport\s+async\s+function\s+DELETE\b/i,
-    /\brouter\.(delete|del)\s*\(/i,
-    /\bapp\.(delete|del)\s*\(/i,
-    /\bmethod\s*===\s*['"]DELETE['"]/i
-  ],
-  OPTIONS: [
-    /\bexport\s+async\s+function\s+OPTIONS\b/i,
-    /\brouter\.options\s*\(/i,
-    /\bapp\.options\s*\(/i,
-    /\bmethod\s*===\s*['"]OPTIONS['"]/i
-  ],
-  HEAD: [
-    /\bexport\s+async\s+function\s+HEAD\b/i,
-    /\brouter\.head\s*\(/i,
-    /\bapp\.head\s*\(/i,
-    /\bmethod\s*===\s*['"]HEAD['"]/i
-  ]
-};
 const CHUNK_EXTERNAL_CALL_PATTERNS = [
   /\bfetch\s*\(/i,
   /\baxios\b/i,
@@ -97,24 +53,6 @@ const CHUNK_WEBHOOK_CONFIG_PATTERNS = [
 ];
 const CHUNK_AUTH_PATTERNS = [/\bauth\b/i, /\bjwt\b/i, /\btoken\b/i, /\bsession\b/i];
 const CHUNK_ADMIN_PATTERNS = [/\badmin\b/i, /\brole\b/i, /\bpermission\b/i, /\bclaims\b/i];
-const CHUNK_TOKEN_PATTERNS = [
-  /\btoken\b/i,
-  /\bsecret\b/i,
-  /\bapi[_-]?key\b/i,
-  /\baccess[_-]?token\b/i,
-  /\brefresh[_-]?token\b/i,
-  /\bbearer\b/i,
-  /\bauthorization\b/i
-];
-const CHUNK_WEAK_TOKEN_PATTERNS = [/Math\.random\s*\(/i, /\bDate\.now\s*\(/i];
-const CHUNK_REQUEST_BODY_PATTERNS = [
-  /\brequest\.json\s*\(/i,
-  /\breq\.body\b/i,
-  /\brequest\.body\b/i,
-  /\bctx\.request\.body\b/i,
-  /\bformData\s*\(/i,
-  /\bpayload\b/i
-];
 const CHUNK_DATA_PATTERNS = [
   /\.from\s*\(/i,
   /\.select\s*\(/i,
@@ -136,15 +74,7 @@ const CHUNK_EXEC_PATTERNS = [
 ];
 const CHUNK_LOG_PATTERNS = [/\bconsole\.(log|info|warn|error)\s*\(/i, /\blogger\./i];
 const CHUNK_VULN_TOGGLE_PATTERNS = [/\bvulnEnabled\s*\(/i, /\bHADRIX_VULN\b/i];
-const CHUNK_DANGEROUS_PATTERNS = [
-  /\bdangerouslySetInnerHTML\b/i,
-  /\beval\s*\(/i,
-  /\bnew Function\b/i,
-  /\bMath\.random\s*\(/i,
-  /\bDate\.now\s*\(/i,
-  /\bconsole\.(log|info|warn|error|debug)\b[^\n]{0,80}\b(token|secret|api[_-]?key|password|authorization|bearer)\b/i,
-  /\blogger\.[^\n]{0,80}\b(token|secret|api[_-]?key|password|authorization|bearer)\b/i
-];
+const CHUNK_DANGEROUS_PATTERNS = [/\bdangerouslySetInnerHTML\b/i, /\beval\s*\(/i, /\bnew Function\b/i];
 
 function normalizePath(value: string): string {
   return value
@@ -179,30 +109,6 @@ function stripSecurityHeader(content: string): string {
   }
   const { body } = splitSecurityHeader(content);
   return body;
-}
-
-const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
-function detectChunkMethods(content: string): Set<string> {
-  const methods = new Set<string>();
-  if (!content) return methods;
-  for (const [method, patterns] of Object.entries(CHUNK_HTTP_METHOD_PATTERNS)) {
-    if (patterns.some((pattern) => pattern.test(content))) {
-      methods.add(method);
-    }
-  }
-  return methods;
-}
-
-function hasRequestBodySignal(content: string): boolean {
-  if (!content) return false;
-  if (matchesAnyPattern(content, CHUNK_REQUEST_BODY_PATTERNS)) {
-    return true;
-  }
-  if (matchesAnyPattern(content, CHUNK_LOG_PATTERNS)) {
-    return matchesAnyPattern(content, CHUNK_REQUEST_BODY_PATTERNS);
-  }
-  return false;
 }
 
 function buildSecurityChunkIndex(chunks: LocalChunk[]): Map<string, LocalChunk[]> {
@@ -252,16 +158,6 @@ function alignPreferredChunks(preferred: LocalChunk[], allChunks: LocalChunk[]):
     const candidates = securityByFile.get(chunk.filepath);
     if (!candidates || candidates.length === 0) {
       return chunk;
-    }
-    const body = stripSecurityHeader(chunk.content ?? "");
-    const isEndpoint = body ? matchesAnyPattern(body, CHUNK_ENDPOINT_PATTERNS) : false;
-    if (isEndpoint && chunk.overlapGroupId) {
-      const overlapMatch = candidates.find(
-        (candidate) => candidate.overlapGroupId && candidate.overlapGroupId === chunk.overlapGroupId
-      );
-      if (overlapMatch) {
-        return overlapMatch;
-      }
     }
     return pickOverlappingChunk(chunk, candidates) ?? candidates[0];
   });
@@ -314,26 +210,13 @@ function scoreChunk(chunk: LocalChunk): number {
 
   const content = stripSecurityHeader(chunk.content ?? "");
   if (content) {
-    const hasEndpoint = matchesAnyPattern(content, CHUNK_ENDPOINT_PATTERNS);
-    if (hasEndpoint) {
+    if (matchesAnyPattern(content, CHUNK_ENDPOINT_PATTERNS)) {
       score += 4;
-    }
-    if (hasEndpoint && chunk.overlapGroupId) {
-      score += 2;
     }
     if (matchesAnyPattern(content, CHUNK_WEBHOOK_PATTERNS)) {
       score += 2;
     }
     if (matchesAnyPattern(content, CHUNK_AUTH_PATTERNS)) {
-      score += 3;
-    }
-    if (matchesAnyPattern(content, CHUNK_TOKEN_PATTERNS)) {
-      score += 2;
-    }
-    if (matchesAnyPattern(content, CHUNK_WEAK_TOKEN_PATTERNS)) {
-      score += 3;
-    }
-    if (matchesAnyPattern(content, CHUNK_REQUEST_BODY_PATTERNS)) {
       score += 3;
     }
     if (matchesAnyPattern(content, CHUNK_DATA_PATTERNS)) {
@@ -347,9 +230,6 @@ function scoreChunk(chunk: LocalChunk): number {
     }
     if (matchesAnyPattern(content, CHUNK_LOG_PATTERNS)) {
       score += 1;
-    }
-    if (matchesAnyPattern(content, CHUNK_LOG_PATTERNS) && matchesAnyPattern(content, CHUNK_TOKEN_PATTERNS)) {
-      score += 2;
     }
     if (matchesAnyPattern(content, CHUNK_VULN_TOGGLE_PATTERNS)) {
       score += 2;
@@ -569,74 +449,6 @@ function pickExtraChunksForHighRiskFiles(
   return extras;
 }
 
-function pickBestChunk(candidates: LocalChunk[]): LocalChunk | null {
-  if (candidates.length === 0) return null;
-  let best = candidates[0];
-  let bestScore = scoreChunk(best);
-  for (let i = 1; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    const score = scoreChunk(candidate);
-    if (score > bestScore) {
-      best = candidate;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
-function pickHandlerSignalChunks(chunks: LocalChunk[]): LocalChunk[] {
-  const chunksByFile = new Map<string, LocalChunk[]>();
-  for (const chunk of chunks) {
-    if (!chunk.filepath || !chunk.content) continue;
-    if (!chunksByFile.has(chunk.filepath)) {
-      chunksByFile.set(chunk.filepath, []);
-    }
-    chunksByFile.get(chunk.filepath)!.push(chunk);
-  }
-
-  const extras: LocalChunk[] = [];
-  for (const list of chunksByFile.values()) {
-    const methodsByChunk = new Map<LocalChunk, Set<string>>();
-    const fileMethods = new Set<string>();
-    for (const chunk of list) {
-      const body = stripSecurityHeader(chunk.content ?? "");
-      const methods = detectChunkMethods(body);
-      methodsByChunk.set(chunk, methods);
-      for (const method of methods) {
-        fileMethods.add(method);
-      }
-    }
-
-    if (fileMethods.size < 2) continue;
-    const hasWrite = Array.from(fileMethods).some((method) => WRITE_METHODS.has(method));
-    if (!hasWrite) continue;
-
-    const requestBodyChunks = list.filter((chunk) =>
-      hasRequestBodySignal(stripSecurityHeader(chunk.content ?? ""))
-    );
-    const writeChunks = list.filter((chunk) => {
-      const methods = methodsByChunk.get(chunk);
-      if (!methods || methods.size === 0) return false;
-      return Array.from(methods).some((method) => WRITE_METHODS.has(method));
-    });
-    const writeWithBody = writeChunks.filter((chunk) =>
-      hasRequestBodySignal(stripSecurityHeader(chunk.content ?? ""))
-    );
-
-    const preferredWrite = pickBestChunk(writeWithBody) ?? pickBestChunk(writeChunks);
-    const preferredBody = pickBestChunk(requestBodyChunks);
-
-    if (preferredWrite) {
-      extras.push(preferredWrite);
-    }
-    if (preferredBody && preferredBody !== preferredWrite) {
-      extras.push(preferredBody);
-    }
-  }
-
-  return extras;
-}
-
 function capChunks(chunks: LocalChunk[], maxFiles: number, maxChunksPerFile: number): LocalChunk[] {
   const perFileCount = new Map<string, number>();
   const selectedFiles = new Set<string>();
@@ -698,14 +510,8 @@ export function buildRepositoryFileSamples(
     chunkFormat: chunk.chunkFormat ?? null
   }));
   const alignedPreferred = preferSecurityChunks(alignPreferredChunks(preferred, filtered));
-  const handlerPreferred = preferSecurityChunks(
-    alignPreferredChunks(pickHandlerSignalChunks(filtered), filtered)
-  );
 
-  const combinedPreferred = mergeChunkSelection(
-    handlerPreferred,
-    mergeChunkSelection(webhookPreferred, alignedPreferred)
-  );
+  const combinedPreferred = mergeChunkSelection(webhookPreferred, alignedPreferred);
   const combined = mergeChunkSelection(combinedPreferred, expanded);
   const capped = capChunks(combined, maxFiles, maxChunksPerFile);
 

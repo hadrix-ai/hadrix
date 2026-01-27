@@ -31,8 +31,7 @@ import {
   dedupeRepositoryFindingsAgainstExisting,
   dropRepositorySummaryDuplicates,
   filterFindings,
-  normalizeRepositoryFinding,
-  prepareCompositeFindings
+  normalizeRepositoryFinding
 } from "./postProcessing.js";
 import type { AnchorIndex, JellyAnchorComputation } from "./jellyAnchors.js";
 import type { ReachabilityIndex } from "./jellyReachability.js";
@@ -134,22 +133,14 @@ async function createDebugLogWriter(params: {
   }
 }
 
-const SUPABASE_SCHEMA_SNAPSHOT_GLOBS = [
-  "**/datastores/supabase/schema.json",
-  "**/datastores/supabase/**/schema.json",
-  "**/supabase/schema.json",
-  "**/supabase/**/schema.json"
-];
-
 async function discoverSupabaseSchemaSnapshots(scanRoot: string): Promise<string[]> {
-  const matches = await fg(SUPABASE_SCHEMA_SNAPSHOT_GLOBS, {
+  const matches = await fg(["**/datastores/supabase/**/schema.json"], {
     cwd: scanRoot,
     absolute: true,
     onlyFiles: true,
     followSymbolicLinks: false
   });
-  const unique = Array.from(new Set(matches));
-  return unique.sort((a, b) => a.localeCompare(b));
+  return matches.sort((a, b) => a.localeCompare(b));
 }
 
 function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
@@ -250,36 +241,6 @@ function findChunkForIndex(
     if (chunk.chunk_index === chunkIndex) {
       return chunk;
     }
-  }
-  return null;
-}
-
-function buildFallbackOverlapGroupId(params: {
-  filepath: string;
-  startLine?: number | null;
-  endLine?: number | null;
-  chunkIndex?: number | null;
-}): string | null {
-  const filepath = normalizePath(params.filepath);
-  if (!filepath) return null;
-  const startLine =
-    typeof params.startLine === "number" && Number.isFinite(params.startLine)
-      ? Math.trunc(params.startLine)
-      : null;
-  const endLine =
-    typeof params.endLine === "number" && Number.isFinite(params.endLine)
-      ? Math.trunc(params.endLine)
-      : null;
-  const chunkIndex =
-    typeof params.chunkIndex === "number" && Number.isFinite(params.chunkIndex)
-      ? Math.trunc(params.chunkIndex)
-      : null;
-  if (startLine !== null) {
-    const end = endLine ?? startLine;
-    return `fallback:${sha256(`${filepath}:${startLine}-${end}`)}`;
-  }
-  if (chunkIndex !== null) {
-    return `fallback:${sha256(`${filepath}:chunk:${chunkIndex}`)}`;
   }
   return null;
 }
@@ -848,26 +809,6 @@ function toCoreStaticFindings(params: {
       tool: source,
       snippet: finding.snippet ?? null
     };
-    const existingOverlap =
-      typeof details.overlapGroupId === "string"
-        ? details.overlapGroupId
-        : typeof details.overlap_group_id === "string"
-          ? details.overlap_group_id
-          : null;
-    const overlapFromChunk = chunk?.overlap_group_id ?? null;
-    const fallbackOverlap = !existingOverlap && !overlapFromChunk
-      ? buildFallbackOverlapGroupId({
-          filepath,
-          startLine: finding.startLine,
-          endLine: finding.endLine,
-          chunkIndex: chunk?.chunk_index ?? null
-        })
-      : null;
-    if (overlapFromChunk && !existingOverlap) {
-      details.overlapGroupId = overlapFromChunk;
-    } else if (fallbackOverlap && !existingOverlap) {
-      details.overlapGroupId = fallbackOverlap;
-    }
     if (params.repoFullName) details.repoFullName = params.repoFullName;
     if (normalizedRepoPath) details.repoPath = normalizedRepoPath;
     if (params.commitSha) details.commitSha = params.commitSha;
@@ -910,27 +851,6 @@ function toCoreRepositoryFinding(params: {
   }
   if (!chunk && filepath && typeof normalizedLocation?.startLine === "number") {
     chunk = findChunkForLine(params.chunks, filepath, normalizedLocation.startLine);
-  }
-
-  const existingOverlap =
-    typeof details.overlapGroupId === "string"
-      ? details.overlapGroupId
-      : typeof details.overlap_group_id === "string"
-        ? details.overlap_group_id
-        : null;
-  const overlapFromChunk = chunk?.overlap_group_id ?? null;
-  const fallbackOverlap = !existingOverlap && !overlapFromChunk && filepath
-    ? buildFallbackOverlapGroupId({
-        filepath,
-        startLine: normalizedLocation?.startLine ?? null,
-        endLine: normalizedLocation?.endLine ?? null,
-        chunkIndex
-      })
-    : null;
-  if (overlapFromChunk && !existingOverlap) {
-    details.overlapGroupId = overlapFromChunk;
-  } else if (fallbackOverlap && !existingOverlap) {
-    details.overlapGroupId = fallbackOverlap;
   }
 
   const repositoryId =
@@ -1161,12 +1081,6 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         if (snapshots.length > 1) {
           log("Multiple Supabase schema snapshots found; using the first match.");
         }
-      } else if (debugWriter) {
-        debugWriter.log({
-          event: "supabase_schema_snapshot_missing",
-          scanRoot,
-          patterns: SUPABASE_SCHEMA_SNAPSHOT_GLOBS
-        });
       }
     }
 
@@ -1604,6 +1518,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       }
   
       if (compositeFindings.length > 0) {
+        compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
         compositeFindings = compositeFindings.map((finding) =>
           enrichRepositoryFinding(finding, {
             repoFullName,
@@ -1614,7 +1529,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         );
         compositeFindings = compositeFindings.map(normalizeRepositoryFinding);
       }
-
+  
       if (jellyIndex && compositeFindings.length > 0) {
         const appliedComposite = attachJellyAnchors(compositeFindings, jellyIndex);
         if (appliedComposite.anchored > 0) {
@@ -1624,14 +1539,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         }
       }
       if (compositeFindings.length > 0) {
-        const { findings: preparedComposite, dropped: compositeDropped } = prepareCompositeFindings(
-          compositeFindings,
-          { repoFullName }
-        );
-        if (compositeDropped > 0) {
-          log(`Dropped ${compositeDropped} composite findings without anchors or related findings.`);
-        }
-        compositeFindings = preparedComposite.map((finding) => applyFindingIdentityKey(finding, repoPath));
+        compositeFindings = compositeFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
       }
   
       let combinedFindings =
