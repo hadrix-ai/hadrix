@@ -2,7 +2,6 @@ import { createWriteStream, statSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import fg from "fast-glob";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import { loadConfig } from "../config/loadConfig.js";
 import { discoverFiles } from "../fs/discover.js";
@@ -12,12 +11,7 @@ import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
 import { embedTexts } from "../providers/embedding.js";
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
-import {
-  reduceRepositoryFindings,
-  scanRepository,
-  scanRepositoryComposites,
-  validateRepositoryFindings
-} from "./repositoryScanner.js";
+import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
 import { attachJellyAnchors, computeJellyAnchors } from "./jellyAnchors.js";
@@ -131,16 +125,6 @@ async function createDebugLogWriter(params: {
     params.log(`Failed to create debug log: ${message}`);
     return null;
   }
-}
-
-async function discoverSupabaseSchemaSnapshots(scanRoot: string): Promise<string[]> {
-  const matches = await fg(["**/datastores/supabase/**/schema.json"], {
-    cwd: scanRoot,
-    absolute: true,
-    onlyFiles: true,
-    followSymbolicLinks: false
-  });
-  return matches.sort((a, b) => a.localeCompare(b));
 }
 
 function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
@@ -1065,31 +1049,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       );
     }
   
-    const hasExplicitSupabase = Boolean(
-      options.supabase &&
-        (options.supabase.connectionString || options.supabase.schemaSnapshotPath)
-    );
-    let resolvedSupabase = options.supabase ?? null;
-    if (!hasExplicitSupabase && options.supabase !== null) {
-      const snapshots = await discoverSupabaseSchemaSnapshots(scanRoot);
-      if (snapshots.length > 0) {
-        resolvedSupabase = { schemaSnapshotPath: snapshots[0] };
-        const relative = path.relative(config.projectRoot, snapshots[0]);
-        const displayPath =
-          relative && !relative.startsWith("..") ? relative : snapshots[0];
-        log(`Supabase schema snapshot detected: ${displayPath}.`);
-        if (snapshots.length > 1) {
-          log("Multiple Supabase schema snapshots found; using the first match.");
-        }
-      }
-    }
-
     let supabaseFindings: StaticFinding[] = [];
-    if (resolvedSupabase?.connectionString || resolvedSupabase?.schemaSnapshotPath) {
+    if (options.supabase?.connectionString || options.supabase?.schemaSnapshotPath) {
       log("Fetching Supabase schema...");
       const supabaseResult = await runSupabaseSchemaScan({
-        connectionString: resolvedSupabase?.connectionString,
-        schemaSnapshotPath: resolvedSupabase?.schemaSnapshotPath,
+        connectionString: options.supabase?.connectionString,
+        schemaSnapshotPath: options.supabase?.schemaSnapshotPath,
         projectRoot: config.projectRoot,
         stateDir: config.stateDir,
         logger: log
@@ -1454,29 +1419,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         if (filteredLlmDropped > 0) {
           log(`Filtered ${filteredLlmDropped} LLM findings.`);
         }
-        let validatedLlmFindings = filteredLlmFindings;
-        if (repositoryDescriptor) {
-          const {
-            findings: validatedFindings,
-            dropped: validationDropped,
-            skipped: validationSkipped
-          } = await validateRepositoryFindings({
-            config,
-            repository: repositoryDescriptor,
-            files: fileSamples,
-            findings: filteredLlmFindings,
-            debug: debugContext("llm_validate")
-          });
-          validatedLlmFindings = validatedFindings;
-          if (validationDropped > 0 || validationSkipped > 0) {
-            const skippedNote = validationSkipped > 0 ? `, skipped ${validationSkipped}` : "";
-            log(`Validation dropped ${validationDropped} LLM findings${skippedNote}.`);
-          }
-        }
-        reportLlmFindings = validatedLlmFindings;
-
+        reportLlmFindings = filteredLlmFindings;
+  
         const { findings: dedupedLlmFindings, dropped: dedupeLlmDropped } = dedupeFindings(
-          validatedLlmFindings,
+          filteredLlmFindings,
           llmSource,
           debugContext("llm_dedupe")
         );

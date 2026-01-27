@@ -59,7 +59,6 @@ export type FileScopeEvidence = {
   sensitiveActionHints: string[];
   isServerAction: boolean;
   isClientComponent: boolean;
-  hasRequestBody: boolean;
   fromSecurityHeader: boolean;
 };
 
@@ -80,7 +79,6 @@ export type RuleEvidenceGate = {
   sensitiveAction?: boolean;
   destructiveAction?: boolean;
   sinkTypes?: string[];
-  requestBody?: boolean;
 };
 
 export type RuleScopeGate = {
@@ -95,7 +93,6 @@ export type RuleGateMismatch =
   | "sensitive"
   | "destructive"
   | "sink"
-  | "request_body"
   | "evidence";
 
 export type RuleGateCheck = {
@@ -410,14 +407,6 @@ const FRONTEND_DB_WRITE_PATTERNS = [
   /\bsupabase\.from\([^)]*\)\.(insert|update|delete|upsert)\b/i,
   /\bsupabase\.rpc\s*\(/i
 ];
-const SUPABASE_CLIENT_FACTORY_PATTERNS = [
-  /\bcreateClient\s*(?:<[^>]*>)?\s*\(/i,
-  /\bcreateBrowserClient\s*(?:<[^>]*>)?\s*\(/i
-];
-const SUPABASE_WRITE_METHOD_PATTERNS = [
-  /\.from\s*\([^)]*\)\.(insert|update|delete|upsert)\b/i,
-  /\.rpc\s*\(/i
-];
 
 const SENSITIVE_ACTION_PATTERNS = [
   /\blogin\b/i,
@@ -535,18 +524,6 @@ const EXTERNAL_CALL_PATTERNS = [
   /\bhttp\.request\s*\(/i,
   /\bhttps\.request\s*\(/i
 ];
-const RESPONSE_HEADER_PATTERNS = [
-  /\b(res|response)\.setHeader\s*\(/i,
-  /\b(res|response)\.writeHead\s*\(/i,
-  /\b(res|response)\.header\s*\(/i,
-  /\b(reply|ctx)\.header\s*\(/i,
-  /\bresponse\.headers\.set\s*\(/i,
-  /\bresponse\.headers\.append\s*\(/i,
-  /\bheaders\.set\s*\(/i,
-  /\bheaders\.append\s*\(/i,
-  /\bnew\s+Headers\s*\(/i,
-  /\bNextResponse\.(json|redirect|next)\s*\([^)]*headers\s*:/i
-];
 
 const EXEC_PATTERNS = [
   /\bexecSync\s*\(/i,
@@ -566,15 +543,6 @@ const TIMEOUT_PATTERNS = [
   /signal\s*:/i,
   /withTimeout/i,
   /setTimeout\s*\(/i
-];
-
-const LOCAL_TEST_URL_PATTERNS = [
-  /\blocalhost\b/i,
-  /\b127\.0\.0\.1\b/,
-  /\b0\.0\.0\.0\b/,
-  /\b::1\b/,
-  /\bhttps?:\/\/example\.(?:com|org|net)\b/i,
-  /\bhttps?:\/\/[^/\s]+\.(?:test|local|example|invalid)\b/i
 ];
 
 const CORS_WILDCARD_PATTERNS = [
@@ -909,7 +877,6 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   idor: 95,
   org_id_trust: 95,
   unsafe_query_builder: 90,
-  mass_assignment: 70,
   debug_auth_leak: 85,
   anon_key_bearer: 95,
   missing_bearer_token: 80,
@@ -923,7 +890,6 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   missing_lockout: 44,
   missing_audit_logging: 65,
   missing_upload_size_limit: 60,
-  missing_security_headers: 50,
   frontend_login_rate_limit: 40,
   frontend_secret_exposure: 90,
   missing_least_privilege: 60
@@ -944,14 +910,6 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
       endpointContext: true,
       sharedContext: true,
       sinkTypes: ["db.query"]
-    }
-  },
-  mass_assignment: {
-    allowedScopes: ["backend_endpoint"],
-    requiresEvidence: {
-      endpointContext: true,
-      requestBody: true,
-      sinkTypes: ["db.write"]
     }
   },
   command_injection: {
@@ -975,7 +933,7 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { endpointContext: true, sensitiveAction: true }
   },
   missing_lockout: {
-    allowedScopes: ["backend_endpoint", "server_component"],
+    allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true, sensitiveAction: true }
   },
   missing_audit_logging: {
@@ -1039,8 +997,7 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     requiresEvidence: { sinkTypes: ["template.render"] }
   },
   frontend_only_authorization: {
-    allowedScopes: ["frontend_ui", "frontend_util"],
-    requiresEvidence: { sensitiveAction: true }
+    allowedScopes: ["frontend_ui", "frontend_util"]
   },
   anon_key_bearer: {
     allowedScopes: ["frontend_ui", "frontend_util", "backend_shared"]
@@ -1059,10 +1016,6 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   },
   missing_least_privilege: {
     allowedScopes: ["backend_shared", "config_metadata"]
-  },
-  missing_security_headers: {
-    allowedScopes: ["backend_endpoint", "backend_shared", "config_metadata"],
-    requiresEvidence: { sinkTypes: ["http.response.headers"] }
   }
 };
 
@@ -1150,18 +1103,10 @@ function ruleGateAllows(
 ): boolean {
   const gate = gateMap[ruleId];
   if (!gate) return true;
-  const scopeValue = resolveGateScope(scope, evidence);
-  if (!scopeMatchesGate(scopeValue, gate.allowedScopes)) return false;
+  if (!scopeMatchesGate(scope, gate.allowedScopes)) return false;
   if (!gate.requiresEvidence) return true;
   if (!evidence) return false;
   return evidenceMatchesGate(gate.requiresEvidence, evidence);
-}
-
-function resolveGateScope(scope: FileScope, evidence: FileScopeEvidence | undefined): FileScope {
-  if (evidence?.isServerAction) {
-    return "backend_endpoint";
-  }
-  return scope;
 }
 
 function scopeMatchesGate(scope: FileScope, allowedScopes: FileScope[]): boolean {
@@ -1177,17 +1122,13 @@ function scopeMatchesGate(scope: FileScope, allowedScopes: FileScope[]): boolean
 function evidenceMatchesGate(gate: RuleEvidenceGate, evidence: FileScopeEvidence): boolean {
   const requiresEndpoint = Boolean(gate.endpointContext);
   const requiresShared = Boolean(gate.sharedContext);
-  const isEndpoint = evidence.isEndpoint || evidence.isServerAction;
   if (requiresEndpoint && requiresShared) {
-    if (!isEndpoint && !evidence.isShared) return false;
+    if (!evidence.isEndpoint && !evidence.isShared) return false;
   } else {
-    if (requiresEndpoint && !isEndpoint) return false;
+    if (requiresEndpoint && !evidence.isEndpoint) return false;
     if (requiresShared && !evidence.isShared) return false;
   }
   if (gate.sensitiveAction && evidence.sensitiveActionHints.length === 0 && !evidence.isServerAction) {
-    return false;
-  }
-  if (gate.requestBody && !evidence.hasRequestBody) {
     return false;
   }
   if (gate.destructiveAction && !evidence.sensitiveActionHints.includes("destructive")) {
@@ -1219,14 +1160,13 @@ function collectGateMismatches(
   }
   const requiresEndpoint = Boolean(gate.requiresEvidence.endpointContext);
   const requiresShared = Boolean(gate.requiresEvidence.sharedContext);
-  const isEndpoint = evidence.isEndpoint || evidence.isServerAction;
   if (requiresEndpoint && requiresShared) {
-    if (!isEndpoint && !evidence.isShared) {
+    if (!evidence.isEndpoint && !evidence.isShared) {
       mismatches.push("endpoint");
       mismatches.push("shared");
     }
   } else {
-    if (requiresEndpoint && !isEndpoint) {
+    if (requiresEndpoint && !evidence.isEndpoint) {
       mismatches.push("endpoint");
     }
     if (requiresShared && !evidence.isShared) {
@@ -1239,9 +1179,6 @@ function collectGateMismatches(
     !evidence.isServerAction
   ) {
     mismatches.push("sensitive");
-  }
-  if (gate.requiresEvidence.requestBody && !evidence.hasRequestBody) {
-    mismatches.push("request_body");
   }
   if (
     gate.requiresEvidence.destructiveAction &&
@@ -1269,7 +1206,7 @@ function evaluateRuleGate(
 ): RuleGateCheck | null {
   const gate = gateMap[ruleId];
   if (!gate) return null;
-  const scopeValue = resolveGateScope(scope ?? "unknown", evidence);
+  const scopeValue = scope ?? "unknown";
   const mismatches = collectGateMismatches(gate, scopeValue, evidence);
   return {
     allowed: mismatches.length === 0,
@@ -1367,8 +1304,6 @@ export function buildCandidateFindings(
     const scopeAssignment = scopeByPath.get(normalizePath(file.path));
     const scopeValue = scopeAssignment?.scope ?? "unknown";
     const scopeEvidence = scopeAssignment?.evidence;
-    const getOnlyEndpoint = isGetOnlyEndpoint(roles, content);
-    const isLayout = isLayoutFile(file.path ?? "");
     const backendCandidate =
       isLikelyBackendFile(file.path, roles) || Boolean(scopeEvidence?.isShared);
     const canRunRule = (ruleId: string) =>
@@ -1945,31 +1880,30 @@ export function buildCandidateFindings(
 
     if (
       canRunRule("frontend_direct_db_write") &&
-      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE"))
+      (roles.includes("FRONTEND_PAGE") || roles.includes("FRONTEND_ADMIN_PAGE")) &&
+      matchesAny(content, FRONTEND_DB_WRITE_PATTERNS)
     ) {
-      const writeLine = findSupabaseWriteLine(content, startLine);
-      if (writeLine) {
-        candidates.push({
-          id: `frontend-db-write:${file.path}:${writeLine.line}`,
-          type: "frontend_direct_db_write",
-          summary: "Frontend writes directly to the database without a server/edge gate",
-          rationale:
-            "Client-side database writes rely entirely on RLS and bypass server-side protections such as rate limiting and audit logging.",
-          recommendation:
-            "Move write operations behind API or edge functions, enforce strong RLS policies, and add server-side rate limiting and auditing.",
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: writeLine.line,
-              endLine: writeLine.line,
-              excerpt: writeLine.text,
-              note: "Client-side database write detected"
-            }
-          ],
-          relatedFileRoles: roles
-        });
-      }
+      const writeLine = findFirstLineMatch(content, FRONTEND_DB_WRITE_PATTERNS, startLine);
+      candidates.push({
+        id: `frontend-db-write:${file.path}:${writeLine?.line ?? startLine}`,
+        type: "frontend_direct_db_write",
+        summary: "Frontend writes directly to the database without a server/edge gate",
+        rationale:
+          "Client-side database writes rely entirely on RLS and bypass server-side protections such as rate limiting and audit logging.",
+        recommendation:
+          "Move write operations behind API or edge functions, enforce strong RLS policies, and add server-side rate limiting and auditing.",
+        filepath: file.path,
+        evidence: [
+          {
+            filepath: file.path,
+            startLine: writeLine?.line ?? startLine,
+            endLine: writeLine?.line ?? startLine,
+            excerpt: writeLine?.text,
+            note: "Client-side database write detected"
+          }
+        ],
+        relatedFileRoles: roles
+      });
     }
 
     if (canRunRule("frontend_secret_exposure")) {
@@ -2052,7 +1986,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (canRunRule("frontend_only_authorization") && roles.includes("FRONTEND_ADMIN_PAGE") && !isLayout) {
+    if (canRunRule("frontend_only_authorization") && roles.includes("FRONTEND_ADMIN_PAGE")) {
       const roleLine = findFirstLineMatch(content, FRONTEND_ROLE_PATTERNS, startLine);
       if (roleLine) {
         const apiLine = findFirstLineMatch(content, FRONTEND_API_CALL_PATTERNS, startLine);
@@ -2147,7 +2081,7 @@ export function buildCandidateFindings(
       }
     }
 
-    if (canRunRule("missing_lockout") && (isEndpointRole(roles) || scopeEvidence?.isServerAction)) {
+    if (canRunRule("missing_lockout") && isEndpointRole(roles)) {
       const lowerPath = file.path ? file.path.toLowerCase() : "";
       const scopeAuthHint = scopeEvidence?.sensitiveActionHints.includes("auth") ?? false;
       const loginSignal =
@@ -2207,77 +2141,6 @@ export function buildCandidateFindings(
         ],
         relatedFileRoles: roles
       });
-    }
-
-    if (canRunRule("mass_assignment") && isEndpointRole(roles) && !getOnlyEndpoint) {
-      const hasRequestBody = hasRequestBodySignal(content);
-      const hasDbWrite = matchesAny(content, DB_WRITE_PATTERNS);
-      if (hasRequestBody && hasDbWrite) {
-        const bodyLine =
-          findFirstLineMatch(content, REQUEST_BODY_PATTERNS, startLine) ??
-          findFirstLineMatch(content, REQUEST_JSON_PATTERNS, startLine);
-        const writeLine = findFirstLineMatch(content, DB_WRITE_PATTERNS, startLine);
-        candidates.push({
-          id: `mass-assignment:${file.path}:${bodyLine?.line ?? startLine}`,
-          type: "mass_assignment",
-          summary: "Request body written to models without explicit field allowlist",
-          rationale:
-            "Endpoint accepts request body data and writes it to the database, which can enable mass assignment without explicit field allowlists.",
-          filepath: file.path,
-          evidence: trimEvidence([
-            ...(bodyLine
-              ? [
-                  {
-                    filepath: file.path,
-                    startLine: bodyLine.line,
-                    endLine: bodyLine.line,
-                    excerpt: bodyLine.text,
-                    note: "Request body consumed"
-                  }
-                ]
-              : []),
-            ...(writeLine
-              ? [
-                  {
-                    filepath: file.path,
-                    startLine: writeLine.line,
-                    endLine: writeLine.line,
-                    excerpt: writeLine.text,
-                    note: "Database write from request data"
-                  }
-                ]
-              : [])
-          ]),
-          relatedFileRoles: roles
-        });
-      }
-    }
-
-    if (
-      canRunRule("missing_security_headers") &&
-      (!isEndpointRole(roles) || !getOnlyEndpoint)
-    ) {
-      const headerLine = findFirstLineMatch(content, RESPONSE_HEADER_PATTERNS, startLine);
-      if (headerLine) {
-        candidates.push({
-          id: `missing-security-headers:${file.path}:${headerLine.line}`,
-          type: "missing_security_headers",
-          summary: "Response headers configured without explicit security header defaults",
-          rationale:
-            "Response handling is present, but security headers (CSP, HSTS, X-Frame-Options) should be consistently enforced.",
-          filepath: file.path,
-          evidence: [
-            {
-              filepath: file.path,
-              startLine: headerLine.line,
-              endLine: headerLine.line,
-              excerpt: headerLine.text,
-              note: "Response header mutation detected"
-            }
-          ],
-          relatedFileRoles: roles
-        });
-      }
     }
 
     if (canRunRule("missing_audit_logging")) {
@@ -2719,7 +2582,6 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
   const entryPointHints = collectEntryPointHints(body, header);
   const sinks = collectSinkHints(body, header);
   const sensitiveActionHints = collectSensitiveActionHints(body, pathHints);
-  const hasRequestBody = hasRequestBodySignal(body);
   const headerIsEndpoint = header.hasHeader ? isEndpointEntryType(header.entryPointType) : false;
   const contentIsEndpoint = header.hasHeader ? false : matchesAny(body, ROUTER_HANDLER_PATTERNS);
   const pathIsEndpoint = header.hasHeader ? false : pathHints.isBackendEndpointHint;
@@ -2740,7 +2602,6 @@ function collectScopeEvidence(content: string, pathHints: PathHints): FileScopeE
     sensitiveActionHints,
     isServerAction,
     isClientComponent,
-    hasRequestBody,
     fromSecurityHeader: header.hasHeader
   };
 }
@@ -2758,7 +2619,6 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
   const isConfig = evidenceList.some((evidence) => evidence.isConfig);
   const isServerAction = evidenceList.some((evidence) => evidence.isServerAction);
   const isClientComponent = evidenceList.some((evidence) => evidence.isClientComponent);
-  const hasRequestBody = evidenceList.some((evidence) => evidence.hasRequestBody);
   const mergedSensitiveActionHints =
     isServerAction && !sensitiveActionHints.includes("server.action")
       ? [...sensitiveActionHints, "server.action"]
@@ -2773,7 +2633,6 @@ function mergeScopeEvidence(evidenceList: FileScopeEvidence[]): FileScopeEvidenc
     sensitiveActionHints: mergedSensitiveActionHints,
     isServerAction,
     isClientComponent,
-    hasRequestBody,
     fromSecurityHeader: headerEvidence.length > 0
   };
 }
@@ -2948,9 +2807,6 @@ function collectSinkHints(content: string, header: SecurityHeaderHints): string[
   }
   if (matchesAny(content, DANGEROUS_HTML_PATTERNS)) {
     hints.push("template.render");
-  }
-  if (matchesAny(content, RESPONSE_HEADER_PATTERNS)) {
-    hints.push("http.response.headers");
   }
   return uniqueList(hints);
 }
@@ -3204,11 +3060,6 @@ function hasTimeout(content: string): boolean {
   return TIMEOUT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
-function isLocalOrTestUrl(text: string): boolean {
-  if (!text) return false;
-  return LOCAL_TEST_URL_PATTERNS.some((pattern) => pattern.test(text));
-}
-
 function findMissingTimeoutLine(
   content: string,
   startLine: number
@@ -3216,9 +3067,6 @@ function findMissingTimeoutLine(
   if (!content) return null;
   const matches = findLineMatches(content, [...EXTERNAL_CALL_PATTERNS, ...EXEC_PATTERNS], startLine);
   for (const match of matches) {
-    if (isLocalOrTestUrl(match.text)) {
-      continue;
-    }
     if (TIMEOUT_PATTERNS.some((pattern) => pattern.test(match.text))) {
       continue;
     }
@@ -3359,72 +3207,6 @@ function hasRequestBodySignal(content: string): boolean {
     return true;
   }
   return Boolean(findLogLineWithKeywords(content, 1, REQUEST_BODY_LOG_PATTERNS));
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function collectSupabaseClientAliases(content: string): string[] {
-  const aliases = new Set<string>();
-  const assignmentPattern =
-    /\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:createClient|createBrowserClient)\s*(?:<[^>]*>)?\s*\(/g;
-  for (const match of content.matchAll(assignmentPattern)) {
-    const alias = match[1];
-    if (alias) {
-      aliases.add(alias);
-    }
-  }
-  if (
-    matchesAny(content, SUPABASE_CONTEXT_PATTERNS) ||
-    matchesAny(content, SUPABASE_CLIENT_FACTORY_PATTERNS)
-  ) {
-    aliases.add("supabase");
-  }
-  return Array.from(aliases);
-}
-
-function findSupabaseWriteLine(
-  content: string,
-  startLine: number
-): { line: number; text: string } | null {
-  const aliases = collectSupabaseClientAliases(content);
-  const patterns: RegExp[] = [];
-  for (const alias of aliases) {
-    const escaped = escapeRegExp(alias);
-    patterns.push(
-      new RegExp(
-        `\\b${escaped}\\s*\\.from\\s*\\([^)]*\\)\\s*\\.(insert|update|delete|upsert)\\b`,
-        "i"
-      )
-    );
-    patterns.push(new RegExp(`\\b${escaped}\\s*\\.rpc\\s*\\(`, "i"));
-  }
-  if (patterns.length === 0) {
-    if (matchesAny(content, SUPABASE_CONTEXT_PATTERNS)) {
-      const fallback = findFirstLineMatch(content, SUPABASE_WRITE_METHOD_PATTERNS, startLine);
-      if (fallback) {
-        return fallback;
-      }
-    }
-    return findFirstLineMatch(content, FRONTEND_DB_WRITE_PATTERNS, startLine);
-  }
-  return findFirstLineMatch(content, patterns, startLine);
-}
-
-function isGetOnlyEndpoint(roles: FileRole[], content: string): boolean {
-  if (!isEndpointRole(roles)) return false;
-  if (roles.includes("USER_WRITE_ENDPOINT")) return false;
-  const methods = detectHttpMethods(content);
-  if (methods.size === 0) return false;
-  const hasWrite = ["POST", "PUT", "PATCH", "DELETE"].some((method) => methods.has(method));
-  return methods.has("GET") && !hasWrite;
-}
-
-function isLayoutFile(path: string): boolean {
-  const lower = path.toLowerCase();
-  const base = lower.split("/").pop() ?? "";
-  return base.startsWith("layout.");
 }
 
 function findAnonKeyAdminEvidence(

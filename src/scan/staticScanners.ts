@@ -592,35 +592,7 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
   const json = JSON.parse(result.stdout);
   const findings: StaticFinding[] = [];
   const results = Array.isArray(json?.results) ? json.results : [];
-  type OsvAggregate = {
-    packageName: string;
-    packageVersion: string;
-    ecosystems: Set<string>;
-    filepaths: Set<string>;
-    advisoryIds: Set<string>;
-    summaries: Set<string>;
-    mergedRuleIds: Set<string>;
-    severity: Severity;
-  };
-  const aggregated = new Map<string, OsvAggregate>();
-
-  const ensureAggregate = (key: string, packageName: string, packageVersion: string): OsvAggregate => {
-    let aggregate = aggregated.get(key);
-    if (!aggregate) {
-      aggregate = {
-        packageName,
-        packageVersion,
-        ecosystems: new Set<string>(),
-        filepaths: new Set<string>(),
-        advisoryIds: new Set<string>(),
-        summaries: new Set<string>(),
-        mergedRuleIds: new Set<string>(),
-        severity: "low"
-      };
-      aggregated.set(key, aggregate);
-    }
-    return aggregate;
-  };
+  const seen = new Set<string>();
 
   for (const entry of results) {
     const sourcePath = entry.source?.path;
@@ -634,13 +606,9 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
       const packageVersion = packageInfo.version ?? "unknown";
       const ecosystem = packageInfo.ecosystem ?? "unknown";
       const vulnerabilities = Array.isArray(pkg.vulnerabilities) ? pkg.vulnerabilities : [];
-      const packageKey = `${ecosystem}:${packageName}@${packageVersion}`;
-      const aggregate = ensureAggregate(packageKey, packageName, packageVersion);
-      aggregate.ecosystems.add(ecosystem);
-      aggregate.filepaths.add(filepath);
 
       for (const vuln of vulnerabilities) {
-        const summary = typeof vuln.summary === "string" ? vuln.summary.trim() : "Vulnerability detected";
+        const summary = vuln.summary ?? "Vulnerability detected";
         const aliases = Array.isArray(vuln.aliases)
           ? vuln.aliases.filter((alias: unknown) => typeof alias === "string")
           : [];
@@ -651,66 +619,44 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
         const ecosystemRuleId = `osv:${ecosystem}:${packageName}@${packageVersion}`;
         const severity = mapSeverity("osv-scanner", extractCvssSeverity(vuln));
         const canonicalId = primaryId || advisoryId || aliasIds[0] || "";
+        const ruleId = canonicalId || ecosystemRuleId;
         const mergedRuleIds = uniqueStrings([
-          canonicalId,
+          ruleId,
           ...aliasIds,
           packageRuleId,
           ecosystemRuleId
         ]);
+        const snippet = `Vulnerable package: ${packageName}@${packageVersion} (${ecosystem})`;
+        const dedupeKey = `osv|${packageName}@${packageVersion}|${ruleId}|${filepath}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
+        const message = `${ruleId}: ${summary} in ${packageName}@${packageVersion}`;
 
-        if (canonicalId) {
-          aggregate.advisoryIds.add(canonicalId);
-        }
-        if (summary) {
-          aggregate.summaries.add(summary);
-        }
-        for (const id of mergedRuleIds) {
-          aggregate.mergedRuleIds.add(id);
-        }
-        if (severityRank(severity) > severityRank(aggregate.severity)) {
-          aggregate.severity = severity;
-        }
+        findings.push({
+          tool: "osv-scanner",
+          ruleId,
+          message,
+          severity,
+          filepath,
+          startLine: 0,
+          endLine: 0,
+          snippet,
+          details: {
+            packageName,
+            packageVersion,
+            ecosystem,
+            advisoryId: ruleId || null,
+            summary,
+            aliases: aliasIds.length ? aliasIds : undefined,
+            mergedRuleIds,
+            dedupeKey,
+            identityKey: dedupeKey
+          }
+        });
       }
     }
-  }
-
-  for (const aggregate of aggregated.values()) {
-    const ecosystemList = Array.from(aggregate.ecosystems);
-    const ecosystem = ecosystemList[0] ?? "unknown";
-    const packageKey = `${aggregate.packageName}@${aggregate.packageVersion}`;
-    const ruleId = `osv:${ecosystem}:${packageKey}`;
-    const advisoryIds = Array.from(aggregate.advisoryIds);
-    const summaries = Array.from(aggregate.summaries);
-    const advisoryCount = advisoryIds.length || summaries.length;
-    const summary = advisoryCount
-      ? `${advisoryCount} advisories for ${packageKey}`
-      : `Advisories for ${packageKey}`;
-    const snippet = `Vulnerable package: ${packageKey} (${ecosystemList.join(", ") || "unknown"})`;
-    const dedupeKey = `osv|${ecosystem}:${packageKey}`;
-    const filepath = Array.from(aggregate.filepaths)[0] ?? "";
-
-    findings.push({
-      tool: "osv-scanner",
-      ruleId,
-      message: `${ruleId}: ${summary}`,
-      severity: aggregate.severity,
-      filepath,
-      startLine: 0,
-      endLine: 0,
-      snippet,
-      details: {
-        packageName: aggregate.packageName,
-        packageVersion: aggregate.packageVersion,
-        ecosystem,
-        ecosystems: ecosystemList.length > 1 ? ecosystemList : undefined,
-        advisoryIds: advisoryIds.length ? advisoryIds : undefined,
-        summaries: summaries.length ? summaries : undefined,
-        mergedRuleIds: aggregate.mergedRuleIds.size ? Array.from(aggregate.mergedRuleIds) : undefined,
-        files: aggregate.filepaths.size ? Array.from(aggregate.filepaths) : undefined,
-        dedupeKey,
-        identityKey: dedupeKey
-      }
-    });
   }
 
   return findings;

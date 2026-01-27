@@ -1310,16 +1310,8 @@ function finalizeChunks(chunks: ChunkDraft[], idPath: string): Chunk[] {
   const sorted = [...chunks].sort(
     (a, b) => a.startLine - b.startLine || a.endLine - b.endLine
   );
-  const unique: Array<{ chunk: ChunkDraft; chunkId: string }> = [];
-  const seen = new Set<string>();
-  for (const chunk of sorted) {
-    const chunkId = buildChunkId(idPath, chunk.startLine, chunk.endLine, chunk.contentHash);
-    if (seen.has(chunkId)) continue;
-    seen.add(chunkId);
-    unique.push({ chunk, chunkId });
-  }
-  return unique.map(({ chunk, chunkId }, index) => ({
-    id: chunkId,
+  return sorted.map((chunk, index) => ({
+    id: buildChunkId(idPath, chunk.startLine, chunk.endLine, chunk.contentHash),
     filepath: chunk.filepath,
     chunkIndex: index,
     startLine: chunk.startLine,

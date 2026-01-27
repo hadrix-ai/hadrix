@@ -12,9 +12,7 @@ import {
   buildRepositoryCompositeSystemPrompt,
   buildRepositoryContextPrompt,
   buildRepositoryScanOutputSchema,
-  buildRepositoryRuleSystemPrompt,
-  buildRepositoryValidationOutputSchema,
-  buildRepositoryValidationSystemPrompt
+  buildRepositoryRuleSystemPrompt
 } from "./repositoryPrompts.js";
 import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./repositoryRuleCatalog.js";
 import {
@@ -97,23 +95,6 @@ type RuleScanTask = {
   existingFindings: ExistingScanFinding[];
 };
 
-type ValidationTask = {
-  file: RepositoryFileSample;
-  fileContext: ResolvedFileContext;
-  findings: Array<{ index: number; finding: RepositoryScanFinding }>;
-};
-
-type ValidationDecision = {
-  index: number;
-  keep: boolean;
-  reason?: string | null;
-};
-
-type ValidationBatchResult = {
-  task: ValidationTask;
-  decisions: Map<number, ValidationDecision> | null;
-};
-
 type ScopeGateAction = "allow" | "suppress" | "downgrade";
 
 type ScopeGateDecision = {
@@ -173,7 +154,7 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "missing_least_privilege"
 ]);
 
-const CANDIDATE_PROMOTION_SUMMARY_THRESHOLD = 0.55;
+const CANDIDATE_PROMOTION_SUMMARY_THRESHOLD = 0.45;
 
 const CANDIDATE_SEVERITY: Record<string, Severity> = {
   sql_injection: "high",
@@ -525,178 +506,6 @@ export async function scanRepositoryComposites(
   }
 }
 
-export async function validateRepositoryFindings(input: {
-  config: HadrixConfig;
-  repository: RepositoryDescriptor;
-  files: RepositoryFileSample[];
-  findings: RepositoryScanFinding[];
-  mapConcurrency?: number;
-  debug?: DedupeDebug;
-}): Promise<{ findings: RepositoryScanFinding[]; dropped: number; skipped: number }> {
-  if (input.findings.length === 0) {
-    return { findings: [], dropped: 0, skipped: 0 };
-  }
-  if (input.files.length === 0) {
-    return { findings: input.findings, dropped: 0, skipped: input.findings.length };
-  }
-
-  const outputSchema = buildRepositoryValidationOutputSchema();
-  const systemPrompt = buildRepositoryValidationSystemPrompt();
-  const systemContext = buildRepositoryContextPrompt([input.repository]);
-  const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
-
-  const insights = buildFileInsights(input.files);
-  const fileIndex = indexFileSamplesByPath(input.files);
-  const tasksByKey = new Map<string, ValidationTask>();
-  let skipped = 0;
-
-  input.findings.forEach((finding, index) => {
-    const match = matchFindingToFileSample(finding, fileIndex);
-    if (!match) {
-      skipped += 1;
-      return;
-    }
-    const normalizedPath = normalizePath(match.path);
-    const key = `${normalizedPath}|${match.chunkIndex}|${match.startLine}|${match.endLine}`;
-    let task = tasksByKey.get(key);
-    if (!task) {
-      const fileInsight = insights.fileInsights.get(normalizedPath);
-      const fileContext = resolveFileContext(match, fileInsight);
-      task = { file: match, fileContext, findings: [] };
-      tasksByKey.set(key, task);
-    }
-    task.findings.push({ index, finding });
-  });
-
-  const tasks = Array.from(tasksByKey.values());
-  if (tasks.length === 0) {
-    return { findings: input.findings, dropped: 0, skipped };
-  }
-
-  const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
-  const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
-    const filePayload = {
-      path: task.file.path,
-      startLine: task.file.startLine,
-      endLine: task.file.endLine,
-      chunkIndex: task.file.chunkIndex,
-      truncated: task.file.truncated ?? false,
-      content: task.file.content,
-      roles: task.fileContext.roles.length ? task.fileContext.roles : undefined,
-      requiredControls: task.fileContext.requiredControls.length
-        ? task.fileContext.requiredControls
-        : undefined,
-      scope: task.fileContext.scope ?? undefined,
-      scopeEvidence: task.fileContext.scopeEvidence ?? undefined
-    };
-
-    const findingsPayload = task.findings.map(({ index, finding }) => {
-      const details = toRecord(finding.details);
-      const evidence = mergeStringArrays(
-        toStringArray(finding.evidence),
-        normalizeEvidence(details.evidence)
-      );
-      return {
-        index,
-        summary: finding.summary,
-        type: finding.type ?? null,
-        severity: finding.severity,
-        evidence: evidence.length > 0 ? evidence : undefined,
-        details,
-        location: finding.location ?? null
-      };
-    });
-
-    const payload = {
-      outputSchema,
-      repository: {
-        fullName: input.repository.fullName,
-        defaultBranch: input.repository.defaultBranch ?? undefined,
-        metadata: input.repository.providerMetadata ?? undefined,
-        repoPaths: input.repository.repoPaths,
-        repoRoles: input.repository.repoRoles
-      },
-      file: filePayload,
-      findings: findingsPayload
-    };
-
-    const response = await runChatCompletion(input.config, [
-      { role: "system", content: combinedSystemPrompt },
-      { role: "user", content: JSON.stringify(payload, null, 2) }
-    ]);
-
-    try {
-      const decisions = parseValidationDecisions(response);
-      if (decisions.length === 0) {
-        throw new Error("Validation response missing decisions.");
-      }
-      const decisionMap = new Map<number, ValidationDecision>();
-      for (const decision of decisions) {
-        decisionMap.set(decision.index, decision);
-      }
-      if (input.debug) {
-        let dropped = 0;
-        for (const item of task.findings) {
-          const decision = decisionMap.get(item.index);
-          if (decision && !decision.keep) dropped += 1;
-        }
-        logDebug(input.debug, {
-          event: "llm_validation_batch",
-          file: {
-            path: task.file.path,
-            chunkIndex: task.file.chunkIndex,
-            startLine: task.file.startLine,
-            endLine: task.file.endLine
-          },
-          total: task.findings.length,
-          dropped
-        });
-      }
-      return { task, decisions: decisionMap };
-    } catch (err) {
-      const savedPath = await writeLlmDebugArtifact(
-        input.config,
-        "llm-validate",
-        response
-      );
-      const message = err instanceof Error ? err.message : String(err);
-      logDebug(input.debug, {
-        event: "llm_validation_parse_error",
-        file: {
-          path: task.file.path,
-          chunkIndex: task.file.chunkIndex,
-          startLine: task.file.startLine,
-          endLine: task.file.endLine
-        },
-        message,
-        savedPath
-      });
-      return { task, decisions: null };
-    }
-  });
-
-  const keepFlags = new Array(input.findings.length).fill(true);
-  let dropped = 0;
-  for (const result of results) {
-    if (!result.decisions) {
-      continue;
-    }
-    for (const item of result.task.findings) {
-      const decision = result.decisions.get(item.index);
-      if (!decision) {
-        continue;
-      }
-      if (!decision.keep) {
-        keepFlags[item.index] = false;
-        dropped += 1;
-      }
-    }
-  }
-
-  const kept = input.findings.filter((_, index) => keepFlags[index]);
-  return { findings: kept, dropped, skipped };
-}
-
 function normalizeMapConcurrency(value?: number): number {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.trunc(value);
@@ -754,114 +563,6 @@ function resolveFileContext(
     scope: fileInsight?.scope ?? fallbackScope?.scope,
     scopeEvidence: fileInsight?.scopeEvidence ?? fallbackScope?.evidence
   };
-}
-
-function indexFileSamplesByPath(
-  files: RepositoryFileSample[]
-): Map<string, RepositoryFileSample[]> {
-  const index = new Map<string, RepositoryFileSample[]>();
-  for (const file of files) {
-    const normalizedPath = normalizePath(file.path);
-    if (!normalizedPath) continue;
-    if (!index.has(normalizedPath)) {
-      index.set(normalizedPath, []);
-    }
-    index.get(normalizedPath)!.push(file);
-  }
-  for (const list of index.values()) {
-    list.sort((a, b) => a.startLine - b.startLine);
-  }
-  return index;
-}
-
-function matchFindingToFileSample(
-  finding: RepositoryScanFinding,
-  fileIndex: Map<string, RepositoryFileSample[]>
-): RepositoryFileSample | null {
-  const filepath = extractFindingPath(finding);
-  if (!filepath) return null;
-  const candidates = fileIndex.get(filepath);
-  if (!candidates || candidates.length === 0) {
-    return null;
-  }
-
-  const location = toRecord(finding.location);
-  const chunkIndex = normalizeChunkIndex(location.chunkIndex ?? (location as any).chunk_index);
-  if (chunkIndex !== null) {
-    const matched = candidates.find((candidate) => candidate.chunkIndex === chunkIndex);
-    if (matched) {
-      return matched;
-    }
-  }
-
-  const startLine = normalizeLineNumber(
-    location.startLine ?? location.start_line ?? location.line ?? location.start
-  );
-  const endLine = normalizeLineNumber(
-    location.endLine ?? location.end_line ?? location.lineEnd ?? location.end
-  );
-  const rangeStart = startLine ?? endLine;
-  const rangeEnd = endLine ?? startLine;
-  if (rangeStart !== null && rangeEnd !== null) {
-    const overlapping = candidates.filter((candidate) =>
-      lineRangesOverlapByValue(rangeStart, rangeEnd, candidate.startLine, candidate.endLine)
-    );
-    if (overlapping.length > 0) {
-      return pickClosestSample(overlapping, rangeStart, rangeEnd);
-    }
-  }
-
-  return candidates[0] ?? null;
-}
-
-function lineRangesOverlapByValue(
-  startA: number,
-  endA: number,
-  startB: number,
-  endB: number
-): boolean {
-  const minA = Math.min(startA, endA);
-  const maxA = Math.max(startA, endA);
-  const minB = Math.min(startB, endB);
-  const maxB = Math.max(startB, endB);
-  return minA <= maxB && maxA >= minB;
-}
-
-function rangeDistanceByValue(
-  startA: number,
-  endA: number,
-  startB: number,
-  endB: number
-): number {
-  if (lineRangesOverlapByValue(startA, endA, startB, endB)) {
-    return 0;
-  }
-  const minA = Math.min(startA, endA);
-  const maxA = Math.max(startA, endA);
-  const minB = Math.min(startB, endB);
-  const maxB = Math.max(startB, endB);
-  if (maxA < minB) {
-    return minB - maxA;
-  }
-  return minA - maxB;
-}
-
-function pickClosestSample(
-  candidates: RepositoryFileSample[],
-  startLine: number,
-  endLine: number
-): RepositoryFileSample {
-  let best = candidates[0];
-  let bestDistance = rangeDistanceByValue(startLine, endLine, best.startLine, best.endLine);
-  for (let i = 1; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    const distance = rangeDistanceByValue(startLine, endLine, candidate.startLine, candidate.endLine);
-    if (distance < bestDistance) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-  return best;
 }
 
 function ruleAppliesToFile(rule: RuleScanDefinition, fileContext: ResolvedFileContext): boolean {
@@ -1688,81 +1389,6 @@ function parseFindings(
   return findings;
 }
 
-function parseValidationDecisions(raw: string): ValidationDecision[] {
-  if (!raw) return [];
-  const parsed = extractJson(raw);
-  const decisionsArray: any[] = Array.isArray(parsed?.decisions)
-    ? parsed.decisions
-    : Array.isArray(parsed?.results)
-      ? parsed.results
-      : Array.isArray(parsed)
-        ? parsed
-        : [];
-
-  const decisions: ValidationDecision[] = [];
-  for (const item of decisionsArray) {
-    const index = normalizeDecisionIndex(
-      item?.index ?? item?.findingIndex ?? item?.finding_index ?? item?.id
-    );
-    if (index === null) {
-      continue;
-    }
-    const keep = parseValidationKeep(item?.keep, item?.decision ?? item?.verdict);
-    if (keep === null) {
-      continue;
-    }
-    const reason = typeof item?.reason === "string" ? item.reason.trim() : "";
-    decisions.push({ index, keep, reason: reason || null });
-  }
-  return decisions;
-}
-
-function normalizeDecisionIndex(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return Math.trunc(parsed);
-    }
-  }
-  return null;
-}
-
-function parseValidationKeep(value: unknown, fallback: unknown): boolean | null {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value !== 0;
-  }
-  const normalized = normalizeDecisionToken(value);
-  if (normalized !== null) {
-    return normalized;
-  }
-  const fallbackNormalized = normalizeDecisionToken(fallback);
-  if (fallbackNormalized !== null) {
-    return fallbackNormalized;
-  }
-  return null;
-}
-
-function normalizeDecisionToken(value: unknown): boolean | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return null;
-  if (trimmed === "keep" || trimmed === "true" || trimmed === "yes" || trimmed === "valid") {
-    return true;
-  }
-  if (trimmed === "drop" || trimmed === "false" || trimmed === "no" || trimmed === "invalid") {
-    return false;
-  }
-  return null;
-}
-
 function extractJson(raw: string): any {
   const text = raw.trim();
   if (!text) {
@@ -2044,17 +1670,14 @@ function normalizeMergeIdentityToken(value: unknown): string {
   return normalizeTypeToken(trimmed);
 }
 
-const ENTRY_POINT_METHOD_PATTERN = /^(get|post|put|patch|delete|del|head|options)\s+/i;
-
 function normalizeEntryPointIdentity(value: string): string {
-  const normalized = value
+  return value
     .trim()
     .toLowerCase()
     .replace(/\\/g, "/")
     .replace(/\s+/g, " ")
     .replace(/^\/+/, "")
     .replace(/\/+$/, "");
-  return normalized.replace(ENTRY_POINT_METHOD_PATTERN, "");
 }
 
 function extractRuleIdForMerge(finding: RepositoryScanFinding): string {
@@ -2073,55 +1696,6 @@ function extractCandidateTypeForMerge(finding: RepositoryScanFinding): string {
   const details = toRecord(finding.details);
   const candidateType = details.candidateType ?? details.candidate_type ?? null;
   return normalizeMergeIdentityToken(candidateType);
-}
-
-function extractOverlapGroupForMerge(finding: RepositoryScanFinding): string {
-  const details = toRecord(finding.details);
-  const raw =
-    details.overlapGroupId ??
-    details.overlap_group_id ??
-    details.overlapId ??
-    details.overlap_id;
-  return typeof raw === "string" ? raw.trim() : "";
-}
-
-function extractLineRangeForMerge(finding: RepositoryScanFinding): {
-  startLine: number | null;
-  endLine: number | null;
-} {
-  const location = toRecord(finding.location);
-  const startLine = normalizeLineNumber(
-    location.startLine ?? location.start_line ?? location.line ?? location.start
-  );
-  const endLine = normalizeLineNumber(
-    location.endLine ?? location.end_line ?? location.lineEnd ?? location.end
-  );
-  const normalizedStart = startLine ?? endLine ?? null;
-  let normalizedEnd = endLine ?? normalizedStart;
-  if (normalizedStart !== null && normalizedEnd !== null && normalizedEnd < normalizedStart) {
-    normalizedEnd = normalizedStart;
-  }
-  return { startLine: normalizedStart, endLine: normalizedEnd ?? null };
-}
-
-function lineRangesOverlap(
-  left: { startLine: number | null; endLine: number | null },
-  right: { startLine: number | null; endLine: number | null },
-  slack: number = 2
-): boolean {
-  if (
-    left.startLine == null ||
-    left.endLine == null ||
-    right.startLine == null ||
-    right.endLine == null
-  ) {
-    return false;
-  }
-  const leftStart = Math.max(1, Math.min(left.startLine, left.endLine) - slack);
-  const leftEnd = Math.max(left.startLine, left.endLine) + slack;
-  const rightStart = Math.max(1, Math.min(right.startLine, right.endLine) - slack);
-  const rightEnd = Math.max(right.startLine, right.endLine) + slack;
-  return leftStart <= rightEnd && rightStart <= leftEnd;
 }
 
 function extractEntryPointForMerge(finding: RepositoryScanFinding): string {
@@ -2143,15 +1717,6 @@ function extractEntryPointForMerge(finding: RepositoryScanFinding): string {
     return normalizeEntryPointIdentity(trimmed);
   }
   return "";
-}
-
-function extractPrimarySymbolForMerge(finding: RepositoryScanFinding): string {
-  const details = toRecord(finding.details);
-  const raw = details.primarySymbol ?? details.primary_symbol ?? null;
-  if (typeof raw !== "string") return "";
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  return normalizeEntryPointIdentity(trimmed);
 }
 
 function extractEntryPointFromDetails(details: Record<string, unknown>): string {
@@ -2178,22 +1743,6 @@ function shouldMergeRepositoryFindings(
   left: RepositoryScanFinding,
   right: RepositoryScanFinding
 ): { merge: boolean; reason?: string } {
-  const leftOverlapGroup = extractOverlapGroupForMerge(left);
-  const rightOverlapGroup = extractOverlapGroupForMerge(right);
-  const overlapGroupMatch = Boolean(
-    leftOverlapGroup && rightOverlapGroup && leftOverlapGroup === rightOverlapGroup
-  );
-  if (leftOverlapGroup && rightOverlapGroup && leftOverlapGroup !== rightOverlapGroup) {
-    return { merge: false, reason: "overlap_group_mismatch" };
-  }
-  const leftRange = extractLineRangeForMerge(left);
-  const rightRange = extractLineRangeForMerge(right);
-  if (!overlapGroupMatch && lineRangesOverlap(leftRange, rightRange) === false) {
-    if (leftRange.startLine !== null && rightRange.startLine !== null) {
-      return { merge: false, reason: "line_range_mismatch" };
-    }
-  }
-
   const leftRuleId = extractRuleIdForMerge(left);
   const rightRuleId = extractRuleIdForMerge(right);
   if (leftRuleId && rightRuleId && leftRuleId !== rightRuleId) {
@@ -2209,16 +1758,10 @@ function shouldMergeRepositoryFindings(
   if (leftIdentity && rightIdentity && leftIdentity !== rightIdentity) {
     return { merge: false, reason: "identity_mismatch" };
   }
-  const anchorMatch = Boolean(overlapGroupMatch || lineRangesOverlap(leftRange, rightRange));
   const leftEntryPoint = extractEntryPointForMerge(left);
   const rightEntryPoint = extractEntryPointForMerge(right);
-  if (!anchorMatch && leftEntryPoint && rightEntryPoint && leftEntryPoint !== rightEntryPoint) {
+  if (leftEntryPoint && rightEntryPoint && leftEntryPoint !== rightEntryPoint) {
     return { merge: false, reason: "entry_point_mismatch" };
-  }
-  const leftPrimarySymbol = extractPrimarySymbolForMerge(left);
-  const rightPrimarySymbol = extractPrimarySymbolForMerge(right);
-  if (leftPrimarySymbol && rightPrimarySymbol && leftPrimarySymbol !== rightPrimarySymbol) {
-    return { merge: false, reason: "primary_symbol_mismatch" };
   }
   return { merge: true };
 }

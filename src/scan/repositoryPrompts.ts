@@ -48,7 +48,6 @@ const BASE_SCAN_PROMPT = [
     "- Only report rate limiting, audit logging, or lockout gaps on server-side handlers/middleware (API routes, server functions).",
     "- Do not flag UI components or client SDK initialization for backend-only controls.",
     "- Do not cite package.json, lockfiles, or other non-executable config files as evidence for runtime vulnerabilities.",
-    "- For sensitive_client_storage, only report when code explicitly writes sensitive values to browser storage APIs (localStorage, sessionStorage, AsyncStorage, IndexedDB, cookies).",
     "",
     "Candidate findings provided are heuristic signals; if evidence supports them, prefer emitting them.",
     "You MAY infer vulnerabilities from the ABSENCE of expected checks.",
@@ -140,33 +139,9 @@ export function buildRepositoryCompositeSystemPrompt(): string {
     "- Prefer fewer, higher-signal composite findings (max 5).",
     "- Severity should reflect combined impact and likelihood.",
     "- If a composite finding depends on multiple inputs, mention them in details.relatedFindings (summaries or short identifiers).",
-    "- For file-scoped findings, always include details.ruleId and location.filepath with line or chunk index.",
     "",
     "Return findings strictly in the JSON schema provided.",
-    "Use location = null only when the issue is repository-wide."
-  ].join("\n");
-}
-
-export function buildRepositoryValidationSystemPrompt(): string {
-  return [
-    "You are a senior application security engineer validating candidate findings against a single code sample.",
-    "",
-    "You are given:",
-    "- Repository metadata",
-    "- A single file sample (path, lines, content) and any file roles/required controls",
-    "- Candidate findings produced by earlier rule scans",
-    "",
-    "Your task is to decide whether each finding is clearly supported by the code sample and context.",
-    "Only keep findings that are directly evidenced or strongly implied by missing checks in the sample.",
-    "If evidence is weak, ambiguous, or outside the sample, mark keep=false.",
-    "",
-    "Rules:",
-    "- Do NOT invent evidence or new findings.",
-    "- Do NOT rewrite the findings; only return decisions.",
-    "- Treat the SECURITY HEADER as context, not source code.",
-    "- For missing-control findings, only keep if the control is expected for this file (use roles/requiredControls if provided) and no equivalent check appears in the sample.",
-    "",
-    "Return JSON exactly matching the output schema."
+    "Location may be null when the issue is repository-wide."
   ].join("\n");
 }
 
@@ -196,18 +171,6 @@ export function buildRepositoryScanOutputSchema(): Record<string, unknown> {
           endLine: 18,
           chunkIndex: 0
         }
-      }
-    ]
-  };
-}
-
-export function buildRepositoryValidationOutputSchema(): Record<string, unknown> {
-  return {
-    decisions: [
-      {
-        index: 0,
-        keep: true,
-        reason: "Short justification tied to evidence or missing checks."
       }
     ]
   };
