@@ -20,7 +20,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_EVAL_DIR = "evals";
-const DEFAULT_SUMMARY_MATCH_THRESHOLD = 0.45;
+const DEFAULT_SUMMARY_MATCH_THRESHOLD = 0.5;
 const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
 
 export type EvalGroupStatus = "pass" | "fail" | "skipped";

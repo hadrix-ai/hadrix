@@ -167,6 +167,7 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "frontend_login_rate_limit",
   "missing_rate_limiting",
   "missing_lockout",
+  "missing_mfa",
   "missing_audit_logging",
   "missing_upload_size_limit",
   "frontend_secret_exposure",
@@ -174,6 +175,11 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
 ]);
 
 const CANDIDATE_PROMOTION_SUMMARY_THRESHOLD = 0.55;
+const STRICT_CANDIDATE_COVERAGE_TYPES = new Set<string>([
+  "missing_webhook_signature",
+  "missing_role_check",
+  "missing_rate_limiting"
+]);
 
 const CANDIDATE_SEVERITY: Record<string, Severity> = {
   sql_injection: "high",
@@ -201,6 +207,7 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   frontend_login_rate_limit: "medium",
   missing_rate_limiting: "medium",
   missing_lockout: "medium",
+  missing_mfa: "medium",
   missing_audit_logging: "medium",
   missing_upload_size_limit: "medium",
   frontend_secret_exposure: "high",
@@ -233,6 +240,7 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   frontend_login_rate_limit: "authentication",
   missing_rate_limiting: "configuration",
   missing_lockout: "authentication",
+  missing_mfa: "authentication",
   missing_audit_logging: "configuration",
   missing_upload_size_limit: "configuration",
   frontend_secret_exposure: "secrets",
@@ -534,9 +542,31 @@ export async function validateRepositoryFindings(input: {
   debug?: DedupeDebug;
 }): Promise<{ findings: RepositoryScanFinding[]; dropped: number; skipped: number }> {
   if (input.findings.length === 0) {
+    if (input.debug) {
+      logDebug(input.debug, {
+        event: "llm_validation_summary",
+        status: "skipped",
+        reason: "no_findings",
+        total: 0,
+        kept: 0,
+        dropped: 0,
+        skipped: 0
+      });
+    }
     return { findings: [], dropped: 0, skipped: 0 };
   }
   if (input.files.length === 0) {
+    if (input.debug) {
+      logDebug(input.debug, {
+        event: "llm_validation_summary",
+        status: "skipped",
+        reason: "no_files",
+        total: input.findings.length,
+        kept: input.findings.length,
+        dropped: 0,
+        skipped: input.findings.length
+      });
+    }
     return { findings: input.findings, dropped: 0, skipped: input.findings.length };
   }
 
@@ -570,6 +600,17 @@ export async function validateRepositoryFindings(input: {
 
   const tasks = Array.from(tasksByKey.values());
   if (tasks.length === 0) {
+    if (input.debug) {
+      logDebug(input.debug, {
+        event: "llm_validation_summary",
+        status: "skipped",
+        reason: "no_matching_samples",
+        total: input.findings.length,
+        kept: input.findings.length,
+        dropped: 0,
+        skipped
+      });
+    }
     return { findings: input.findings, dropped: 0, skipped };
   }
 
@@ -620,26 +661,101 @@ export async function validateRepositoryFindings(input: {
       findings: findingsPayload
     };
 
-    const response = await runChatCompletion(input.config, [
+    const baseMessages = [
       { role: "system", content: combinedSystemPrompt },
       { role: "user", content: JSON.stringify(payload, null, 2) }
-    ]);
+    ];
+    const response = await runChatCompletion(input.config, baseMessages);
+    let responseForDebug = response;
 
     try {
-      const decisions = parseValidationDecisions(response);
-      if (decisions.length === 0) {
-        throw new Error("Validation response missing decisions.");
+      const expectedIndices = task.findings.map((item) => item.index);
+      let parseResult = parseValidationDecisionsStrict(response);
+      let decisions = parseResult.decisions;
+      let missingIndices = findMissingDecisionIndices(expectedIndices, decisions);
+      const shouldRetry = Boolean(parseResult.error || missingIndices.length > 0);
+      if (shouldRetry) {
+        const trimmed = trimValidationContent(filePayload.content, MAX_VALIDATION_RETRY_CONTENT);
+        const trimmedPayload = {
+          outputSchema,
+          repository: {
+            fullName: input.repository.fullName
+          },
+          file: {
+            path: filePayload.path,
+            startLine: filePayload.startLine,
+            endLine: filePayload.endLine,
+            chunkIndex: filePayload.chunkIndex,
+            truncated: Boolean(filePayload.truncated || trimmed.trimmed),
+            content: trimmed.content,
+            roles: filePayload.roles,
+            requiredControls: filePayload.requiredControls,
+            scope: filePayload.scope,
+            scopeEvidence: filePayload.scopeEvidence
+          },
+          findings: findingsPayload.map((item) => ({
+            index: item.index,
+            summary: item.summary,
+            type: item.type,
+            severity: item.severity,
+            evidence: item.evidence,
+            details: pickValidationDetails(toRecord(item.details)) ?? undefined,
+            location: item.location
+          }))
+        };
+        const retryPrompt = `${combinedSystemPrompt}\n\nReturn JSON only (no markdown, no commentary). Include one decision for every finding index.`;
+        const retryResponse = await runChatCompletion(input.config, [
+          { role: "system", content: retryPrompt },
+          { role: "user", content: JSON.stringify(trimmedPayload, null, 2) }
+        ]);
+        responseForDebug = retryResponse;
+        parseResult = parseValidationDecisionsStrict(retryResponse);
+        decisions = parseResult.decisions;
+        missingIndices = findMissingDecisionIndices(expectedIndices, decisions);
+        if (input.debug) {
+          logDebug(input.debug, {
+            event: "llm_validation_retry",
+            file: {
+              path: task.file.path,
+              chunkIndex: task.file.chunkIndex,
+              startLine: task.file.startLine,
+              endLine: task.file.endLine
+            },
+            trimmed: trimmed.trimmed,
+            missingDecisions: missingIndices.length,
+            reason: parseResult.error ?? "missing_decisions"
+          });
+        }
       }
       const decisionMap = new Map<number, ValidationDecision>();
+      const expectedSet = new Set(expectedIndices);
       for (const decision of decisions) {
+        if (!expectedSet.has(decision.index)) continue;
         decisionMap.set(decision.index, decision);
+      }
+      if (missingIndices.length > 0) {
+        for (const index of missingIndices) {
+          decisionMap.set(index, {
+            index,
+            keep: false,
+            reason: "Missing validation decision."
+          });
+        }
       }
       if (input.debug) {
         let dropped = 0;
-        for (const item of task.findings) {
+        const decisionDetails = task.findings.map((item) => {
           const decision = decisionMap.get(item.index);
-          if (decision && !decision.keep) dropped += 1;
-        }
+          if (!decision?.keep) {
+            dropped += 1;
+          }
+          return {
+            index: item.index,
+            keep: decision?.keep ?? null,
+            reason: decision?.reason ?? null,
+            finding: buildRepositoryDebugFinding(item.finding)
+          };
+        });
         logDebug(input.debug, {
           event: "llm_validation_batch",
           file: {
@@ -649,7 +765,9 @@ export async function validateRepositoryFindings(input: {
             endLine: task.file.endLine
           },
           total: task.findings.length,
-          dropped
+          dropped,
+          missing: missingIndices.length,
+          decisions: decisionDetails
         });
       }
       return { task, decisions: decisionMap };
@@ -657,7 +775,7 @@ export async function validateRepositoryFindings(input: {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
         "llm-validate",
-        response
+        responseForDebug
       );
       const message = err instanceof Error ? err.message : String(err);
       logDebug(input.debug, {
@@ -671,22 +789,37 @@ export async function validateRepositoryFindings(input: {
         message,
         savedPath
       });
-      return { task, decisions: null };
+      if (input.debug) {
+        logDebug(input.debug, {
+          event: "llm_validation_failed",
+          file: {
+            path: task.file.path,
+            chunkIndex: task.file.chunkIndex,
+            startLine: task.file.startLine,
+            endLine: task.file.endLine
+          },
+          dropped: task.findings.length,
+          reason: message
+        });
+      }
+      const decisionMap = new Map<number, ValidationDecision>();
+      for (const item of task.findings) {
+        decisionMap.set(item.index, {
+          index: item.index,
+          keep: false,
+          reason: `Validation failed: ${message}`
+        });
+      }
+      return { task, decisions: decisionMap };
     }
   });
 
   const keepFlags = new Array(input.findings.length).fill(true);
   let dropped = 0;
   for (const result of results) {
-    if (!result.decisions) {
-      continue;
-    }
     for (const item of result.task.findings) {
       const decision = result.decisions.get(item.index);
-      if (!decision) {
-        continue;
-      }
-      if (!decision.keep) {
+      if (!decision || !decision.keep) {
         keepFlags[item.index] = false;
         dropped += 1;
       }
@@ -694,6 +827,17 @@ export async function validateRepositoryFindings(input: {
   }
 
   const kept = input.findings.filter((_, index) => keepFlags[index]);
+  if (input.debug) {
+    logDebug(input.debug, {
+      event: "llm_validation_summary",
+      status: "complete",
+      total: input.findings.length,
+      kept: kept.length,
+      dropped,
+      skipped,
+      taskCount: tasks.length
+    });
+  }
   return { findings: kept, dropped, skipped };
 }
 
@@ -1351,6 +1495,7 @@ function isCandidateCovered(
   }
   const candidateType = typeof candidate.type === "string" ? candidate.type.trim().toLowerCase() : "";
   const candidateTypeToken = normalizeMergeIdentityToken(candidateType);
+  const requireAlignment = STRICT_CANDIDATE_COVERAGE_TYPES.has(candidateTypeToken);
   const candidateTokens = summaryTokenSet(candidate.summary ?? "");
   const candidateText = `${candidate.summary ?? ""} ${collectEvidenceText(candidate)}`.toLowerCase();
 
@@ -1362,20 +1507,26 @@ function isCandidateCovered(
     const findingType = normalizeMergeIdentityToken(normalizeFindingTypeKey(finding));
     const findingRuleId = extractRuleIdForMerge(finding);
     const findingCandidateType = extractCandidateTypeForMerge(finding);
-    if (
-      candidateTypeToken &&
-      (candidateTypeToken === findingType ||
-        candidateTypeToken === findingRuleId ||
-        candidateTypeToken === findingCandidateType)
-    ) {
-      return true;
-    }
     const entryPoint = extractEntryPointForMerge(finding);
-    const hasAlignment =
-      Boolean(candidateTypeToken &&
+    const typeMatch = Boolean(
+      candidateTypeToken &&
         (candidateTypeToken === findingType ||
           candidateTypeToken === findingRuleId ||
-          candidateTypeToken === findingCandidateType)) ||
+          candidateTypeToken === findingCandidateType)
+    );
+    if (typeMatch) {
+      if (!requireAlignment) {
+        return true;
+      }
+      if (entryPoint && candidateText.includes(entryPoint)) {
+        return true;
+      }
+      if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
+        return true;
+      }
+      continue;
+    }
+    const hasAlignment =
       Boolean(entryPoint && candidateText.includes(entryPoint));
     if (!hasAlignment) {
       continue;
@@ -1398,20 +1549,26 @@ function isCandidateCovered(
     const findingCandidateType = normalizeMergeIdentityToken(
       details.candidateType ?? details.candidate_type ?? ""
     );
-    if (
-      candidateTypeToken &&
-      (candidateTypeToken === findingType ||
-        candidateTypeToken === findingRuleId ||
-        candidateTypeToken === findingCandidateType)
-    ) {
-      return true;
-    }
     const entryPoint = extractEntryPointFromDetails(details);
-    const hasAlignment =
-      Boolean(candidateTypeToken &&
+    const typeMatch = Boolean(
+      candidateTypeToken &&
         (candidateTypeToken === findingType ||
           candidateTypeToken === findingRuleId ||
-          candidateTypeToken === findingCandidateType)) ||
+          candidateTypeToken === findingCandidateType)
+    );
+    if (typeMatch) {
+      if (!requireAlignment) {
+        return true;
+      }
+      if (entryPoint && candidateText.includes(entryPoint)) {
+        return true;
+      }
+      if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
+        return true;
+      }
+      continue;
+    }
+    const hasAlignment =
       Boolean(entryPoint && candidateText.includes(entryPoint));
     if (!hasAlignment) {
       continue;
@@ -1688,9 +1845,47 @@ function parseFindings(
   return findings;
 }
 
+const MAX_VALIDATION_RETRY_CONTENT = 12000;
+
+function trimValidationContent(
+  content: string | undefined,
+  maxChars: number
+): { content: string; trimmed: boolean } {
+  const raw = typeof content === "string" ? content : "";
+  if (!raw || raw.length <= maxChars) {
+    return { content: raw, trimmed: false };
+  }
+  return { content: raw.slice(0, maxChars), trimmed: true };
+}
+
+function pickValidationDetails(details: Record<string, unknown>): Record<string, unknown> | undefined {
+  const picked: Record<string, unknown> = {};
+  const ruleId = details.ruleId ?? details.rule_id ?? details.ruleID ?? null;
+  const entryPoint = details.entryPoint ?? details.entry_point ?? null;
+  const primarySymbol = details.primarySymbol ?? details.primary_symbol ?? null;
+  const category = details.category ?? details.findingCategory ?? details.finding_category ?? null;
+  if (typeof ruleId === "string" && ruleId.trim()) {
+    picked.ruleId = ruleId;
+  }
+  if (typeof entryPoint === "string" && entryPoint.trim()) {
+    picked.entryPoint = entryPoint;
+  }
+  if (typeof primarySymbol === "string" && primarySymbol.trim()) {
+    picked.primarySymbol = primarySymbol;
+  }
+  if (typeof category === "string" && category.trim()) {
+    picked.category = category;
+  }
+  return Object.keys(picked).length > 0 ? picked : undefined;
+}
+
 function parseValidationDecisions(raw: string): ValidationDecision[] {
   if (!raw) return [];
   const parsed = extractJson(raw);
+  return parseValidationDecisionsFromParsed(parsed);
+}
+
+function parseValidationDecisionsFromParsed(parsed: any): ValidationDecision[] {
   const decisionsArray: any[] = Array.isArray(parsed?.decisions)
     ? parsed.decisions
     : Array.isArray(parsed?.results)
@@ -1715,6 +1910,38 @@ function parseValidationDecisions(raw: string): ValidationDecision[] {
     decisions.push({ index, keep, reason: reason || null });
   }
   return decisions;
+}
+
+function parseValidationDecisionsStrict(raw: string): { decisions: ValidationDecision[]; error: string | null } {
+  if (!raw) return { decisions: [], error: "empty_response" };
+  const trimmed = raw.trim();
+  if (!trimmed) return { decisions: [], error: "empty_response" };
+  if (trimmed.includes("```")) {
+    return { decisions: [], error: "markdown_response" };
+  }
+  if (!/^[\[{]/.test(trimmed) || !/[\]}]$/.test(trimmed)) {
+    return { decisions: [], error: "non_json_wrapper" };
+  }
+  try {
+    const parsed = safeParseJson(trimmed);
+    const decisions = parseValidationDecisionsFromParsed(parsed);
+    return { decisions, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { decisions: [], error: `invalid_json:${message}` };
+  }
+}
+
+function findMissingDecisionIndices(
+  expectedIndices: number[],
+  decisions: ValidationDecision[]
+): number[] {
+  if (expectedIndices.length === 0) return [];
+  const seen = new Set<number>();
+  for (const decision of decisions) {
+    seen.add(decision.index);
+  }
+  return expectedIndices.filter((index) => !seen.has(index));
 }
 
 function normalizeDecisionIndex(value: unknown): number | null {
@@ -2085,6 +2312,24 @@ function extractOverlapGroupForMerge(finding: RepositoryScanFinding): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
+function extractAnchorNodeIdForMerge(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const raw = details.anchorNodeId ?? details.anchor_node_id ?? details.anchorId ?? details.anchor_id;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function extractDedupeKeyForMerge(finding: RepositoryScanFinding): string {
+  const details = toRecord(finding.details);
+  const raw =
+    details.identityKey ??
+    details.identity_key ??
+    details.dedupeKey ??
+    details.dedupe_key ??
+    details.semanticKey ??
+    details.semantic_key;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
 function extractLineRangeForMerge(finding: RepositoryScanFinding): {
   startLine: number | null;
   endLine: number | null;
@@ -2183,14 +2428,25 @@ function shouldMergeRepositoryFindings(
   const overlapGroupMatch = Boolean(
     leftOverlapGroup && rightOverlapGroup && leftOverlapGroup === rightOverlapGroup
   );
-  if (leftOverlapGroup && rightOverlapGroup && leftOverlapGroup !== rightOverlapGroup) {
-    return { merge: false, reason: "overlap_group_mismatch" };
-  }
   const leftRange = extractLineRangeForMerge(left);
   const rightRange = extractLineRangeForMerge(right);
-  if (!overlapGroupMatch && lineRangesOverlap(leftRange, rightRange) === false) {
+  const leftAnchor = extractAnchorNodeIdForMerge(left);
+  const rightAnchor = extractAnchorNodeIdForMerge(right);
+  const anchorMatch = Boolean(leftAnchor && rightAnchor && leftAnchor === rightAnchor);
+  const leftDedupeKey = extractDedupeKeyForMerge(left) || buildFindingIdentityKey(left);
+  const rightDedupeKey = extractDedupeKeyForMerge(right) || buildFindingIdentityKey(right);
+  const dedupeKeyMatch = Boolean(leftDedupeKey && rightDedupeKey && leftDedupeKey === rightDedupeKey);
+  const lineOverlap = lineRangesOverlap(leftRange, rightRange);
+  if (leftOverlapGroup && rightOverlapGroup && leftOverlapGroup !== rightOverlapGroup) {
+    if (!dedupeKeyMatch && !anchorMatch && !lineOverlap) {
+      return { merge: false, reason: "overlap_group_mismatch" };
+    }
+  }
+  if (!overlapGroupMatch && lineOverlap === false) {
     if (leftRange.startLine !== null && rightRange.startLine !== null) {
-      return { merge: false, reason: "line_range_mismatch" };
+      if (!dedupeKeyMatch && !anchorMatch) {
+        return { merge: false, reason: "line_range_mismatch" };
+      }
     }
   }
 
@@ -2209,15 +2465,15 @@ function shouldMergeRepositoryFindings(
   if (leftIdentity && rightIdentity && leftIdentity !== rightIdentity) {
     return { merge: false, reason: "identity_mismatch" };
   }
-  const anchorMatch = Boolean(overlapGroupMatch || lineRangesOverlap(leftRange, rightRange));
+  const anchorSignal = Boolean(overlapGroupMatch || lineOverlap || dedupeKeyMatch || anchorMatch);
   const leftEntryPoint = extractEntryPointForMerge(left);
   const rightEntryPoint = extractEntryPointForMerge(right);
-  if (!anchorMatch && leftEntryPoint && rightEntryPoint && leftEntryPoint !== rightEntryPoint) {
+  if (!anchorSignal && leftEntryPoint && rightEntryPoint && leftEntryPoint !== rightEntryPoint) {
     return { merge: false, reason: "entry_point_mismatch" };
   }
   const leftPrimarySymbol = extractPrimarySymbolForMerge(left);
   const rightPrimarySymbol = extractPrimarySymbolForMerge(right);
-  if (leftPrimarySymbol && rightPrimarySymbol && leftPrimarySymbol !== rightPrimarySymbol) {
+  if (!anchorSignal && leftPrimarySymbol && rightPrimarySymbol && leftPrimarySymbol !== rightPrimarySymbol) {
     return { merge: false, reason: "primary_symbol_mismatch" };
   }
   return { merge: true };

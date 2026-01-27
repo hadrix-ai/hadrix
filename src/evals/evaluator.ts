@@ -528,7 +528,7 @@ export async function evaluateFindingsGroup(args: {
   shortCircuitThreshold?: number;
   actualFilter?: (finding: EvalFinding) => boolean;
 }): Promise<EvalGroupResult> {
-  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.47);
+  const comparator = args.comparator ?? defaultComparator(args.summaryMatchThreshold ?? 0.5);
   const comparisonConcurrency = normalizeComparisonConcurrency(args.comparisonConcurrency);
   const shortCircuitThreshold = normalizeShortCircuitThreshold(args.shortCircuitThreshold);
 

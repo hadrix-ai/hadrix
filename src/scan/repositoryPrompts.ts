@@ -1,4 +1,7 @@
-import type { RuleScanDefinition } from "./repositoryRuleCatalog.js";
+import {
+  getRuleSummaryTemplateForRule,
+  type RuleScanDefinition
+} from "./repositoryRuleCatalog.js";
 
 type RepositoryForScan = {
   fullName: string;
@@ -43,6 +46,7 @@ const BASE_SCAN_PROMPT = [
     "- If a file sample includes chunkIndex, include location.chunkIndex",
     "- Include a short type label and a brief evidence cue when possible",
     "- If a SECURITY HEADER is present, copy entry point/sink context into details.entryPoint and details.sinks; include details.primarySymbol when clear",
+    "- Summaries MUST follow the rule summary template from the rule card (start with the rule title and fill placeholders).",
     "",
     "Guardrails:",
     "- Only report rate limiting, audit logging, or lockout gaps on server-side handlers/middleware (API routes, server functions).",
@@ -116,7 +120,8 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
     "",
     "Output requirements:",
     "- Set finding.type to the rule id.",
-    "- Set details.ruleId to the rule id."
+    "- Set details.ruleId to the rule id.",
+    "- Use the summary template exactly (replace placeholders with entryPoint/primarySymbol/filepath)."
   ].join("\n");
 }
 
@@ -164,7 +169,22 @@ export function buildRepositoryValidationSystemPrompt(): string {
     "- Do NOT invent evidence or new findings.",
     "- Do NOT rewrite the findings; only return decisions.",
     "- Treat the SECURITY HEADER as context, not source code.",
+    "- If a finding summary or details.entryPoint references an HTTP route, only keep it when (a) the SECURITY HEADER entry_point.type is http/webhook or (b) the sample shows a handler signature (router/app method, export GET/POST handler, etc.), and the method/path appear in the sample or SECURITY HEADER entry point; otherwise keep=false.",
+    "- Reject findings whose evidence points outside the provided chunk (different file or line range not shown).",
     "- For missing-control findings, only keep if the control is expected for this file (use roles/requiredControls if provided) and no equivalent check appears in the sample.",
+    "- You MUST return a decision for every finding index provided. If unsure, set keep=false with a brief reason.",
+    "- Return JSON only (no markdown, no commentary, no extra keys).",
+    "",
+    "High-signal requirements (return keep=false if not met):",
+    "- excessive_data_exposure: evidence of sensitive fields in responses (tokens, secrets, PII) or explicit over-broad selection in the sample.",
+    "- missing_server_action_auth: missing auth/permission checks inside the same server action function body.",
+    "- missing_rate_limiting: sensitive login/token/destructive action present with no rate limit/throttle in the handler or middleware shown.",
+    "- missing_lockout: login/auth handling present with no lockout/CAPTCHA/attempt tracking in the sample.",
+    "- frontend_only_authorization: concrete frontend role/permission gating in the sample plus missing server-side role check in the handler shown.",
+    "- dangerous_html_render: explicit dangerouslySetInnerHTML/innerHTML/raw HTML rendering evidence in the sample.",
+    "- verbose_error_messages: stack trace, SQL error, or internal error detail returned in a response within the sample.",
+    "- anon_key_bearer: anon/public key used as an Authorization/Bearer credential in the sample.",
+    "- plaintext_secrets: real secret literals (not placeholders) stored or persisted in the sample.",
     "",
     "Return JSON exactly matching the output schema."
   ].join("\n");
@@ -208,8 +228,14 @@ export function buildRepositoryValidationOutputSchema(): Record<string, unknown>
         index: 0,
         keep: true,
         reason: "Short justification tied to evidence or missing checks."
+      },
+      {
+        index: 1,
+        keep: false,
+        reason: "Evidence not supported in the provided sample."
       }
-    ]
+    ],
+    totalDecisions: 2
   };
 }
 
@@ -247,6 +273,7 @@ export function buildRepositoryContextPrompt(
 }
 
 function formatRuleCard(rule: RuleScanDefinition): string {
+  const summaryTemplate = getRuleSummaryTemplateForRule(rule);
   const lines: string[] = [
     "Rule card:",
     `- id: ${rule.id}`,
@@ -255,6 +282,9 @@ function formatRuleCard(rule: RuleScanDefinition): string {
   ];
   if (rule.description) {
     lines.push(`- description: ${rule.description}`);
+  }
+  if (summaryTemplate) {
+    lines.push(`- summary template: ${summaryTemplate}`);
   }
   if (rule.guidance && rule.guidance.length > 0) {
     lines.push("- guidance:");

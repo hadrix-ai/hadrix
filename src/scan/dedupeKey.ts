@@ -60,6 +60,10 @@ function normalizeKeyPart(value: string): string {
 }
 
 const ENTRY_POINT_METHOD_PATTERN = /^(get|post|put|patch|delete|del|head|options)\s+/i;
+const ENTRY_POINT_ROUTE_SUFFIX_PATTERN = /\/route(?:\.(?:[cm]?[jt]sx?))?$/i;
+const ENTRY_POINT_APP_API_PATTERN = /^(?:src\/)?app\/api\//i;
+const ENTRY_POINT_PAGES_API_PATTERN = /^(?:src\/)?pages\/api\//i;
+const ENTRY_POINT_ALIAS_PREFIX_PATTERN = /^(?:route|handler|endpoint|entrypoint|entry)\s*[:#]\s*/i;
 
 function normalizeEntryPointIdentity(value: string): string {
   return value
@@ -71,10 +75,25 @@ function normalizeEntryPointIdentity(value: string): string {
     .replace(/\/+$/, "");
 }
 
-function normalizeEntryPointKey(value: string): string {
+function stripEntryPointPathNoise(value: string): string {
+  if (!value) return "";
+  let normalized = value.replace(ENTRY_POINT_ALIAS_PREFIX_PATTERN, "");
+  normalized = normalized.replace(ENTRY_POINT_METHOD_PATTERN, "");
+  normalized = normalized.replace(/^\/+/, "").replace(/\/+$/, "");
+  normalized = normalized.replace(ENTRY_POINT_APP_API_PATTERN, "api/");
+  normalized = normalized.replace(ENTRY_POINT_PAGES_API_PATTERN, "api/");
+  normalized = normalized.replace(ENTRY_POINT_ROUTE_SUFFIX_PATTERN, "");
+  return normalized;
+}
+
+function normalizeEntryPointAlias(value: string): string {
   const normalized = normalizeEntryPointIdentity(value);
   if (!normalized) return "";
-  const stripped = normalized.replace(ENTRY_POINT_METHOD_PATTERN, "");
+  return stripEntryPointPathNoise(normalized);
+}
+
+function normalizeEntryPointKey(value: string): string {
+  const stripped = normalizeEntryPointAlias(value);
   return normalizeKeyPart(stripped);
 }
 
@@ -117,6 +136,18 @@ function extractPrimarySymbolIdentity(finding: FindingIdentityInput): string {
     return trimmed;
   }
   return "";
+}
+
+function extractExistingIdentityKey(finding: FindingIdentityInput): string {
+  const details = toRecord(finding.details);
+  const raw =
+    details.dedupeKey ??
+    details.dedupe_key ??
+    details.identityKey ??
+    details.identity_key ??
+    details.semanticKey ??
+    details.semantic_key;
+  return typeof raw === "string" ? raw.trim() : "";
 }
 
 export function normalizeIdentityTypeValue(value: string): string {
@@ -281,23 +312,44 @@ export function buildFindingIdentityKey(
   finding: FindingIdentityInput,
   options?: { fallbackRepoPath?: string | null }
 ): string {
+  const existingKey = extractExistingIdentityKey(finding);
+  const anchorNodeId = extractAnchorNodeId(finding);
+  const overlapGroupId = extractOverlapGroupId(finding);
+  if (existingKey) {
+    if (anchorNodeId && !existingKey.includes(`anchor:${anchorNodeId}`)) {
+      return `${existingKey}|anchor:${anchorNodeId}`;
+    }
+    if (overlapGroupId && !existingKey.includes(`overlap:${overlapGroupId}`)) {
+      return `${existingKey}|overlap:${overlapGroupId}`;
+    }
+    return existingKey;
+  }
   const location = extractLocationParts(finding, options?.fallbackRepoPath ?? null);
   if (!location.fileKey) return "";
 
-  const anchorNodeId = extractAnchorNodeId(finding);
-  const overlapGroupId = extractOverlapGroupId(finding);
+  const entryPointKeyRaw = extractEntryPointIdentity(finding);
+  const entryPointKey = entryPointKeyRaw ? normalizeEntryPointKey(entryPointKeyRaw) : "";
   let anchorKey = "";
   if (anchorNodeId) {
     anchorKey = `anchor:${anchorNodeId}`;
   } else if (overlapGroupId) {
     anchorKey = `overlap:${overlapGroupId}`;
+  } else if (entryPointKey && (location.startLine !== null || location.endLine !== null)) {
+    const start = location.startLine ?? location.endLine ?? 0;
+    let end = location.endLine ?? start;
+    if (end < start) end = start;
+    anchorKey = `entry:${entryPointKey}:lines:${start}-${end}`;
   } else if (location.startLine !== null || location.endLine !== null) {
     const start = location.startLine ?? location.endLine ?? 0;
     let end = location.endLine ?? start;
     if (end < start) end = start;
     anchorKey = `lines:${start}-${end}`;
+  } else if (entryPointKey && location.chunkIndex !== null) {
+    anchorKey = `entry:${entryPointKey}:chunk:${location.chunkIndex}`;
   } else if (location.chunkIndex !== null) {
     anchorKey = `chunk:${location.chunkIndex}`;
+  } else if (entryPointKey) {
+    anchorKey = `entry:${entryPointKey}:lines:0-0`;
   } else {
     anchorKey = "lines:0-0";
   }
@@ -311,16 +363,17 @@ export function buildFindingIdentityKey(
   }
   if (!typeKey) return "";
 
-  const entryPointKey = extractEntryPointIdentity(finding);
+  const entryPointIdentity = extractEntryPointIdentity(finding);
   const primarySymbolKey = extractPrimarySymbolIdentity(finding);
   const hasStrongAnchor =
     Boolean(anchorNodeId || overlapGroupId) ||
     location.startLine !== null ||
     location.endLine !== null;
-  const entryPointToken = !hasStrongAnchor && entryPointKey
-    ? normalizeEntryPointKey(entryPointKey)
+  const entryPointToken = !hasStrongAnchor && entryPointIdentity
+    ? normalizeEntryPointKey(entryPointIdentity)
     : "";
-  const primarySymbolToken = primarySymbolKey ? normalizeKeyPart(primarySymbolKey) : "";
+  const normalizedPrimarySymbol = primarySymbolKey ? normalizeEntryPointKey(primarySymbolKey) : "";
+  const primarySymbolToken = !hasStrongAnchor ? normalizedPrimarySymbol : "";
   const rawType = extractRawIdentityType(finding);
   const rawTypeToken = rawType ? normalizeTypeToken(rawType) : "";
   const typeToken = normalizeTypeToken(typeKey);
