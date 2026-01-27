@@ -1356,24 +1356,97 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         }
   
         log("Heuristic analysis and chunk sampling...");
-        fileSamples = buildRepositoryFileSamples(
-          scopedChunks.map((chunk) =>
-            toLocalChunk({
-              filepath: chunk.filepath,
-              chunk_index: chunk.chunk_index,
-              start_line: chunk.start_line,
-              end_line: chunk.end_line,
-              content: chunk.content,
-              chunk_format: chunk.chunk_format,
-              overlap_group_id: chunk.overlap_group_id ?? null
-            })
-          ),
-          {
-            maxFiles: config.sampling.maxChunks,
-            maxChunksPerFile: config.sampling.maxChunksPerFile,
-            preferredChunks
-          }
+
+        const localChunks = scopedChunks.map((chunk) =>
+          toLocalChunk({
+            filepath: chunk.filepath,
+            chunk_index: chunk.chunk_index,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            content: chunk.content,
+            chunk_format: chunk.chunk_format,
+            overlap_group_id: chunk.overlap_group_id ?? null
+          })
         );
+
+        // Deterministic inclusion: always bias sampling toward auth, routing, and obvious sinks.
+        // This improves recall without relying purely on embedding queries.
+        const alwaysIncludePathPatterns: RegExp[] = [
+          /(^|\/)middleware\.(ts|tsx|js|jsx|mjs|cjs)$/i,
+          /(^|\/)(auth|jwt|session)(\.|\/)/i,
+          /(^|\/)pages\/api\//i,
+          /(^|\/)app\/.*\/route\.(ts|tsx|js|jsx|mjs|cjs)$/i,
+          /(^|\/)api\//i,
+          /(^|\/)functions\//i,
+          /(^|\/)supabase\/functions\//i,
+          /(^|\/)_shared\//i
+        ];
+        const alwaysIncludeContentPatterns: RegExp[] = [
+          /\bexecSync\s*\(/i,
+          /\bexec\s*\(/i,
+          /\bspawnSync\s*\(/i,
+          /\bspawn\s*\(/i,
+          /\bDeno\.Command\b/i,
+          /\bDeno\.run\b/i,
+          /\bnew Function\b/i,
+          /\beval\s*\(/i,
+          /\bdangerouslySetInnerHTML\b/i,
+          /\bsql\b/i,
+          /\.from\s*\(/i,
+          /\bwebhook\b/i
+        ];
+
+        const mustInclude = (() => {
+          const byFile = new Map<string, ReturnType<typeof toLocalChunk>[]>();
+          for (const chunk of localChunks) {
+            if (!chunk.filepath) continue;
+            if (!byFile.has(chunk.filepath)) byFile.set(chunk.filepath, []);
+            byFile.get(chunk.filepath)!.push(chunk);
+          }
+          for (const list of byFile.values()) {
+            list.sort((a, b) => a.chunkIndex - b.chunkIndex);
+          }
+
+          const selected: ReturnType<typeof toLocalChunk>[] = [];
+          const seen = new Set<string>();
+
+          const pushChunk = (chunk: ReturnType<typeof toLocalChunk> | undefined) => {
+            if (!chunk) return;
+            const key = `${chunk.filepath}#${chunk.chunkIndex}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            selected.push(chunk);
+          };
+
+          for (const [filepath, list] of byFile.entries()) {
+            const pathHit = alwaysIncludePathPatterns.some((re) => re.test(filepath));
+            if (pathHit) {
+              // Include up to 2 chunks for key files.
+              pushChunk(list[0]);
+              pushChunk(list[1]);
+              continue;
+            }
+
+            // Include first chunk for files containing obvious sinks.
+            const hasSink = list.some((chunk) =>
+              alwaysIncludeContentPatterns.some((re) => re.test(chunk.content || ""))
+            );
+            if (hasSink) {
+              pushChunk(list[0]);
+            }
+          }
+
+          // Cap to avoid blowing up sampling.
+          return selected.slice(0, 80);
+        })();
+
+        const combinedPreferred = [...preferredChunks, ...mustInclude];
+
+        fileSamples = buildRepositoryFileSamples(localChunks, {
+          maxFiles: config.sampling.maxChunks,
+          maxChunksPerFile: config.sampling.maxChunksPerFile,
+          preferredChunks: combinedPreferred
+        });
   
         if (fileSamples.length > 0) {
           repositoryDescriptor = {
