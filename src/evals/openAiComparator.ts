@@ -131,6 +131,43 @@ const safeJsonParse = (value: string): Record<string, unknown> | null => {
   }
 };
 
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_RETRY_WAIT_MS = 60_000;
+const BASE_RETRY_WAIT_MS = 1_000;
+const MAX_RETRY_STEP_MS = 10_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const parseRetryAfter = (value: string | null): number | null => {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) {
+    return Math.max(0, date - Date.now());
+  }
+  return null;
+};
+
+const buildRetryDelay = (attempt: number, remainingMs: number): number => {
+  const exp = Math.min(BASE_RETRY_WAIT_MS * 2 ** Math.max(0, attempt - 1), MAX_RETRY_STEP_MS);
+  const jitter = exp * (0.5 + Math.random());
+  return Math.min(Math.max(0, Math.round(jitter)), remainingMs);
+};
+
+const annotateRetry = (error: Error, params: { retryable: boolean; status?: number; retryAfterMs?: number | null }) => {
+  (error as any).retryable = params.retryable;
+  if (typeof params.status === "number") {
+    (error as any).status = params.status;
+  }
+  if (typeof params.retryAfterMs === "number") {
+    (error as any).retryAfterMs = params.retryAfterMs;
+  }
+  return error;
+};
+
 const stripGhsaTokens = (value: string): string =>
   value.replace(/\bGHSA-[A-Za-z0-9-]+\b/gi, " ");
 
@@ -670,106 +707,160 @@ export function createOpenAiSummaryComparator(options?: {
       return fallback();
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const requestUrl = `${baseUrl}/v1/chat/completions`;
+    let attempt = 0;
+    let waitedMs = 0;
 
-    try {
-      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          response_format: { type: "json_object" },
-          ...(supportsTemperature ? { temperature: 0 } : {}),
-          messages: [
-            {
-              role: "system",
-              content: [
-                "You are an evaluation judge for security scan results.",
-                "Determine whether an actual finding summary matches an expected security issue/fix description.",
-                "The expected expectation and actual summary may not precisely match but should describe the same security issue.",
-                "Even if the expected and actual summary do not match exactly, if they describe the same security issue, the match should be true.",
-                "The expected text may describe the issue, the fix, or both.",
-                "Rule/category hints may be provided; if they conflict between expected and actual, the match should be false.",
-                "Return ONLY valid JSON with keys: match (boolean), score (0-1 number), rationale (string).",
-              ].join("\n"),
-            },
-            {
-              role: "user",
-              content: JSON.stringify({
-                expected: {
-                  id: expected.id ?? null,
-                  filepath: expected.filepath,
-                  expectation: expected.expectation,
-                  severity: expected.severity ?? null,
-                  source: expected.source ?? null,
-                  ruleId: expected.ruleId ?? null,
-                  ruleHints: expectedHints,
-                },
-                actual: {
-                  id: actual.id,
-                  summary: actual.summary,
-                  severity: actual.severity ?? null,
-                  source: actual.source ?? null,
-                  location: actual.location ?? null,
-                  ruleHints: actualHints,
-                  details: {
-                    ruleId:
-                      typeof actual.details?.ruleId === "string"
-                        ? actual.details.ruleId
-                        : null,
-                    mergedRuleIds:
-                      Array.isArray(actual.details?.mergedRuleIds)
-                        ? actual.details?.mergedRuleIds
-                        : null,
-                    tool:
-                      typeof actual.details?.tool === "string"
-                        ? actual.details.tool
-                        : null,
+    while (true) {
+      attempt += 1;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            response_format: { type: "json_object" },
+            ...(supportsTemperature ? { temperature: 0 } : {}),
+            messages: [
+              {
+                role: "system",
+                content: [
+                  "You are an evaluation judge for security scan results.",
+                  "Determine whether an actual finding summary matches an expected security issue/fix description.",
+                  "The expected expectation and actual summary may not precisely match but should describe the same security issue.",
+                  "Even if the expected and actual summary do not match exactly, if they describe the same security issue, the match should be true.",
+                  "The expected text may describe the issue, the fix, or both.",
+                  "Rule/category hints may be provided; if they conflict between expected and actual, the match should be false.",
+                  "Return ONLY valid JSON with keys: match (boolean), score (0-1 number), rationale (string).",
+                ].join("\n"),
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  expected: {
+                    id: expected.id ?? null,
+                    filepath: expected.filepath,
+                    expectation: expected.expectation,
+                    severity: expected.severity ?? null,
+                    source: expected.source ?? null,
+                    ruleId: expected.ruleId ?? null,
+                    ruleHints: expectedHints,
                   },
-                },
-              }),
-            },
-          ],
-        }),
-        signal: controller.signal,
-      });
+                  actual: {
+                    id: actual.id,
+                    summary: actual.summary,
+                    severity: actual.severity ?? null,
+                    source: actual.source ?? null,
+                    location: actual.location ?? null,
+                    ruleHints: actualHints,
+                    details: {
+                      ruleId:
+                        typeof actual.details?.ruleId === "string"
+                          ? actual.details.ruleId
+                          : null,
+                      mergedRuleIds:
+                        Array.isArray(actual.details?.mergedRuleIds)
+                          ? actual.details?.mergedRuleIds
+                          : null,
+                      tool:
+                        typeof actual.details?.tool === "string"
+                          ? actual.details.tool
+                          : null,
+                    },
+                  },
+                }),
+              },
+            ],
+          }),
+          signal: controller.signal,
+        });
 
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        error?: { message?: string };
-      };
+        const contentType = response.headers.get("content-type") ?? "";
+        const rawText = await response.text();
+        const preview = rawText.trim().replace(/\s+/g, " ").slice(0, 200);
+        const payload = safeJsonParse(rawText) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          error?: { message?: string };
+        } | null;
 
-      if (!response.ok) {
-        const message = payload.error?.message || `OpenAI request failed with status ${response.status}`;
-        throw new Error(message);
+        if (!response.ok) {
+          const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+          const message =
+            (payload && payload.error?.message) ||
+            `OpenAI request failed with status ${response.status}. ` +
+              `content-type=${contentType || "unknown"}. ` +
+              (preview ? `body_preview="${preview}". ` : "") +
+              `Check HADRIX_LLM_BASE/OPENAI_API_BASE or network proxies.`;
+          throw annotateRetry(
+            new Error(message),
+            {
+              retryable: RETRYABLE_STATUS.has(response.status),
+              status: response.status,
+              retryAfterMs
+            }
+          );
+        }
+
+        if (!payload || typeof payload !== "object") {
+          throw annotateRetry(
+            new Error(
+              `OpenAI response was not valid JSON (status ${response.status}, content-type=${contentType || "unknown"}). ` +
+                (preview ? `body_preview="${preview}". ` : "") +
+                `Check HADRIX_LLM_BASE/OPENAI_API_BASE or network proxies.`
+            ),
+            { retryable: false, status: response.status }
+          );
+        }
+
+        const content = payload.choices?.[0]?.message?.content ?? "";
+        const parsed = safeJsonParse(content);
+        if (!parsed) {
+          return fallback();
+        }
+
+        const match = parsed.match === true;
+        const scoreRaw = parsed.score;
+        const score =
+          typeof scoreRaw === "number" && Number.isFinite(scoreRaw)
+            ? Math.max(0, Math.min(1, scoreRaw))
+            : 0;
+        const rationale =
+          typeof parsed.rationale === "string"
+            ? parsed.rationale
+            : "openai_no_rationale";
+
+        return { match, score, rationale };
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        const retryable =
+          Boolean((error as any).retryable) ||
+          error.name === "AbortError" ||
+          error.name === "TypeError";
+        if (!retryable) {
+          throw error;
+        }
+        const remaining = MAX_RETRY_WAIT_MS - waitedMs;
+        if (remaining <= 0) {
+          throw error;
+        }
+        const retryAfterMs =
+          typeof (error as any).retryAfterMs === "number" ? (error as any).retryAfterMs : null;
+        const delay = retryAfterMs != null
+          ? Math.min(Math.max(0, Math.round(retryAfterMs)), remaining)
+          : buildRetryDelay(attempt, remaining);
+        if (delay <= 0) {
+          throw error;
+        }
+        await sleep(delay);
+        waitedMs += delay;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const content = payload.choices?.[0]?.message?.content ?? "";
-      const parsed = safeJsonParse(content);
-      if (!parsed) {
-        return fallback();
-      }
-
-      const match = parsed.match === true;
-      const scoreRaw = parsed.score;
-      const score =
-        typeof scoreRaw === "number" && Number.isFinite(scoreRaw)
-          ? Math.max(0, Math.min(1, scoreRaw))
-          : 0;
-      const rationale =
-        typeof parsed.rationale === "string"
-          ? parsed.rationale
-          : "openai_no_rationale";
-
-      return { match, score, rationale };
-    } catch {
-      return fallback();
-    } finally {
-      clearTimeout(timeout);
     }
   };
 }

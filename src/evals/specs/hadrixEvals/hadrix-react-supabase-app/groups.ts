@@ -1,5 +1,4 @@
 import type { EvalGroupSpec } from "../../../types.js";
-import { DATASTORE_RLS_EVAL_GROUP } from "./rls.js";
 const P = "hadrix-react-supabase-app";
 
 export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
@@ -172,6 +171,48 @@ export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
     ],
   },
   {
+    id: "Orbit-Projects-Supabase-DB",
+    description: "Supabase schema exposure checks in hadrix-react-supabase-app",
+    allowUnexpected: true,
+    expectedFindings: [
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "public.test_no_rls: RLS disabled.",
+        ruleId: "supabase_rls_disabled",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "public.test_rls_no_policy: RLS enabled but no policies.",
+        ruleId: "supabase_rls_no_policies",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "Table public.projects is writable by client roles (anon).",
+        ruleId: "supabase_client_write_access",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "Table public.projects is writable by client roles without column-level ACLs.",
+        ruleId: "supabase_column_acl_missing",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "Function public.add_credits.add_credits_1 is executable by public.",
+        ruleId: "supabase_function_public_exec",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "Storage bucket avatars is public.",
+        ruleId: "supabase_public_bucket",
+      },
+      {
+        filepath: `${P}/datastores/supabase/mock/schema.json`,
+        expectation: "storage.objects policy allows public access.",
+        ruleId: "supabase_storage_objects_public_policy",
+      },
+    ],
+  },
+  {
     id: "Orbit-Projects-A10",
     description: "A10 Vulnerable and Outdated Components in hadrix-react-supabase-app",
     allowUnexpected: true,
@@ -193,5 +234,4 @@ export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
       },
     ],
   },
-  DATASTORE_RLS_EVAL_GROUP,
 ];

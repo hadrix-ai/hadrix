@@ -1,0 +1,83 @@
+{
+  "fetchedAt": "2026-01-26T00:00:00.000Z",
+  "tables": [
+    { "table_schema": "public", "table_name": "test_no_rls", "table_type": "BASE TABLE" },
+    { "table_schema": "public", "table_name": "test_rls_no_policy", "table_type": "BASE TABLE" },
+    { "table_schema": "public", "table_name": "projects", "table_type": "BASE TABLE" }
+  ],
+  "columns": [
+    { "table_schema": "public", "table_name": "projects", "column_name": "id", "data_type": "uuid", "is_nullable": "NO", "column_default": "gen_random_uuid()" },
+    { "table_schema": "public", "table_name": "projects", "column_name": "owner_id", "data_type": "uuid", "is_nullable": "NO", "column_default": null }
+  ],
+  "indexes": [],
+  "constraints": [],
+  "policies": [
+    {
+      "schemaname": "public",
+      "tablename": "projects",
+      "policyname": "projects_select",
+      "permissive": true,
+      "roles": "{anon}",
+      "cmd": "SELECT",
+      "qual": "true",
+      "with_check": null
+    },
+    {
+      "schemaname": "storage",
+      "tablename": "objects",
+      "policyname": "public_read",
+      "permissive": true,
+      "roles": "{public}",
+      "cmd": "SELECT",
+      "qual": "true",
+      "with_check": null
+    }
+  ],
+  "rls": [
+    { "table_schema": "public", "table_name": "test_no_rls", "rls_enabled": false, "rls_forced": false },
+    { "table_schema": "public", "table_name": "test_rls_no_policy", "rls_enabled": true, "rls_forced": false },
+    { "table_schema": "public", "table_name": "projects", "rls_enabled": true, "rls_forced": false }
+  ],
+  "tablePrivileges": [
+    { "table_schema": "public", "table_name": "test_no_rls", "grantee": "anon", "privilege_type": "SELECT" },
+    { "table_schema": "public", "table_name": "test_rls_no_policy", "grantee": "anon", "privilege_type": "SELECT" },
+    { "table_schema": "public", "table_name": "projects", "grantee": "anon", "privilege_type": "INSERT" },
+    { "table_schema": "public", "table_name": "projects", "grantee": "anon", "privilege_type": "UPDATE" }
+  ],
+  "columnAcl": [
+    { "table_schema": "public", "table_name": "projects", "has_column_acl": false },
+    { "table_schema": "public", "table_name": "test_no_rls", "has_column_acl": false },
+    { "table_schema": "public", "table_name": "test_rls_no_policy", "has_column_acl": false }
+  ],
+  "columnPrivileges": [],
+  "routines": [
+    {
+      "routine_schema": "public",
+      "routine_name": "add_credits",
+      "specific_name": "add_credits_1",
+      "routine_type": "FUNCTION",
+      "data_type": "void",
+      "security_type": "DEFINER"
+    }
+  ],
+  "routinePrivileges": [
+    {
+      "routine_schema": "public",
+      "routine_name": "add_credits",
+      "specific_name": "add_credits_1",
+      "grantee": "public",
+      "privilege_type": "EXECUTE"
+    },
+    {
+      "routine_schema": "public",
+      "routine_name": "add_credits",
+      "specific_name": "add_credits_1",
+      "grantee": "service_role",
+      "privilege_type": "EXECUTE"
+    }
+  ],
+  "storageBuckets": [
+    { "id": "avatars", "name": "avatars", "public": true }
+  ],
+  "errors": []
+}

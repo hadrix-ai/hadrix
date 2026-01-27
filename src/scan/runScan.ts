@@ -19,6 +19,7 @@ import { isJellyAvailable } from "./jelly.js";
 import { discoverEntryPoints } from "./entryPoints.js";
 import { buildJellyReachabilityIndex } from "./jellyReachability.js";
 import { buildFindingIdentityKey } from "./dedupeKey.js";
+import { runSupabaseSchemaScan } from "../supabase/supabaseSchemaScan.js";
 import {
   dedupeFindings,
   dedupeRepositoryFindingsAgainstExisting,
@@ -53,6 +54,7 @@ export interface RunScanOptions {
   logger?: (message: string) => void;
   debug?: boolean;
   debugLogPath?: string | null;
+  supabase?: { connectionString?: string; schemaSnapshotPath?: string } | null;
 }
 
 type ChunkRow = {
@@ -709,6 +711,7 @@ function normalizeStaticTool(value: unknown): StaticFinding["tool"] | null {
   if (normalized === "gitleaks") return "gitleaks";
   if (normalized === "osv-scanner") return "osv-scanner";
   if (normalized === "eslint") return "eslint";
+  if (normalized === "supabase") return "supabase";
   return null;
 }
 
@@ -1046,9 +1049,22 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       );
     }
   
+    let supabaseFindings: StaticFinding[] = [];
+    if (options.supabase?.connectionString || options.supabase?.schemaSnapshotPath) {
+      log("Fetching Supabase schema...");
+      const supabaseResult = await runSupabaseSchemaScan({
+        connectionString: options.supabase?.connectionString,
+        schemaSnapshotPath: options.supabase?.schemaSnapshotPath,
+        projectRoot: config.projectRoot,
+        stateDir: config.stateDir,
+        logger: log
+      });
+      supabaseFindings = supabaseResult.findings;
+    }
+
     const rawStaticFindings = options.skipStatic
-      ? []
-      : await runStaticScanners(config, scanRoot, log);
+      ? [...supabaseFindings]
+      : [...supabaseFindings, ...(await runStaticScanners(config, scanRoot, log))];
     log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
   
     let jellyResult: JellyAnchorComputation | null = null;

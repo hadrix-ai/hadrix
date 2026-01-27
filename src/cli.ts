@@ -8,6 +8,7 @@ import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
 import { runSetup } from "./setup/runSetup.js";
+import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
@@ -83,13 +84,50 @@ function formatDuration(durationMs: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-async function promptYesNo(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const { createInterface } = await import("node:readline/promises");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`${question} (y/N) `);
-  rl.close();
-  return ["y", "yes"].includes(answer.trim().toLowerCase());
+function buildSupabaseConnectionString(raw: string, password?: string | null): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Supabase project URL is required.");
+  }
+
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("postgresql://") || lowered.startsWith("postgres://")) {
+    throw new Error("Please enter the Supabase project URL (not a connection string).");
+  }
+
+  const normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+    ? trimmed
+    : `https://${trimmed}`;
+  let hostname = "";
+  try {
+    hostname = new URL(normalized).hostname.toLowerCase();
+  } catch {
+    hostname = lowered;
+  }
+  if (!hostname) {
+    throw new Error("Supabase project URL is invalid.");
+  }
+
+  let projectRef = hostname;
+  if (projectRef.startsWith("db.")) {
+    projectRef = projectRef.slice(3);
+  }
+  if (projectRef.endsWith(".supabase.co")) {
+    projectRef = projectRef.slice(0, -".supabase.co".length);
+  } else if (projectRef.endsWith(".supabase.com")) {
+    projectRef = projectRef.slice(0, -".supabase.com".length);
+  }
+
+  projectRef = projectRef.trim();
+  if (!projectRef) {
+    throw new Error("Supabase project URL is missing a project reference.");
+  }
+  const secret = password?.trim();
+  if (!secret) {
+    throw new Error("Supabase DB password is required.");
+  }
+  const encoded = encodeURIComponent(secret);
+  return `postgresql://postgres:${encoded}@db.${projectRef}.supabase.co:5432/postgres`;
 }
 
 function isMissingScannersError(message: string): boolean {
@@ -113,6 +151,10 @@ program
   .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
   .option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots")
   .option("--skip-static", "Skip running static scanners")
+  .option("--supabase", "Connect to Supabase and include schema-based checks")
+  .option("--supabase-url <string>", "Supabase project URL")
+  .option("--supabase-password <password>", "Supabase DB password (replaces placeholder)")
+  .option("--supabase-schema <path>", "Supabase schema snapshot JSON (no DB connection)")
   .option("--existing-findings <path>", "Existing findings JSON array or file path")
   .option("--repo-full-name <name>", "Repository full name for metadata")
   .option("--repo-id <id>", "Repository id for metadata")
@@ -128,6 +170,10 @@ program
       repoPath?: string;
       repoPathInference?: boolean;
       skipStatic?: boolean;
+      supabase?: boolean;
+      supabaseUrl?: string;
+      supabasePassword?: string;
+      supabaseSchema?: string;
       existingFindings?: string;
       repoFullName?: string;
       repoId?: string;
@@ -143,6 +189,57 @@ program
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const scanStart = Date.now();
     let statusMessage = "Running scan...";
+
+    const envSupabaseUrl = process.env.HADRIX_SUPABASE_URL;
+    const envSupabasePassword = process.env.HADRIX_SUPABASE_PASSWORD;
+    const envSupabaseSchema = process.env.HADRIX_SUPABASE_SCHEMA_PATH;
+    let supabaseConnectionString: string | null = null;
+    let supabaseSchemaPath: string | null = null;
+    const wantsSupabase = Boolean(
+      options.supabase ||
+        options.supabaseUrl ||
+        options.supabasePassword ||
+        options.supabaseSchema ||
+        envSupabaseUrl ||
+        envSupabasePassword ||
+        envSupabaseSchema
+    );
+    if (wantsSupabase) {
+      supabaseSchemaPath = options.supabaseSchema ?? envSupabaseSchema ?? null;
+      if (!supabaseSchemaPath) {
+        let conn = options.supabaseUrl ?? envSupabaseUrl ?? "";
+        let password = options.supabasePassword ?? envSupabasePassword ?? null;
+        if (!conn && process.stdin.isTTY && !isJsonOutput) {
+          conn = await promptHidden("Supabase project URL: ");
+        }
+        if (!password && process.stdin.isTTY && !isJsonOutput) {
+          password = await promptHidden("Supabase DB password: ");
+        }
+        if (!conn.trim()) {
+          throw new Error("Supabase connection string is required.");
+        }
+        supabaseConnectionString = buildSupabaseConnectionString(conn, password);
+      }
+    } else if (process.stdin.isTTY && !isJsonOutput) {
+      const dbPrompt = [
+        "Would you like to also scan your database for misconfigured RLS, column privileges, public storage, and more?",
+        "This is strongly recommended as most security issues for vibe coders are in database misconfigurations.",
+        "All data is stored locally on your device, never on any of our servers.",
+        "See https://cli.hadrix.ai for more information and see our OSS code https://github.com/hadrix-ai/hadrix.",
+        "",
+        "Select a database provider:"
+      ].join("\n");
+      const choice = await promptSelect(dbPrompt, ["Supabase", "Skip"], {
+        defaultIndex: 1
+      });
+      if (choice === 0) {
+        const conn = await promptHidden("Supabase project URL: ");
+        const password = await promptHidden("Supabase DB password: ");
+        if (conn.trim()) {
+          supabaseConnectionString = buildSupabaseConnectionString(conn, password);
+        }
+      }
+    }
 
     const formatElapsed = () => formatDuration(Date.now() - scanStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
@@ -180,7 +277,12 @@ program
           commitSha: options.commitSha,
           logger,
           debug: options.debug,
-          debugLogPath: options.debugLog
+          debugLogPath: options.debugLog,
+          supabase: supabaseSchemaPath
+            ? { schemaSnapshotPath: supabaseSchemaPath }
+            : supabaseConnectionString
+              ? { connectionString: supabaseConnectionString }
+              : null
         });
 
       let result;
@@ -199,7 +301,9 @@ program
           elapsedTimer = null;
         }
         attemptedSetup = true;
-        const ok = await promptYesNo("Static scanners missing. Run 'hadrix setup' now?");
+        const ok = await promptYesNo("Static scanners missing. Run 'hadrix setup' now?", {
+          defaultYes: true
+        });
         if (!ok) {
           throw err;
         }

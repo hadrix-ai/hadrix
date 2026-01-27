@@ -1,11 +1,11 @@
 import path from "node:path";
 import { mkdirSync, renameSync, chmodSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createInterface } from "node:readline/promises";
 import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { getToolsDir, resolveToolPath } from "../scan/staticScanners.js";
 import { getJellyInstallDir, resolveJellyPath } from "../scan/jelly.js";
+import { promptYesNo as promptYesNoPrompt } from "../ui/prompts.js";
 
 const require = createRequire(import.meta.url);
 const tar = require("tar") as typeof import("tar");
@@ -251,13 +251,7 @@ async function installJelly(logger?: (message: string) => void): Promise<Install
 
 async function promptYesNo(question: string, autoYes: boolean): Promise<boolean> {
   if (autoYes) return true;
-  if (!process.stdin.isTTY) {
-    return false;
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`${question} (y/N) `);
-  rl.close();
-  return ["y", "yes"].includes(answer.trim().toLowerCase());
+  return await promptYesNoPrompt(question, { defaultYes: true });
 }
 
 export async function runSetup(options: SetupOptions = {}): Promise<InstallResult[]> {

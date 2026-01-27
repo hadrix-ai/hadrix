@@ -1,5 +1,6 @@
 import path from "node:path";
 import { mkdir, stat, writeFile } from "node:fs/promises";
+import fg from "fast-glob";
 import pc from "picocolors";
 import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
@@ -173,12 +174,17 @@ const matchesSpec = (spec: EvalRepoSpec, specId?: string | null): boolean => {
   return spec.id === normalized || spec.repoFullName === normalized;
 };
 
-const shouldSkipGroup = (group: EvalGroupSpec): string | null => {
-  if (group.id === "Orbit-Projects-RLS") return "datastore evals unsupported in CLI";
-  if (group.expectedFindings.some((finding) => finding.filepath.startsWith("datastores/"))) {
-    return "datastore evals unsupported in CLI";
-  }
-  return null;
+const shouldSkipGroup = (_group: EvalGroupSpec): string | null => null;
+
+const findSupabaseSchemaSnapshot = async (repoPath: string): Promise<string | null> => {
+  const patterns = [
+    "**/datastores/supabase/*/schema.json",
+    "datastores/supabase/*/schema.json",
+    "datastores/supabase/schema.json",
+    "supabase/schema.json"
+  ];
+  const matches = await fg(patterns, { cwd: repoPath, absolute: true, onlyFiles: true });
+  return matches[0] ?? null;
 };
 
 const ensureRepoExists = async (repoPath: string): Promise<void> => {
@@ -433,6 +439,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
           ? options.configPath
           : path.join(repoPath, options.configPath)
         : null;
+      const supabaseSchemaSnapshot = await findSupabaseSchemaSnapshot(repoPath);
 
       const scanResult = await runScan({
         projectRoot: repoPath,
@@ -444,6 +451,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
         logger,
         debug: options.debug,
         debugLogPath: options.debugLogPath ?? null,
+        supabase: supabaseSchemaSnapshot ? { schemaSnapshotPath: supabaseSchemaSnapshot } : null,
       });
 
       const evalFindings = toEvalFindings(scanResult);

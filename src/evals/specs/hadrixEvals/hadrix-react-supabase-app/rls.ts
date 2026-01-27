@@ -1,6 +1,6 @@
 import type { EvalFinding, EvalGroupSpec, ExpectedFinding, SummaryComparator, SummaryComparison } from "../../../types.js";
 
-const DATASTORE_RLS_FILEPATH_GLOB = "datastores/supabase/*/schema.md";
+const DATASTORE_RLS_FILEPATH_GLOB = "datastores/supabase/*/schema.json";
 
 const TARGET_TABLES = [
   {
@@ -33,8 +33,11 @@ const normalizeText = (value: string): string =>
 const normalizeIdentifier = (value: string): string =>
   value.replace(/"/g, "").trim().toLowerCase();
 
-const normalizeRuleId = (value: unknown): string =>
-  typeof value === "string" ? value.trim().toLowerCase() : "";
+const normalizeRuleId = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("supabase_") ? normalized.slice("supabase_".length) : normalized;
+};
 
 const normalizeTableRef = (value: string | null | undefined): string | null => {
   if (!value) return null;
