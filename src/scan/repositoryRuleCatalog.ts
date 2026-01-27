@@ -156,6 +156,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description: "Tokens, secrets, or PII are persisted in localStorage or sessionStorage.",
     requiredControls: ["no_sensitive_secrets"],
     guidance: [
+      "Only report when code explicitly writes sensitive values to browser storage APIs (localStorage, sessionStorage, AsyncStorage, IndexedDB, cookies).",
       "Do not store access tokens, refresh tokens, or session IDs in localStorage/sessionStorage.",
       "Persist only non-sensitive preferences; keep PII and secrets on the server or in httpOnly cookies."
     ]
@@ -408,7 +409,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     title: "Mass assignment of user-controlled fields",
     category: "business_logic",
     description: "Endpoints bind entire request bodies to models without field allowlists.",
-    requiredControls: ["authorization:ownership_or_membership"],
+    candidateTypes: ["mass_assignment"],
     guidance: [
       "Allowlist writable fields or map through DTOs.",
       "Never accept role, ownership, pricing, or status fields from clients."
@@ -551,7 +552,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     title: "Missing security headers",
     category: "configuration",
     description: "Responses omit critical headers like CSP, HSTS, or X-Frame-Options.",
-    requiredControls: ["authentication"],
+    candidateTypes: ["missing_security_headers"],
     guidance: [
       "Set CSP, HSTS, X-Frame-Options, and X-Content-Type-Options.",
       "Apply headers via default middleware for all responses."

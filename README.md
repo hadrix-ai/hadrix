@@ -2,6 +2,7 @@
 
 Hadrix performs a local, read-only security scan and writes results to the terminal or JSON.
 Default scans target common source files plus schema files (including `.sql`).
+LLM rule findings are validated with a second pass to drop low-evidence results.
 
 ## Requirements
 
@@ -108,6 +109,14 @@ hadrix scan /path/to/monorepo --no-repo-path-inference
 ```
 
 You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
+
+## Supabase schema scans
+
+Hadrix can scan Supabase schema snapshots for RLS, grants, and storage misconfigurations.
+
+- Provide a snapshot explicitly with `--supabase-schema <path>` or `HADRIX_SUPABASE_SCHEMA_PATH`.
+- Or connect directly with `--supabase`, `--supabase-url`, and `--supabase-password`.
+- If no Supabase flags are provided, Hadrix auto-detects `datastores/supabase/**/schema.json` under the scan root and uses the first match.
 
 ## Running evals locally
 

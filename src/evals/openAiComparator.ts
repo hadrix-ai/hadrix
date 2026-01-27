@@ -77,6 +77,27 @@ const RULE_HINT_PATTERNS: Array<{ hint: string; patterns: RegExp[] }> = [
   {
     hint: "sensitive_logging",
     patterns: [/sensitive log/i, /log[^\n]{0,20}(token|secret|password)/i, /plaintext log/i]
+  },
+  {
+    hint: "sensitive_client_storage",
+    patterns: [
+      /\blocalstorage\b/i,
+      /\bsessionstorage\b/i,
+      /\basyncstorage\b/i,
+      /\bindexeddb\b/i,
+      /\bbrowser storage\b/i,
+      /\bclient[-\s]?side storage\b/i,
+      /\bclient storage\b/i
+    ]
+  },
+  {
+    hint: "frontend_direct_db_write",
+    patterns: [
+      /\b(frontend|client[-\s]?side|direct)\s+(db|database)\s+write/i,
+      /\bclient[-\s]?side\s+(db|database)\b/i,
+      /\bdirect\s+supabase\s+write/i,
+      /\bsupabase\s+from\s+client\b/i
+    ]
   }
 ];
 
@@ -179,6 +200,39 @@ const normalizeText = (value: string): string =>
     .replace(/[^\p{L}\p{N}\s]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const normalizeSummaryForRule = (value: string, hints: string[]): string => {
+  if (!value) return "";
+  const normalizedHints = new Set(hints.map((hint) => normalizeRuleIdAlias(hint)));
+  let output = value;
+  if (normalizedHints.has("lockout") || normalizedHints.has("rate_limiting")) {
+    output = output
+      .replace(/\brate[-\s]?limit(ing)?\b/gi, "login protection")
+      .replace(/\bratelimit\b/gi, "login protection")
+      .replace(/\bthrottl(?:e|ing)?\b/gi, "login protection")
+      .replace(/\blockout\b/gi, "login protection")
+      .replace(/\baccount lock\b/gi, "login protection")
+      .replace(/\bbrute[-\s]?force\b/gi, "login protection")
+      .replace(/\bcredential stuffing\b/gi, "login protection");
+  }
+  if (
+    normalizedHints.has("sensitive_client_storage") ||
+    normalizedHints.has("frontend_direct_db_write")
+  ) {
+    output = output
+      .replace(/\blocalstorage\b/gi, "client persistence")
+      .replace(/\bsessionstorage\b/gi, "client persistence")
+      .replace(/\basyncstorage\b/gi, "client persistence")
+      .replace(/\bindexeddb\b/gi, "client persistence")
+      .replace(/\bbrowser storage\b/gi, "client persistence")
+      .replace(/\bclient[-\s]?side storage\b/gi, "client persistence")
+      .replace(/\bclient storage\b/gi, "client persistence")
+      .replace(/\b(frontend|client[-\s]?side|direct)\s+(db|database)\s+write(s)?\b/gi, "client persistence")
+      .replace(/\bclient[-\s]?side\s+(db|database)\b/gi, "client persistence")
+      .replace(/\bfront[-\s]?end\s+database\b/gi, "client persistence");
+  }
+  return output;
+};
 
 const ALIAS_TOKEN_RE = /\b(?:GHSA-[A-Za-z0-9-]+|CVE-\d{4}-\d{4,})\b/gi;
 const PACKAGE_AT_VERSION_RE = /\b([a-z0-9_.-]+)@([0-9][^\s,)]*)\b/i;
@@ -690,10 +744,15 @@ export function createOpenAiSummaryComparator(options?: {
         shortExpectation && ruleHintsAgree(expectedHints, actualHints)
           ? SHORT_FALLBACK_THRESHOLD
           : FALLBACK_THRESHOLD;
-      const score = jaccard(
-        tokenSet(buildExpectedComparisonText(expected)),
-        tokenSet(buildActualComparisonText(actual))
+      const expectedText = normalizeSummaryForRule(
+        buildExpectedComparisonText(expected),
+        expectedHints
       );
+      const actualText = normalizeSummaryForRule(
+        buildActualComparisonText(actual),
+        actualHints
+      );
+      const score = jaccard(tokenSet(expectedText), tokenSet(actualText));
       return {
         match: score >= threshold,
         score,

@@ -118,6 +118,37 @@ function extractFindingLocation(
   };
 }
 
+function overlapGroupDiverges(a: FindingLike, b: FindingLike): boolean {
+  const overlapA = extractOverlapGroupId(a);
+  const overlapB = extractOverlapGroupId(b);
+  if (!overlapA || !overlapB) return false;
+  return overlapA !== overlapB;
+}
+
+function lineRangesDiverge(a: FindingLike, b: FindingLike): boolean {
+  const overlapA = extractOverlapGroupId(a);
+  const overlapB = extractOverlapGroupId(b);
+  if (overlapA && overlapB && overlapA === overlapB) {
+    return false;
+  }
+  const locA = extractFindingLocation(a.location ?? null);
+  const locB = extractFindingLocation(b.location ?? null);
+  if (!locA.canonicalPath || !locB.canonicalPath) {
+    return false;
+  }
+  if (locA.canonicalPath !== locB.canonicalPath) {
+    return false;
+  }
+  const hasLineA =
+    locA.startLine !== null && locA.endLine !== null && locA.startLine > 0 && locA.endLine > 0;
+  const hasLineB =
+    locB.startLine !== null && locB.endLine !== null && locB.startLine > 0 && locB.endLine > 0;
+  if (!hasLineA || !hasLineB) {
+    return false;
+  }
+  return !rangesOverlap(locA.startLine!, locA.endLine!, locB.startLine!, locB.endLine!);
+}
+
 function normalizeRepoFullName(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim();
@@ -234,7 +265,7 @@ const SUMMARY_STOP_WORDS = new Set([
   "those",
   "should"
 ]);
-const SUMMARY_SIMILARITY_THRESHOLD = 0.88;
+const SUMMARY_SIMILARITY_THRESHOLD = 0.9;
 const REPOSITORY_SUMMARY_PATH = "(repository)";
 const DEDUPE_KIND_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
@@ -313,6 +344,34 @@ function isFrontendOnlyPath(filepath: string, details?: Record<string, unknown>)
   return (hasFrontendSegment || hasFrontendExtension) && !hasServerSegment;
 }
 
+function isMigrationPath(filepath: string): boolean {
+  const lower = filepath.toLowerCase();
+  if (lower.includes("/migrations/") || lower.includes("/migration/")) {
+    return true;
+  }
+  if (lower.endsWith(".sql") && (lower.includes("/db/") || lower.includes("/schema/"))) {
+    return true;
+  }
+  return false;
+}
+
+function isMigrationOverlapMatch(a: FindingLike, b: FindingLike): boolean {
+  const overlapA = extractOverlapGroupId(a);
+  const overlapB = extractOverlapGroupId(b);
+  if (!overlapA || !overlapB || overlapA !== overlapB) {
+    return false;
+  }
+  const locA = extractFindingLocation(a.location ?? null);
+  const locB = extractFindingLocation(b.location ?? null);
+  if (!locA.canonicalPath || !locB.canonicalPath) {
+    return false;
+  }
+  if (locA.canonicalPath !== locB.canonicalPath) {
+    return false;
+  }
+  return isMigrationPath(locA.canonicalPath);
+}
+
 function normalizeFindingKind(value: string): string {
   return value
     .toLowerCase()
@@ -321,14 +380,17 @@ function normalizeFindingKind(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+const ENTRY_POINT_METHOD_PATTERN = /^(get|post|put|patch|delete|del|head|options)\s+/i;
+
 function normalizeEntryPointIdentity(value: string): string {
-  return value
+  const normalized = value
     .trim()
     .toLowerCase()
     .replace(/\\/g, "/")
     .replace(/\s+/g, " ")
     .replace(/^\/+/, "")
     .replace(/\/+$/, "");
+  return normalized.replace(ENTRY_POINT_METHOD_PATTERN, "");
 }
 
 function normalizeRuleIdAlias(value: string): string {
@@ -776,7 +838,14 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
   const strictRuntimeControl = categoryA === categoryB &&
     (categoryA === "rate_limiting" || categoryA === "lockout");
   const entryPointMatch = Boolean(entryPointA && entryPointB && entryPointA === entryPointB);
+  const migrationOverlap = isMigrationOverlapMatch(a, b);
   if (strictRuntimeControl && !entryPointMatch) {
+    return false;
+  }
+  if (overlapGroupDiverges(a, b)) {
+    return false;
+  }
+  if (lineRangesDiverge(a, b)) {
     return false;
   }
   const dedupeKeyA = extractDedupeKey(a) || buildDedupeKey(a);
@@ -790,7 +859,7 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
   if (candidateTypeA && candidateTypeB && candidateTypeA !== candidateTypeB) {
     return false;
   }
-  if (entryPointA && entryPointB && entryPointA !== entryPointB) {
+  if (entryPointA && entryPointB && entryPointA !== entryPointB && !migrationOverlap) {
     return false;
   }
   const typeA = extractFindingIdentityType(a);
@@ -815,7 +884,9 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
     }
     if (entryPointA || entryPointB) {
       if (!entryPointA || !entryPointB || entryPointA !== entryPointB) {
-        return false;
+        if (!migrationOverlap) {
+          return false;
+        }
       }
     }
     if (primarySymbolA || primarySymbolB) {
@@ -857,13 +928,24 @@ function mergeBlockReason(a: FindingLike, b: FindingLike): string | null {
   if (candidateTypeA && candidateTypeB && candidateTypeA !== candidateTypeB) {
     return "candidate_type_mismatch";
   }
+  if (overlapGroupDiverges(a, b)) {
+    return "overlap_group_mismatch";
+  }
+  if (lineRangesDiverge(a, b)) {
+    return "line_range_mismatch";
+  }
   const entryPointA = normalizeEntryPointIdentity(extractEntryPointIdentity(a));
   const entryPointB = normalizeEntryPointIdentity(extractEntryPointIdentity(b));
+  const migrationOverlap = isMigrationOverlapMatch(a, b);
   if (entryPointA && entryPointB && entryPointA !== entryPointB) {
-    return "entry_point_mismatch";
+    if (!migrationOverlap) {
+      return "entry_point_mismatch";
+    }
   }
   if ((entryPointA && !entryPointB) || (!entryPointA && entryPointB)) {
-    return "entry_point_missing";
+    if (!migrationOverlap) {
+      return "entry_point_missing";
+    }
   }
   return null;
 }

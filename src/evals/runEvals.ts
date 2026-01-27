@@ -1,9 +1,12 @@
 import path from "node:path";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
 import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
+import { inferRepoPathFromDisk } from "../scan/repoPath.js";
 import type { CoreFinding, ScanResult } from "../types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
 import { createOpenAiSummaryComparator } from "./openAiComparator.js";
@@ -192,6 +195,57 @@ const ensureRepoExists = async (repoPath: string): Promise<void> => {
   if (!stats || !stats.isDirectory()) {
     throw new Error(`Eval repo not found: ${repoPath}`);
   }
+};
+
+const resolvePackageRoot = async (repoPath: string): Promise<string | null> => {
+  const rootPackage = path.join(repoPath, "package.json");
+  if (existsSync(rootPackage)) {
+    return repoPath;
+  }
+  const inferredRepoPath = await inferRepoPathFromDisk(repoPath);
+  if (inferredRepoPath) {
+    const inferredRoot = path.join(repoPath, inferredRepoPath);
+    if (existsSync(path.join(inferredRoot, "package.json"))) {
+      return inferredRoot;
+    }
+  }
+  return null;
+};
+
+const hasNodeModules = async (packageRoot: string): Promise<boolean> => {
+  try {
+    const entries = await readdir(path.join(packageRoot, "node_modules"));
+    return entries.length > 0;
+  } catch {
+    return false;
+  }
+};
+
+const runNpmInstall = async (packageRoot: string): Promise<void> => {
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn("npm", ["install", "--no-fund", "--no-audit"], {
+      stdio: "inherit",
+      cwd: packageRoot
+    });
+    proc.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`npm install exited ${code}`))
+    );
+    proc.on("error", (err) => reject(err));
+  });
+};
+
+const ensureNodeDependencies = async (
+  repoPath: string,
+  logger: (message: string) => void
+): Promise<void> => {
+  const packageRoot = await resolvePackageRoot(repoPath);
+  if (!packageRoot) return;
+  const hasDeps = await hasNodeModules(packageRoot);
+  if (hasDeps) return;
+  const relativePath = path.relative(process.cwd(), packageRoot);
+  const displayPath = relativePath && !relativePath.startsWith("..") ? relativePath : packageRoot;
+  logger(`Missing npm dependencies in ${displayPath}. Running npm install...`);
+  await runNpmInstall(packageRoot);
 };
 
 const mergeCounts = (target: EvalCounts, source: EvalCounts): void => {
@@ -434,6 +488,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
     let evalResults: EvalGroupResult[] = [];
     if (runnableGroups.length > 0) {
       logger(`Running scan for ${spec.repoFullName}...`);
+      await ensureNodeDependencies(repoPath, logger);
       const resolvedConfigPath = options.configPath
         ? path.isAbsolute(options.configPath)
           ? options.configPath

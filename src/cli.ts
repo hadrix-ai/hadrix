@@ -195,6 +195,7 @@ program
     const envSupabaseSchema = process.env.HADRIX_SUPABASE_SCHEMA_PATH;
     let supabaseConnectionString: string | null = null;
     let supabaseSchemaPath: string | null = null;
+    let supabaseExplicitlySkipped = false;
     const wantsSupabase = Boolean(
       options.supabase ||
         options.supabaseUrl ||
@@ -238,6 +239,8 @@ program
         if (conn.trim()) {
           supabaseConnectionString = buildSupabaseConnectionString(conn, password);
         }
+      } else {
+        supabaseExplicitlySkipped = true;
       }
     }
 
@@ -282,7 +285,9 @@ program
             ? { schemaSnapshotPath: supabaseSchemaPath }
             : supabaseConnectionString
               ? { connectionString: supabaseConnectionString }
-              : null
+              : supabaseExplicitlySkipped
+                ? null
+                : undefined
         });
 
       let result;

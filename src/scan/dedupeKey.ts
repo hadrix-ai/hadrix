@@ -59,6 +59,25 @@ function normalizeKeyPart(value: string): string {
     .replace(/\|/g, "/");
 }
 
+const ENTRY_POINT_METHOD_PATTERN = /^(get|post|put|patch|delete|del|head|options)\s+/i;
+
+function normalizeEntryPointIdentity(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/\s+/g, " ")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+function normalizeEntryPointKey(value: string): string {
+  const normalized = normalizeEntryPointIdentity(value);
+  if (!normalized) return "";
+  const stripped = normalized.replace(ENTRY_POINT_METHOD_PATTERN, "");
+  return normalizeKeyPart(stripped);
+}
+
 function normalizeTypeToken(value: string): string {
   return value
     .toLowerCase()
@@ -294,7 +313,13 @@ export function buildFindingIdentityKey(
 
   const entryPointKey = extractEntryPointIdentity(finding);
   const primarySymbolKey = extractPrimarySymbolIdentity(finding);
-  const entryPointToken = entryPointKey ? normalizeKeyPart(entryPointKey) : "";
+  const hasStrongAnchor =
+    Boolean(anchorNodeId || overlapGroupId) ||
+    location.startLine !== null ||
+    location.endLine !== null;
+  const entryPointToken = !hasStrongAnchor && entryPointKey
+    ? normalizeEntryPointKey(entryPointKey)
+    : "";
   const primarySymbolToken = primarySymbolKey ? normalizeKeyPart(primarySymbolKey) : "";
   const rawType = extractRawIdentityType(finding);
   const rawTypeToken = rawType ? normalizeTypeToken(rawType) : "";
