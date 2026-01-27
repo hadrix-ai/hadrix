@@ -502,13 +502,24 @@ export class HadrixDb {
     }>
   ): Array<{ id: number; chunkUid: string }> {
     const insertChunk = this.db.prepare(
-      "INSERT INTO chunks (file_id, chunk_uid, filepath, chunk_index, start_line, end_line, content, content_hash, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+      "INSERT OR IGNORE INTO chunks (file_id, chunk_uid, filepath, chunk_index, start_line, end_line, content, content_hash, chunk_format, security_header, primary_symbol, entry_point, execution_role, sinks, overlap_group_id, dedupe_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
     );
+    const selectChunkId = this.db.prepare("SELECT id FROM chunks WHERE chunk_uid = ?");
 
     const inserted: Array<{ id: number; chunkUid: string }> = [];
+    let duplicateInBatch = 0;
+    let existingCount = 0;
+    let missingCount = 0;
 
     const tx = this.db.transaction(() => {
+      const seen = new Set<string>();
       for (const chunk of chunks) {
+        if (seen.has(chunk.chunkUid)) {
+          duplicateInBatch += 1;
+          continue;
+        }
+        seen.add(chunk.chunkUid);
+
         const chunkFormat = this.normalizeOptionalString(chunk.chunkFormat);
         const securityHeader = this.serializeOptionalJson(chunk.securityHeader);
         const primarySymbol = this.normalizeOptionalString(chunk.primarySymbol);
@@ -535,38 +546,98 @@ export class HadrixDb {
           overlapGroupId,
           dedupeKey
         );
-        inserted.push({ id: Number(result.lastInsertRowid), chunkUid: chunk.chunkUid });
+        if (result.changes === 0) {
+          const row = selectChunkId.get(chunk.chunkUid) as { id: number } | undefined;
+          if (row) {
+            existingCount += 1;
+            inserted.push({ id: Number(row.id), chunkUid: chunk.chunkUid });
+          } else {
+            missingCount += 1;
+          }
+        } else {
+          inserted.push({ id: Number(result.lastInsertRowid), chunkUid: chunk.chunkUid });
+        }
       }
     });
 
     tx();
+    if (duplicateInBatch > 0) {
+      this.log(`Dropped ${duplicateInBatch} duplicate chunk_uids within batch for ${filepath}.`);
+    }
+    if (existingCount > 0) {
+      this.log(`Skipped ${existingCount} existing chunk_uids for ${filepath}.`);
+    }
+    if (missingCount > 0) {
+      this.log(`Failed to resolve ${missingCount} chunk_uids after insert-ignore for ${filepath}.`);
+    }
     return inserted;
   }
 
   insertEmbeddings(rows: Array<{ chunkId: number; embedding: Buffer }>) {
-    const insert =
-      this.vectorMode === "fast"
-        ? this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)")
-        : this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
+    const isFast = this.vectorMode === "fast";
+    const insert = isFast
+      ? this.db.prepare("INSERT INTO chunk_embeddings (rowid, embedding) VALUES (?, ?)")
+      : this.db.prepare("INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)");
 
-    const tx = this.db.transaction(() => {
-      for (const row of rows) {
-        const chunkId = this.toSqliteInteger(row.chunkId);
-        if (chunkId == null) {
-          this.log(`Skipping embedding insert: invalid chunkId (${typeof row.chunkId}).`);
-          continue;
-        }
+    const normalized: Array<{ chunkId: number | bigint; embedding: Buffer }> = [];
+    const seen = new Set<string>();
+    let duplicateCount = 0;
+
+    for (const row of rows) {
+      const chunkId = this.toSqliteInteger(row.chunkId);
+      if (chunkId == null) {
+        this.log(`Skipping embedding insert: invalid chunkId (${typeof row.chunkId}).`);
+        continue;
+      }
+      const key = String(chunkId);
+      if (seen.has(key)) {
+        duplicateCount += 1;
+        continue;
+      }
+      seen.add(key);
+      normalized.push({ chunkId, embedding: row.embedding });
+    }
+
+    if (isFast && normalized.length > 0) {
+      const ids = normalized.map((row) => row.chunkId);
+      const batchSize = 500;
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const batch = ids.slice(i, i + batchSize);
+        const placeholder = batch.map(() => "?").join(",");
         try {
-          insert.run(chunkId, row.embedding);
+          this.db.prepare(`DELETE FROM chunk_embeddings WHERE rowid IN (${placeholder})`).run(...batch);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          this.log(`Embedding insert failed (mode=${this.vectorMode}, chunkId=${chunkId}): ${message}`);
+          this.log(`Embedding delete failed (mode=${this.vectorMode}): ${message}`);
+        }
+      }
+    }
+
+    let alreadyExists = 0;
+
+    const tx = this.db.transaction(() => {
+      for (const row of normalized) {
+        try {
+          insert.run(row.chunkId, row.embedding);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (isFast && /already exists/i.test(message)) {
+            alreadyExists += 1;
+            continue;
+          }
+          this.log(`Embedding insert failed (mode=${this.vectorMode}, chunkId=${row.chunkId}): ${message}`);
           throw err;
         }
       }
     });
 
     tx();
+    if (duplicateCount > 0) {
+      this.log(`Dropped ${duplicateCount} duplicate embeddings in batch.`);
+    }
+    if (alreadyExists > 0) {
+      this.log(`Skipped ${alreadyExists} embeddings that already existed (fast mode).`);
+    }
   }
 
   getChunksForFile(fileId: number): ChunkRow[] {
