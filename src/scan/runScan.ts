@@ -1583,23 +1583,27 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       ];
       const finalFindingCount = staticFindings.length + combinedFindings.length;
       const dedupeReport = buildDedupeReport(reportRawFindings, finalFindingCount);
-      log(
-        `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
-      );
-      if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
-        log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
-      }
-      if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
-        log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
-      }
-      if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
-        log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
-      }
-      try {
-        await writeDedupeReport(config.stateDir, dedupeReport, log);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log(`Failed to persist dedupe report: ${message}`);
+
+      // Only emit and persist dedupe report diagnostics in debug mode.
+      if (debugWriter) {
+        log(
+          `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
+        );
+        if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
+          log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
+        }
+        if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
+          log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
+        }
+        if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
+          log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
+        }
+        try {
+          await writeDedupeReport(config.stateDir, dedupeReport, log);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log(`Failed to persist dedupe report: ${message}`);
+        }
       }
   
       return {
