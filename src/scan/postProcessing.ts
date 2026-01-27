@@ -369,6 +369,12 @@ function extractEntryPointIdentity(finding: FindingLike): string {
   return "";
 }
 
+function extractPrimarySymbolIdentity(finding: FindingLike): string {
+  const details = toRecord(finding.details);
+  const raw = details.primarySymbol ?? details.primary_symbol;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
 function extractFindingKind(finding: FindingLike): string {
   const details = toRecord(finding.details);
   const raw = details.findingType ?? details.finding_type ?? details.type;
@@ -763,6 +769,8 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
   const candidateTypeB = extractCandidateTypeForMerge(b);
   const entryPointA = normalizeEntryPointIdentity(extractEntryPointIdentity(a));
   const entryPointB = normalizeEntryPointIdentity(extractEntryPointIdentity(b));
+  const primarySymbolA = normalizeEntryPointIdentity(extractPrimarySymbolIdentity(a));
+  const primarySymbolB = normalizeEntryPointIdentity(extractPrimarySymbolIdentity(b));
   const categoryA = extractDedupCategory(a);
   const categoryB = extractDedupCategory(b);
   const strictRuntimeControl = categoryA === categoryB &&
@@ -804,6 +812,16 @@ function shouldMergeFindings(a: FindingLike, b: FindingLike): boolean {
     const repoB = extractRepoFullNameFromFinding(b);
     if (repoA && repoB && repoA !== repoB) {
       return false;
+    }
+    if (entryPointA || entryPointB) {
+      if (!entryPointA || !entryPointB || entryPointA !== entryPointB) {
+        return false;
+      }
+    }
+    if (primarySymbolA || primarySymbolB) {
+      if (!primarySymbolA || !primarySymbolB || primarySymbolA !== primarySymbolB) {
+        return false;
+      }
     }
     return Boolean(typeA && typeB && typeA === typeB);
   }

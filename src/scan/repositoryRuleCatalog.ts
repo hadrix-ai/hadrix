@@ -200,6 +200,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "authentication",
     description: "Tokens are issued or verified without secure handling or validation.",
     requiredControls: ["secure_token_handling"],
+    candidateTypes: ["magic_link_no_expiration"],
     guidance: [
       "Ensure token validation, rotation, and secure storage patterns.",
       "Flag weak or missing verification in auth flows."

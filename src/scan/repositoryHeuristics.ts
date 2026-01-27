@@ -763,9 +763,25 @@ const LOCKOUT_NEGATION_PATTERNS = [
   /\bwithout\s+lockout\b/i,
   /\blockout\s*disabled\b/i,
   /\bdisable(?:d)?\s+lockout\b/i,
+  /\bno\s+(?:throttl(?:e|ing)?|rate\s*limit(?:ing)?)\b[^\n]{0,40}\blockout\b/i,
+  /\blockout\b[^\n]{0,40}\bno\s+(?:throttl(?:e|ing)?|rate\s*limit(?:ing)?)\b/i,
   /\bunlimited\s+attempts?\b/i,
   /\bno\s+limit\s+on\s+attempts?\b/i,
   /\bno\s+account\s+lockout\b/i
+];
+
+const MAGIC_LINK_TOKEN_PATTERNS = [/\bmagicToken\b/i, /\bmagic_token\b/i];
+const MAGIC_LINK_SESSION_PATTERNS = [/\bsignSession\s*\(/i];
+const MAGIC_LINK_COOKIE_SET_PATTERNS = [/\bcookies\s*\(\s*\)\s*\.set\s*\(/i];
+const MAGIC_LINK_EXPIRATION_PATTERNS = [
+  /\bexpires?\b/i,
+  /\bexpiresAt\b/i,
+  /\bexpiresIn\b/i,
+  /\bexpiry\b/i,
+  /\bmaxAge\b/i,
+  /\bmax_age\b/i,
+  /\bttl\b/i,
+  /\bexp\b\s*[:=]/i
 ];
 
 const AUTH_FILE_PATTERNS = [
@@ -838,6 +854,13 @@ const UPLOAD_SIZE_LIMIT_PATTERNS = [
 const MAX_CANDIDATES = 60;
 const MAX_EVIDENCE_LINES = 2;
 const DEFAULT_CANDIDATE_PRIORITY = 10;
+const DATA_ACCESS_SINK_TYPES = [
+  "db.write",
+  "db.query",
+  "sql.query",
+  "exec",
+  "http.request"
+];
 const CANDIDATE_PRIORITY: Record<string, number> = {
   sql_injection: 120,
   command_injection: 120,
@@ -850,6 +873,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   jwt_validation_bypass: 105,
   weak_jwt_secret: 100,
   weak_token_generation: 95,
+  magic_link_no_expiration: 90,
   idor: 95,
   org_id_trust: 95,
   unsafe_query_builder: 90,
@@ -940,6 +964,10 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["backend_shared"],
     requiresEvidence: { sharedContext: true }
   },
+  magic_link_no_expiration: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
   weak_token_generation: {
     allowedScopes: ["backend_endpoint", "backend_shared"]
   },
@@ -1014,6 +1042,10 @@ const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
   secure_token_handling: {
     allowedScopes: ["backend_endpoint", "backend_shared"]
   },
+  input_validation: {
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: { sinkTypes: DATA_ACCESS_SINK_TYPES }
+  },
   signature_verification: {
     allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true }
@@ -1040,6 +1072,28 @@ const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["frontend_ui", "frontend_util"]
   }
 };
+
+const AUTH_ENDPOINT_CONTROL_EXCLUSIONS = new Set([
+  "authentication",
+  "authorization:ownership_or_membership"
+]);
+
+function hasDataAccessSinks(evidence: FileScopeEvidence | undefined): boolean {
+  if (!evidence) return false;
+  const sinks = new Set(evidence.sinks.map((sink) => sink.toLowerCase()));
+  return DATA_ACCESS_SINK_TYPES.some((sink) => sinks.has(sink.toLowerCase()));
+}
+
+function pruneAuthEndpointControls(
+  controls: string[],
+  roles: FileRole[],
+  evidence: FileScopeEvidence | undefined
+): string[] {
+  if (!roles.includes("AUTH_ENDPOINT")) return controls;
+  if (!evidence) return controls;
+  if (hasDataAccessSinks(evidence)) return controls;
+  return controls.filter((control) => !AUTH_ENDPOINT_CONTROL_EXCLUSIONS.has(control));
+}
 
 function ruleGateAllows(
   ruleId: string,
@@ -1180,19 +1234,24 @@ export function evaluateCandidateGate(
 export function filterRequiredControls(
   requiredControls: string[],
   scope: FileScope | undefined,
-  evidence: FileScopeEvidence | undefined
+  evidence: FileScopeEvidence | undefined,
+  roles: FileRole[] = []
 ): string[] {
   if (!requiredControls || requiredControls.length === 0) return [];
   const scopeValue = scope ?? "unknown";
-  return requiredControls.filter((control) =>
+  const gatedControls = requiredControls.filter((control) =>
     ruleGateAllows(control, scopeValue, evidence, CONTROL_RULE_GATES)
   );
+  return pruneAuthEndpointControls(gatedControls, roles, evidence);
 }
 
 export function deriveFileRoleAssignments(files: RepositoryFileSample[]): FileRoleAssignment[] {
   return files.map((file) => {
     const roles = classifyFileRoles(file);
-    const requiredControls = deriveRequiredControls(roles);
+    const normalizedPath = normalizePath(file.path ?? "");
+    const pathHints = buildPathHints(normalizedPath);
+    const scopeEvidence = collectScopeEvidence(file.content ?? "", pathHints);
+    const requiredControls = deriveRequiredControls(roles, scopeEvidence);
     return {
       path: file.path,
       roles,
@@ -1489,6 +1548,61 @@ export function buildCandidateFindings(
             note: "JWT decode without verify"
           }
         ],
+        relatedFileRoles: roles
+      });
+    }
+
+    if (
+      canRunRule("magic_link_no_expiration") &&
+      (roles.includes("AUTH_ENDPOINT") || roles.includes("SHARED_AUTH_LIB")) &&
+      hasMagicLinkNoExpiration(content)
+    ) {
+      const magicLine = findFirstLineMatch(content, MAGIC_LINK_TOKEN_PATTERNS, startLine);
+      const sessionLine = findFirstLineMatch(content, MAGIC_LINK_SESSION_PATTERNS, startLine);
+      const cookieLine = findFirstLineMatch(content, MAGIC_LINK_COOKIE_SET_PATTERNS, startLine);
+      const evidence = trimEvidence([
+        ...(magicLine
+          ? [
+              {
+                filepath: file.path,
+                startLine: magicLine.line,
+                endLine: magicLine.line,
+                excerpt: magicLine.text,
+                note: "Magic-link token received"
+              }
+            ]
+          : []),
+        ...(sessionLine
+          ? [
+              {
+                filepath: file.path,
+                startLine: sessionLine.line,
+                endLine: sessionLine.line,
+                excerpt: sessionLine.text,
+                note: "Session token issued for magic link"
+              }
+            ]
+          : []),
+        ...(cookieLine && cookieLine.line !== sessionLine?.line
+          ? [
+              {
+                filepath: file.path,
+                startLine: cookieLine.line,
+                endLine: cookieLine.line,
+                excerpt: cookieLine.text,
+                note: "Session cookie set without expiry checks"
+              }
+            ]
+          : [])
+      ]);
+      candidates.push({
+        id: `magic-link-no-expiration:${file.path}:${magicLine?.line ?? startLine}`,
+        type: "magic_link_no_expiration",
+        summary: "Magic-link tokens accepted without expiration validation",
+        rationale:
+          "Magic-link flows should validate token expiration before issuing sessions; no expiry checks were detected.",
+        filepath: file.path,
+        evidence,
         relatedFileRoles: roles
       });
     }
@@ -2306,14 +2420,14 @@ export function deriveFileScopeAssignments(files: RepositoryFileSample[]): FileS
   return assignments;
 }
 
-function deriveRequiredControls(roles: FileRole[]): string[] {
+function deriveRequiredControls(roles: FileRole[], scopeEvidence?: FileScopeEvidence): string[] {
   const controls = new Set<string>();
   for (const role of roles) {
     for (const control of REQUIRED_CONTROLS[role] ?? []) {
       controls.add(control);
     }
   }
-  return Array.from(controls);
+  return pruneAuthEndpointControls(Array.from(controls), roles, scopeEvidence);
 }
 
 function detectHttpMethods(content: string): Set<string> {
@@ -2802,6 +2916,39 @@ function hasLockout(content: string): boolean {
     return true;
   }
   return false;
+}
+
+function hasMagicLinkExpirationCheck(content: string): boolean {
+  if (!content) return false;
+  const lines = content.split("\n");
+  const windowSize = 6;
+  const magicLines: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (MAGIC_LINK_TOKEN_PATTERNS.some((pattern) => pattern.test(lines[i]))) {
+      magicLines.push(i);
+    }
+  }
+  if (magicLines.length === 0) return false;
+  for (const index of magicLines) {
+    const end = Math.min(lines.length, index + windowSize + 1);
+    for (let i = index; i < end; i += 1) {
+      if (MAGIC_LINK_EXPIRATION_PATTERNS.some((pattern) => pattern.test(lines[i]))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasMagicLinkNoExpiration(content: string): boolean {
+  if (!content) return false;
+  const hasMagicToken = MAGIC_LINK_TOKEN_PATTERNS.some((pattern) => pattern.test(content));
+  if (!hasMagicToken) return false;
+  const hasSessionSignal =
+    MAGIC_LINK_SESSION_PATTERNS.some((pattern) => pattern.test(content)) ||
+    MAGIC_LINK_COOKIE_SET_PATTERNS.some((pattern) => pattern.test(content));
+  if (!hasSessionSignal) return false;
+  return !hasMagicLinkExpirationCheck(content);
 }
 
 function isSensitiveAction(

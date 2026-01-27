@@ -547,7 +547,8 @@ function resolveFileContext(
     filterRequiredControls(
       fallbackAssignment?.requiredControls ?? [],
       fallbackScope?.scope,
-      fallbackScope?.evidence
+      fallbackScope?.evidence,
+      roles
     );
   const candidateFindings =
     fileInsight?.candidateFindings ??
@@ -844,7 +845,8 @@ function buildFileInsights(files: RepositoryFileSample[]): RepoInsights {
     const scopedControls = filterRequiredControls(
       requiredControls,
       scopeAssignment?.scope,
-      scopeAssignment?.evidence
+      scopeAssignment?.evidence,
+      roles
     );
     unionAssignments.push({ path, roles, requiredControls: scopedControls });
     fileInsights.set(path, {

@@ -31,11 +31,21 @@ export type AnchorLookup = {
   endLine?: number | null;
 };
 
+export type JellyAnchorNode = {
+  anchorId: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  startColumn: number;
+  endColumn: number;
+};
+
 export type AnchorIndex = {
   repoRoot: string;
   anchorCount: number;
   fileCount: number;
   getAnchorId: (lookup: AnchorLookup) => string | null;
+  getAnchorsForFile: (lookup: { filepath: string; repoPath?: string | null }) => JellyAnchorNode[];
   callGraph?: JellyCallGraphIndex | null;
 };
 
@@ -452,11 +462,30 @@ function createAnchorIndex(params: {
     return best?.id ?? null;
   };
 
+  const getAnchorsForFile = (lookup: { filepath: string; repoPath?: string | null }): JellyAnchorNode[] => {
+    if (!lookup.filepath) return [];
+    const normalized = normalizeFilepathForRepo(lookup.filepath, repoRoot);
+    if (!normalized) return [];
+    const repoPath = lookup.repoPath ?? "";
+    const canonicalPath = canonicalizeFilePath(repoPath, normalized);
+    const anchors = anchorsByFile.get(canonicalPath) ?? anchorsByFile.get(normalized);
+    if (!anchors || anchors.length === 0) return [];
+    return anchors.map((anchor) => ({
+      anchorId: anchor.id,
+      filePath: anchor.filePath,
+      startLine: anchor.startLine,
+      endLine: anchor.endLine,
+      startColumn: anchor.startColumn,
+      endColumn: anchor.endColumn
+    }));
+  };
+
   return {
     repoRoot,
     anchorCount,
     fileCount,
     getAnchorId,
+    getAnchorsForFile,
     callGraph: params.callGraph ?? null
   };
 }

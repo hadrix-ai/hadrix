@@ -308,9 +308,7 @@ export function buildFindingIdentityKey(
     normalizeKeyPart(location.fileKey),
     normalizeKeyPart(anchorKey),
     ...(entryPointToken ? [entryPointToken] : []),
-    ...(primarySymbolToken && primarySymbolToken !== entryPointToken
-      ? [`symbol:${primarySymbolToken}`]
-      : []),
+    ...(primarySymbolToken ? [`symbol:${primarySymbolToken}`] : []),
     normalizeKeyPart(typeKey),
     ...(rawTypeToken && rawTypeToken !== typeToken ? [`raw:${rawTypeToken}`] : [])
   ];

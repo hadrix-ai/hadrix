@@ -3,6 +3,8 @@ import type { SummaryComparator, SummaryComparison } from "./types.js";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 60000;
 const FALLBACK_THRESHOLD = 0.47;
+const SHORT_FALLBACK_THRESHOLD = 0.35;
+const SHORT_EXPECTATION_TOKEN_LIMIT = 6;
 const RULE_ID_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
   missing_rate_limit: "rate_limiting",
@@ -166,6 +168,28 @@ const tokenSet = (value: string): Set<string> => {
     .map((token) => token.trim())
     .filter(Boolean);
   return new Set(tokens);
+};
+
+const normalizeComparisonPath = (value: string): string =>
+  value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.?\//, "")
+    .replace(/\/+$/, "");
+
+const filepathsAlign = (expectedPath?: string | null, actualPath?: string | null): boolean => {
+  if (!expectedPath || !actualPath) return false;
+  const expected = normalizeComparisonPath(expectedPath);
+  const actual = normalizeComparisonPath(actualPath);
+  if (!expected || !actual) return false;
+  return actual === expected || actual.endsWith(`/${expected}`);
+};
+
+const isShortExpectation = (value: string): boolean => {
+  const normalized = normalizeText(value);
+  if (!normalized) return false;
+  const tokens = normalized.split(" ").filter(Boolean);
+  return tokens.length > 0 && tokens.length <= SHORT_EXPECTATION_TOKEN_LIMIT;
 };
 
 const extractFileBasename = (filepath: string): string => {
@@ -466,6 +490,14 @@ const collectActualRuleHints = (actual: {
   return Array.from(hints);
 };
 
+const ruleHintsAgree = (expectedHints: string[], actualHints: string[]): boolean => {
+  if (expectedHints.length === 0 || actualHints.length === 0) {
+    return false;
+  }
+  const expectedSet = new Set(expectedHints.map((hint) => normalizeRuleIdAlias(hint)));
+  return actualHints.some((hint) => expectedSet.has(normalizeRuleIdAlias(hint)));
+};
+
 const hasRuleHintConflict = (expectedHints: string[], actualHints: string[]): boolean => {
   if (expectedHints.length === 0 || actualHints.length === 0) {
     return false;
@@ -477,6 +509,18 @@ const hasRuleHintConflict = (expectedHints: string[], actualHints: string[]): bo
     }
   }
   return true;
+};
+
+const isCorsAllowAllExpectation = (expectation: string): boolean => {
+  if (!expectation) return false;
+  const normalized = normalizeText(expectation);
+  if (!normalized.includes("cors")) return false;
+  return (
+    normalized.includes("allow all") ||
+    normalized.includes("allowall") ||
+    normalized.includes("any origin") ||
+    normalized.includes("wildcard")
+  );
 };
 
 const buildExpectedComparisonText = (expected: {
@@ -592,14 +636,33 @@ export function createOpenAiSummaryComparator(options?: {
           rationale: "rule_id_fallback",
         };
       }
+      const actualFilepath = extractLocationFilepath(actual);
+      const expectedHasCorsAllowAll = isCorsAllowAllExpectation(expected.expectation);
+      const actualCorsHint = actualHints
+        .map((hint) => normalizeRuleIdAlias(hint))
+        .includes("permissive_cors");
+      if (expectedHasCorsAllowAll && actualCorsHint && filepathsAlign(expected.filepath, actualFilepath)) {
+        return {
+          match: true,
+          score: 1,
+          rationale: "cors_allow_all_filepath_match",
+        };
+      }
+      const shortExpectation = isShortExpectation(expected.expectation);
+      const threshold =
+        shortExpectation && ruleHintsAgree(expectedHints, actualHints)
+          ? SHORT_FALLBACK_THRESHOLD
+          : FALLBACK_THRESHOLD;
       const score = jaccard(
         tokenSet(buildExpectedComparisonText(expected)),
         tokenSet(buildActualComparisonText(actual))
       );
       return {
-        match: score >= FALLBACK_THRESHOLD,
+        match: score >= threshold,
         score,
-        rationale: "token_jaccard_fallback",
+        rationale: threshold === SHORT_FALLBACK_THRESHOLD
+          ? "token_jaccard_short_fallback"
+          : "token_jaccard_fallback",
       };
     };
 

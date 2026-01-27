@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 import type { HadrixConfig, Provider } from "../config/loadConfig.js";
 
 export type ChatRole = "system" | "user" | "assistant";
@@ -25,18 +27,54 @@ interface GeminiResponse {
   error?: { message?: string };
 }
 
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+const BASE_DELAY_MS = 500;
+const MAX_DELAY_MS = 5000;
+
+function parseRetryAfterMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return seconds * 1000;
+  const timestamp = Date.parse(value);
+  if (!Number.isNaN(timestamp)) return timestamp - Date.now();
+  return null;
+}
+
+function computeDelayMs(attempt: number, retryAfter: string | null): number {
+  const retryAfterMs = parseRetryAfterMs(retryAfter);
+  if (retryAfterMs !== null) {
+    return Math.min(MAX_DELAY_MS, Math.max(0, retryAfterMs));
+  }
+  const backoff = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** (attempt - 1));
+  const jitter = Math.floor(Math.random() * 100);
+  return backoff + jitter;
+}
+
 async function safeFetch(
   url: string,
   options: RequestInit,
   provider: Provider,
   label: string
 ): Promise<Response> {
-  try {
-    return await fetch(url, options);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`${label} request failed (${provider}) to ${url}: ${message}`);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) {
+        return response;
+      }
+      response.body?.cancel();
+      await delay(computeDelayMs(attempt, response.headers.get("retry-after")));
+    } catch (err) {
+      lastError = err;
+      if (attempt === MAX_ATTEMPTS) break;
+      await delay(computeDelayMs(attempt, null));
+    }
   }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${label} request failed (${provider}) to ${url}: ${message}`);
 }
 
 function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {

@@ -1206,13 +1206,29 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         });
   
         db.deleteChunksForFile(fileRow.id);
-  
+
+        const jellyAnchors = jellyIndex
+          ? jellyIndex.getAnchorsForFile({ filepath: relPath, repoPath })
+          : [];
+        const anchorNodes = jellyAnchors.length
+          ? jellyAnchors.map((anchor) => ({
+              filePath: normalizedRelPath,
+              startLine: anchor.startLine,
+              endLine: anchor.endLine,
+              startColumn: anchor.startColumn,
+              endColumn: anchor.endColumn,
+              anchorId: anchor.anchorId
+            }))
+          : undefined;
+
         const chunks = securityChunkFile({
           filePath: file,
           idPath: relPath,
           repoPath,
+          anchors: anchorNodes,
           sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null,
-          reachabilityIndex
+          reachabilityIndex,
+          callGraph: jellyIndex?.callGraph ?? null
         });
         if (chunks.length === 0) {
           log(`Security chunking produced no chunks for ${relPath}; skipping file.`);

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Chunk, SecurityHeader } from "../types.js";
 import type { ReachabilityIndex, ReachabilityInfo } from "../scan/jellyReachability.js";
+import type { JellyCallGraphIndex } from "../scan/jellyAnchors.js";
 import { renderSecurityHeader } from "../scan/securityHeader.js";
 
 type AnchorNode = {
@@ -10,6 +11,7 @@ type AnchorNode = {
   endLine: number;
   startColumn: number;
   endColumn: number;
+  anchorId?: string | null;
 };
 
 type LocalFile = {
@@ -68,6 +70,7 @@ export interface SecurityChunkFileOptions {
   anchors?: AnchorNode[];
   sastFindings?: SastFindingHint[] | null;
   reachabilityIndex?: ReachabilityIndex | null;
+  callGraph?: JellyCallGraphIndex | null;
 }
 
 const MAX_CHUNK_LINES = 160;
@@ -609,6 +612,62 @@ function collectCalleeAnchors(params: {
   return callees;
 }
 
+function collectCallGraphAnchors(params: {
+  file: LocalFile;
+  anchor: AnchorNode;
+  callGraph: JellyCallGraphIndex;
+  maxDepth?: number;
+  maxAnchors?: number;
+}): AnchorNode[] {
+  const anchorId = params.anchor.anchorId;
+  if (!anchorId) return [];
+  const rootFunctionId = params.callGraph.functionIdByAnchorId.get(anchorId);
+  if (!rootFunctionId) return [];
+
+  const maxDepth = params.maxDepth ?? MAX_CALLEE_DEPTH;
+  const maxAnchors = params.maxAnchors ?? MAX_CALLEE_ANCHORS;
+  const queue: Array<{ functionId: string; depth: number }> = [
+    { functionId: rootFunctionId, depth: 0 }
+  ];
+  const visitedFunctions = new Set<string>([rootFunctionId]);
+  const seenAnchors = new Set<string>([anchorId]);
+  const anchors: AnchorNode[] = [];
+
+  while (queue.length > 0 && anchors.length < maxAnchors) {
+    const current = queue.shift()!;
+    if (current.depth >= maxDepth) continue;
+
+    const neighbors = new Set<string>();
+    const callees = params.callGraph.edgesByCaller.get(current.functionId) ?? [];
+    const callers = params.callGraph.edgesByCallee.get(current.functionId) ?? [];
+    for (const callee of callees) neighbors.add(callee);
+    for (const caller of callers) neighbors.add(caller);
+
+    for (const neighbor of neighbors) {
+      if (visitedFunctions.has(neighbor)) continue;
+      visitedFunctions.add(neighbor);
+      queue.push({ functionId: neighbor, depth: current.depth + 1 });
+
+      const node = params.callGraph.functionById.get(neighbor);
+      if (!node) continue;
+      if (node.filePath !== params.file.filepath) continue;
+      if (seenAnchors.has(node.anchorId)) continue;
+      seenAnchors.add(node.anchorId);
+      anchors.push({
+        filePath: params.file.filepath,
+        startLine: node.startLine,
+        endLine: node.endLine,
+        startColumn: node.startColumn,
+        endColumn: node.endColumn,
+        anchorId: node.anchorId
+      });
+      if (anchors.length >= maxAnchors) break;
+    }
+  }
+
+  return anchors;
+}
+
 function extractPrimarySymbol(lines: string[], startLine: number): string {
   const idx = Math.max(0, startLine - 1);
   const snippet = lines.slice(idx, Math.min(lines.length, idx + 4)).join(" ");
@@ -1122,25 +1181,28 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
     const sastHintsForAnchor = selectSastHintsForAnchor(fileSastHints, startLine, endLine);
     const sastRanges = buildSastRanges(sastHintsForAnchor, startLine, endLine);
 
-    const calleeAnchors = collectCalleeAnchors({
-      file,
-      anchor,
-      anchorBySymbol,
-      symbolByAnchorKey
-    });
-    const calleeRanges: ChunkRange[] = [];
-    for (const callee of calleeAnchors) {
-      const calleeStart = Math.max(1, callee.startLine);
-      const calleeEnd = Math.min(file.lines.length, callee.endLine);
-      if (calleeEnd < calleeStart) continue;
-      const ranges = buildChunkRanges(calleeStart, calleeEnd);
+    const contextAnchors =
+      options.callGraph && anchor.anchorId
+        ? collectCallGraphAnchors({ file, anchor, callGraph: options.callGraph })
+        : collectCalleeAnchors({
+            file,
+            anchor,
+            anchorBySymbol,
+            symbolByAnchorKey
+          });
+    const contextRanges: ChunkRange[] = [];
+    for (const contextAnchor of contextAnchors) {
+      const contextStart = Math.max(1, contextAnchor.startLine);
+      const contextEnd = Math.min(file.lines.length, contextAnchor.endLine);
+      if (contextEnd < contextStart) continue;
+      const ranges = buildChunkRanges(contextStart, contextEnd);
       for (const range of ranges) {
-        calleeRanges.push(range);
-        if (calleeRanges.length >= MAX_CALLEE_RANGES_PER_ANCHOR) {
+        contextRanges.push(range);
+        if (contextRanges.length >= MAX_CALLEE_RANGES_PER_ANCHOR) {
           break;
         }
       }
-      if (calleeRanges.length >= MAX_CALLEE_RANGES_PER_ANCHOR) {
+      if (contextRanges.length >= MAX_CALLEE_RANGES_PER_ANCHOR) {
         break;
       }
     }
@@ -1159,7 +1221,7 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
     for (const range of sinkRanges) {
       addRange(range, 1);
     }
-    for (const range of calleeRanges) {
+    for (const range of contextRanges) {
       addRange(range, 1);
     }
     for (const range of sastRanges) {

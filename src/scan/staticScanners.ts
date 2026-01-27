@@ -497,60 +497,48 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
           ? vuln.aliases.filter((alias: unknown) => typeof alias === "string")
           : [];
         const advisoryId = typeof vuln.id === "string" ? vuln.id.trim() : "";
-        const primaryId = pickPrimaryAdvisoryId(advisoryId || undefined, aliases);
-        const advisoryIds = uniqueStrings([primaryId, advisoryId, ...aliases]);
-        const ghsaAliases = uniqueStrings(
-          advisoryIds.filter((alias) => /^GHSA-/i.test(alias))
-        );
-        const cveAliases = uniqueStrings(
-          advisoryIds.filter((alias) => /^CVE-/i.test(alias))
-        );
-        const aliasIds = uniqueStrings([...ghsaAliases, ...cveAliases]);
+        const aliasIds = uniqueStrings([advisoryId, ...aliases].filter(Boolean));
+        const primaryId = pickPrimaryAdvisoryId(advisoryId || undefined, aliasIds);
         const packageRuleId = `osv:${packageName}@${packageVersion}`;
         const ecosystemRuleId = `osv:${ecosystem}:${packageName}@${packageVersion}`;
         const severity = mapSeverity("osv-scanner", extractCvssSeverity(vuln));
+        const canonicalId = primaryId || advisoryId || aliasIds[0] || "";
+        const ruleId = canonicalId || ecosystemRuleId;
         const mergedRuleIds = uniqueStrings([
-          ...ghsaAliases,
-          ...cveAliases,
+          ruleId,
+          ...aliasIds,
           packageRuleId,
           ecosystemRuleId
         ]);
         const snippet = `Vulnerable package: ${packageName}@${packageVersion} (${ecosystem})`;
-        const fallbackAlias = primaryId || advisoryId;
-        const targetAliases = aliasIds.length > 0
-          ? aliasIds
-          : (fallbackAlias ? [fallbackAlias] : [ecosystemRuleId]);
-
-        for (const alias of targetAliases) {
-          const dedupeKey = `osv|${packageName}@${packageVersion}|${alias}|${filepath}`;
-          if (seen.has(dedupeKey)) {
-            continue;
-          }
-          seen.add(dedupeKey);
-          const message = `${alias}: ${summary} in ${packageName}@${packageVersion}`;
-
-          findings.push({
-            tool: "osv-scanner",
-            ruleId: alias,
-            message,
-            severity,
-            filepath,
-            startLine: 0,
-            endLine: 0,
-            snippet,
-            details: {
-              packageName,
-              packageVersion,
-              ecosystem,
-              advisoryId: alias || null,
-              summary,
-              aliases: aliases.length ? aliases : undefined,
-              mergedRuleIds,
-              dedupeKey,
-              identityKey: dedupeKey
-            }
-          });
+        const dedupeKey = `osv|${packageName}@${packageVersion}|${ruleId}|${filepath}`;
+        if (seen.has(dedupeKey)) {
+          continue;
         }
+        seen.add(dedupeKey);
+        const message = `${ruleId}: ${summary} in ${packageName}@${packageVersion}`;
+
+        findings.push({
+          tool: "osv-scanner",
+          ruleId,
+          message,
+          severity,
+          filepath,
+          startLine: 0,
+          endLine: 0,
+          snippet,
+          details: {
+            packageName,
+            packageVersion,
+            ecosystem,
+            advisoryId: ruleId || null,
+            summary,
+            aliases: aliasIds.length ? aliasIds : undefined,
+            mergedRuleIds,
+            dedupeKey,
+            identityKey: dedupeKey
+          }
+        });
       }
     }
   }
