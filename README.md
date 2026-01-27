@@ -3,6 +3,12 @@
 Hadrix performs a local, read-only security scan and writes results to the terminal or JSON.
 Default scans target common source files plus schema files (including `.sql`).
 
+## Requirements
+
+- Node.js >= 18
+- Python 3 (needed to install semgrep via `hadrix setup`)
+- Optional: native vectorlite extension for faster vector search (auto-detected)
+
 ## Quick start
 
 ```bash
@@ -45,6 +51,52 @@ hadrix setup
 HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix scan /path/to/repo
 ```
 
+## Supabase database scan (optional)
+
+Hadrix can connect to Supabase to check RLS, privileges, functions, and storage buckets.
+
+Interactive (TTY):
+
+```bash
+hadrix scan /path/to/repo --supabase
+```
+
+Non-interactive:
+
+```bash
+hadrix scan /path/to/repo \
+  --supabase-url https://<project-ref>.supabase.co \
+  --supabase-password <db-password>
+```
+
+Offline (use a schema snapshot JSON):
+
+```bash
+hadrix scan /path/to/repo --supabase-schema ./schema.json
+```
+
+Environment equivalents:
+- `HADRIX_SUPABASE_URL`
+- `HADRIX_SUPABASE_PASSWORD`
+- `HADRIX_SUPABASE_SCHEMA_PATH`
+
+## Configuration
+
+Hadrix loads `hadrix.config.json` or `.hadrixrc.json` from the scan root (or `--config <path>`).
+CLI flags and environment variables override config file values.
+
+Common environment variables:
+
+- `HADRIX_PROVIDER`, `HADRIX_API_KEY`
+- `HADRIX_LLM_PROVIDER`, `HADRIX_LLM_API_KEY`, `HADRIX_LLM_MODEL`
+- `HADRIX_EMBEDDINGS_PROVIDER`, `HADRIX_EMBEDDINGS_API_KEY`, `HADRIX_EMBEDDINGS_MODEL`
+- `HADRIX_API_BASE`, `HADRIX_LLM_BASE`, `HADRIX_EMBEDDINGS_BASE`
+- `HADRIX_LLM_ENDPOINT`, `HADRIX_EMBEDDINGS_ENDPOINT`
+- `HADRIX_API_HEADERS` (JSON string)
+- `HADRIX_REPO_PATH`
+- `HADRIX_VECTOR_EXTENSION_PATH`
+- `HADRIX_SEMGREP_PATH`, `HADRIX_GITLEAKS_PATH`, `HADRIX_OSV_SCANNER_PATH`, `HADRIX_SEMGREP_CONFIG`
+
 ## Monorepo support
 
 When scanning a monorepo root, Hadrix will try to infer an app root and scope the scan to that subdirectory.
@@ -79,7 +131,12 @@ Optional flags:
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
 - `HADRIX_EVALS_DIR=<dir>` to override the default fixtures directory.
 - `--repo <path>` to run a single spec against a specific repo path (requires `--spec`).
+- `--config <path>` to point at a per-repo config file for the eval scan.
+- `--repo-path <path>` and `--no-repo-path-inference` to control monorepo scoping.
+- `--threshold <num>`, `--short-circuit <num>`, `--concurrency <num>` to tune comparator behavior.
+- `--out-dir <path>` for eval artifacts (defaults to `./.hadrix-evals`).
 - `--json` for machine-readable output.
+- `--skip-static` to skip static scanners.
 - `--debug` to enable debug logs (written under `--out-dir/logs` by default).
 - `--debug-log <path>` to control debug log output. For multiple specs, the spec id is added to the filename.
 
@@ -98,7 +155,7 @@ Hadrix runs ESLint security rules for JS/TS and uses these scanners:
 - gitleaks
 - osv-scanner
 
-ESLint security rules are bundled with the CLI; no extra setup required. Run `hadrix setup` to install the external scanners (semgrep, gitleaks, osv-scanner) and the required Jelly call graph analyzer. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`.
+ESLint security rules are bundled with the CLI; no extra setup required. Run `hadrix setup` (or `hadrix setup -y`) to install the external scanners (semgrep, gitleaks, osv-scanner) and the required Jelly call graph analyzer. Hadrix will also look for tools in `~/.hadrix/tools` and on your `PATH`. Use `--skip-static` to skip static scanners.
 
 ## Vector search modes
 
@@ -114,7 +171,7 @@ Fast vector search unavailable; using portable mode.
 
 - Fast mode uses `vectorlite` for in-database vector search (native extension).
 - Portable mode stores embeddings in SQLite and runs cosine similarity in pure JavaScript.
-- Portable mode is correct but slower, especially on larger repos. Fast mode is significantly faster for top‑k similarity search.
+- Portable mode is correct but slower, especially on larger repos. Fast mode is significantly faster for top-k similarity search.
 
 ## Advanced override
 
@@ -150,15 +207,35 @@ Scan reports are written under `<scan-target>/.hadrix/reports`, including:
 
 ## CLI options
 
-- `--format json` (or `--json`) outputs machine-readable JSON and disables the spinner.
+### scan
+
+- `--format <text|json|core-json>` (or `--json`) outputs machine-readable JSON and disables the spinner.
+- `--config <path>` path to `hadrix.config.json`.
 - `--repo-path <path>` scopes a monorepo scan to a subdirectory.
 - `--no-repo-path-inference` disables monorepo repoPath inference.
+- `--skip-static` skips static scanners.
+- `--supabase` / `--supabase-url <url>` / `--supabase-password <password>` / `--supabase-schema <path>`
+- `--existing-findings <path>` JSON array or file path for prior findings.
+- `--repo-full-name <name>` / `--repo-id <id>` / `--commit-sha <sha>` metadata overrides.
 - `--debug` enables debug logging to a file.
 - `--debug-log <path>` sets the debug log file path (implies `--debug`).
 
+### evals
+
+- `--fixtures <path>` / positional `hadrix evals <dir>`
+- `--spec <id>` / `--group <id>`
+- `--repo <path>` (requires `--spec`)
+- `--config <path>`
+- `--repo-path <path>` / `--no-repo-path-inference`
+- `--threshold <num>` / `--short-circuit <num>` / `--concurrency <num>`
+- `--out-dir <path>`
+- `--json`
+- `--skip-static`
+- `--debug` / `--debug-log <path>`
+
 ## Chunking and anchors
 
-Security chunking is always used for scans. Jelly anchors are required; scans fail if Jelly is unavailable (non-JS/TS repos will skip Jelly and note the reason in the jelly anchors report).
+Security chunking is always used for scans. The Jelly call graph analyzer must be installed (use `hadrix setup`). For non-JS/TS repos, Jelly returns `repo_not_js_ts` and the scan continues without anchors; other Jelly failures stop the scan.
 
 ## Architecture
 
