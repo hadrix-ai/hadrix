@@ -17,6 +17,44 @@ function severityLabel(severity: Finding["severity"]): string {
   }
 }
 
+function severityEmoji(severity: Finding["severity"]): string {
+  switch (severity) {
+    case "critical":
+      return "🔥";
+    case "high":
+      return "🚨";
+    case "medium":
+      return "⚠️";
+    case "low":
+      return "🟢";
+    case "info":
+    default:
+      return "ℹ️";
+  }
+}
+
+const THEME_EMOJI: Record<string, string> = {
+  "Auth/AuthZ gaps": "🔐",
+  "Command execution surface": "🧨",
+  "Webhook trust issues": "🔗",
+  "Token/session weaknesses": "🗝️",
+  "Verbose errors / debug exposure": "🐞",
+  "Missing security headers": "🛡️",
+  "Excessive data exposure": "📤",
+  "Missing rate limiting / lockout": "⏱️",
+  "Mass assignment": "🧾"
+};
+
+function themeEmoji(theme: string): string {
+  return THEME_EMOJI[theme] ?? "🔎";
+}
+
+function findingEmoji(finding: Finding): string {
+  const canonical = canonicalizeLlmTitle(finding.title);
+  const theme = themeFromCanonicalKey(canonical);
+  return THEME_EMOJI[theme] ?? severityEmoji(finding.severity);
+}
+
 function resolveFindingFilepath(finding: Finding): string {
   const repoPath = finding.location.repoPath;
   const filepath =
@@ -29,13 +67,16 @@ function resolveFindingFilepath(finding: Finding): string {
   return filepath;
 }
 
-function formatFinding(finding: Finding): string {
+function formatFinding(finding: Finding, index?: number): string {
   const filepath = resolveFindingFilepath(finding);
   const location = `${filepath}:${finding.location.startLine}`;
   const lines: string[] = [];
   const sourceLabel = finding.source === "static" ? pc.cyan("STATIC") : pc.magenta("LLM");
-  lines.push(`${severityLabel(finding.severity)} ${sourceLabel} ${finding.title}`);
-  lines.push(`  at ${location}`);
+  const indexLabel = index ? `#${index}` : "";
+  lines.push(
+    `${severityLabel(finding.severity)} ${findingEmoji(finding)} ${sourceLabel} ${indexLabel ? `${indexLabel} ` : ""}${finding.title}`
+  );
+  lines.push(`  location: ${location}`);
   if (finding.description) lines.push(`  ${finding.description}`);
   if (finding.evidence) lines.push(`  evidence: ${finding.evidence}`);
   if (finding.remediation) lines.push(`  remediation: ${finding.remediation}`);
@@ -216,12 +257,15 @@ function sourceRank(source: Finding["source"]): number {
   return source === "static" ? 0 : 1;
 }
 
-function formatGroupedFinding(group: GroupedFinding): string {
+function formatGroupedFinding(group: GroupedFinding, index?: number): string {
   const finding = group.representative;
   const lines: string[] = [];
   const sourceLabel = finding.source === "static" ? pc.cyan("STATIC") : pc.magenta("LLM");
 
-  lines.push(`${severityLabel(finding.severity)} ${sourceLabel} ${finding.title}`);
+  const indexLabel = index ? `#${index}` : "";
+  lines.push(
+    `${severityLabel(finding.severity)} ${findingEmoji(finding)} ${sourceLabel} ${indexLabel ? `${indexLabel} ` : ""}${finding.title}`
+  );
 
   const variants = Array.from(group.titleVariants)
     .map((t) => t.trim())
@@ -396,12 +440,14 @@ function buildSummary(groups: GroupedFinding[]): string {
     LOW: 0,
     INFO: 0
   };
+  const bySource: Record<Finding["source"], number> = { static: 0, llm: 0 };
 
   const themeCounts = new Map<string, { count: number; worst: Finding["severity"] }>();
 
   for (const group of groups) {
     const sevLabel = severityHeaderLabel(group.representative.severity);
     bySeverity[sevLabel] = (bySeverity[sevLabel] ?? 0) + 1;
+    bySource[group.representative.source] += 1;
 
     if (group.representative.source !== "static") {
       const canonical = canonicalizeLlmTitle(group.representative.title);
@@ -428,12 +474,19 @@ function buildSummary(groups: GroupedFinding[]): string {
     .slice(0, 5);
 
   const themeLines = orderedThemes.length
-    ? orderedThemes.map(([theme, meta], i) => `  ${i + 1}) ${theme} (${severityHeaderLabel(meta.worst)}, ${meta.count})`).join("\n")
+    ? orderedThemes
+        .map(
+          ([theme, meta], i) =>
+            `  ${i + 1}) ${themeEmoji(theme)} ${theme} (${severityHeaderLabel(meta.worst)}, ${meta.count})`
+        )
+        .join("\n")
     : "  (none)";
 
   const summaryLines = [
     "HADRIX SUMMARY",
-    `- Findings: ${total} total (CRITICAL ${bySeverity.CRITICAL}, HIGH ${bySeverity.HIGH}, MEDIUM ${bySeverity.MEDIUM}, LOW ${bySeverity.LOW}, INFO ${bySeverity.INFO})`,
+    "----------------",
+    `- Findings: ${total} total (🔥 CRITICAL ${bySeverity.CRITICAL}, 🚨 HIGH ${bySeverity.HIGH}, ⚠️ MEDIUM ${bySeverity.MEDIUM}, 🟢 LOW ${bySeverity.LOW}, ℹ️ INFO ${bySeverity.INFO})`,
+    `- Sources: ${bySource.static} static, ${bySource.llm} llm`,
     "- Highest-risk themes:",
     themeLines,
     "- PRIORITY FIX ORDER (fastest risk reduction):",
@@ -445,7 +498,9 @@ function buildSummary(groups: GroupedFinding[]): string {
     "  P3: Add rate limiting/lockout and sane pagination for bulk endpoints",
     "  P3: Add security headers + tighten CORS",
     "",
-    "--- BEGIN FULL FINDINGS (paste into LLM) ---"
+    "ALL FINDINGS",
+    `The following is a description of all ${total} findings. Paste into LLM to begin fixing security issues.`,
+    "Note: Some issues may not be fixable by your agent alone (for example, adding new RLS policies to Supabase tables)."
   ];
 
   return summaryLines.join("\n");
@@ -475,8 +530,10 @@ export function formatFindingsText(findings: Finding[]): string {
   });
 
   const body = orderedGroups
-    .map((group) =>
-      group.locations.length > 1 ? formatGroupedFinding(group) : formatFinding(group.representative)
+    .map((group, index) =>
+      group.locations.length > 1
+        ? formatGroupedFinding(group, index + 1)
+        : formatFinding(group.representative, index + 1)
     )
     .join("\n\n");
 
