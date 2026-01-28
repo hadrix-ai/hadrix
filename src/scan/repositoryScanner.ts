@@ -226,7 +226,12 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   }
 
   const outputSchema = buildRepositoryScanOutputSchema();
-  const systemContext = buildRepositoryContextPrompt([input.repository]);
+  const { buildKnowledgeContext } = await import("./knowledgeContext.js");
+  const systemContext = buildRepositoryContextPrompt(
+    [input.repository],
+    undefined,
+    buildKnowledgeContext() || undefined
+  );
   const insights = buildFileInsights(input.files);
   const existingFindings = pickExistingFindings(
     input.existingFindings,
@@ -444,7 +449,12 @@ export async function scanRepositoryComposites(
 
   const outputSchema = buildRepositoryScanOutputSchema();
   const systemPrompt = buildRepositoryCompositeSystemPrompt();
-  const systemContext = buildRepositoryContextPrompt([input.repository]);
+  const { buildKnowledgeContext } = await import("./knowledgeContext.js");
+  const systemContext = buildRepositoryContextPrompt(
+    [input.repository],
+    undefined,
+    buildKnowledgeContext() || undefined
+  );
   const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
 
   const existingFindings = pickExistingFindings(
