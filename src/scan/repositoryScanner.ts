@@ -1369,6 +1369,11 @@ function parseFindings(
       normalizeEvidence(item?.evidence)
     );
 
+    // Ensure confidence is always present for LLM findings (used for UI/triage).
+    if (typeof details.confidence !== "string" || !details.confidence.trim()) {
+      details.confidence = evidence.length > 0 ? "medium" : "low";
+    }
+
     if (repository.fullName && !details.repositoryFullName) {
       details.repositoryFullName = repository.fullName;
     }
