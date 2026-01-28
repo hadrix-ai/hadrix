@@ -1,5 +1,5 @@
 import type { EvalGroupSpec } from "../../../types.js";
-import { DATASTORE_RLS_EVAL_GROUP } from "../hadrix-react-supabase-app/rls.js";
+
 export const ORBIT_NEXT_GROUPS: EvalGroupSpec[] = [
   {
     id: "Orbit-Next-A01",
@@ -337,5 +337,7 @@ export const ORBIT_NEXT_GROUPS: EvalGroupSpec[] = [
       },
     ],
   },
-  DATASTORE_RLS_EVAL_GROUP,
+  // Note: Supabase/RLS datastore evals are covered by the react-supabase suite.
+  // Keeping them out of the Next.js suite avoids redundant failures when the CLI
+  // intentionally skips datastore/RLS groups.
 ];
