@@ -2,6 +2,7 @@ import path from "node:path";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
+import { readEnv } from "../config/env.js";
 import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
 import type { CoreFinding, ScanResult } from "../types.js";
@@ -92,8 +93,8 @@ const hash32 = (value: string): string => {
 };
 
 const resolveFixturesDir = (options: RunEvalsOptions): string => {
-  const fromEnv = process.env.HADRIX_EVALS_DIR;
-  const raw = options.fixturesDir ?? (fromEnv && fromEnv.trim()) ?? DEFAULT_EVAL_DIR;
+  const fromEnv = readEnv("HADRIX_EVALS_DIR");
+  const raw = options.fixturesDir ?? fromEnv ?? DEFAULT_EVAL_DIR;
   return path.resolve(process.cwd(), raw);
 };
 

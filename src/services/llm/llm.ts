@@ -1,6 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { HadrixConfig, Provider } from "../config/loadConfig.js";
+import { LLMProviderId } from "../../config/loadConfig.js";
+import type { HadrixConfig, LLMProvider } from "../../config/loadConfig.js";
+import {
+  LlmMissingApiKeyError,
+  LlmResponseMissingContentError,
+  ProviderApiResponseError,
+  ProviderRequestFailedError
+} from "../../errors/provider.errors.js";
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -65,7 +72,7 @@ function computeDelayMs(attempt: number, retryAfter: string | null): number {
 async function safeFetch(
   url: string,
   options: RequestInit,
-  provider: Provider,
+  provider: LLMProvider,
   label: string
 ): Promise<Response> {
   let lastError: unknown;
@@ -85,18 +92,18 @@ async function safeFetch(
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${label} request failed (${provider}) to ${url}: ${message}`);
+  throw new ProviderRequestFailedError(label, provider, url, message);
 }
 
-function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {
+function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...config.api.headers
   };
 
-  if (provider === "openai") {
+  if (provider === LLMProviderId.OpenAI) {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (provider === "gemini") {
+  } else if (provider === LLMProviderId.Gemini) {
     headers["x-goog-api-key"] = apiKey;
   }
 
@@ -121,10 +128,10 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   const apiKey = config.llm.apiKey || config.api.apiKey;
 
   if (!apiKey) {
-    throw new Error("Missing LLM API key.");
+    throw new LlmMissingApiKeyError();
   }
 
-  if (provider === "gemini") {
+  if (provider === LLMProviderId.Gemini) {
     const { system, rest } = splitSystemMessages(messages);
     const response = await safeFetch(
       config.llm.endpoint,
@@ -151,7 +158,7 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
 
     if (!response.ok) {
       const message = payload.error?.message || `LLM request failed with status ${response.status}`;
-      throw new Error(message);
+      throw new ProviderApiResponseError(message);
     }
 
     const text = payload.candidates?.[0]?.content?.parts
@@ -160,7 +167,7 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
       .join("");
 
     if (!text) {
-      throw new Error("LLM response missing message content.");
+      throw new LlmResponseMissingContentError();
     }
 
     return text;
@@ -206,7 +213,7 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
 
   if (!response.ok) {
     const message = payload.error?.message || `LLM request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new ProviderApiResponseError(message);
   }
 
   const content = payload.choices?.[0]?.message?.content;

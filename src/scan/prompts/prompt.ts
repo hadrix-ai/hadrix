@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import type { Finding, Severity } from "../types.js";
-import type { ChatMessage } from "../providers/llm.js";
+import type { Finding, Severity } from "../../types.js";
+import type { ChatMessage } from "../../services/llm/index.js";
 
 export interface PromptChunk {
   id: string;

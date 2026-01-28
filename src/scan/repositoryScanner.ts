@@ -7,14 +7,14 @@ import type {
   RepositoryScanFinding,
   Severity
 } from "../types.js";
-import { runChatCompletion } from "../providers/llm.js";
+import { runChatCompletion } from "../services/llm/index.js";
 import {
   buildRepositoryCompositeSystemPrompt,
   buildRepositoryContextPrompt,
   buildRepositoryScanOutputSchema,
   buildRepositoryRuleSystemPrompt
-} from "./repositoryPrompts.js";
-import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./repositoryRuleCatalog.js";
+} from "./prompts/repositoryPrompts.js";
+import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./catalog/repositoryRuleCatalog.js";
 import {
   buildCandidateFindings,
   deriveFileRoleAssignments,
@@ -31,7 +31,7 @@ import {
   type RuleGateCheck,
   type RuleGateMismatch,
   REQUIRED_CONTROLS
-} from "./repositoryHeuristics.js";
+} from "./heuristics/repositoryHeuristics.js";
 import {
   buildFindingIdentityKey,
   extractFindingIdentityType

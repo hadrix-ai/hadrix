@@ -1,4 +1,4 @@
-import type { RuleScanDefinition } from "./repositoryRuleCatalog.js";
+import type { RuleScanDefinition } from "../catalog/repositoryRuleCatalog.js";
 
 type RepositoryForScan = {
   fullName: string;

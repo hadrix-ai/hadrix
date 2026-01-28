@@ -1,21 +1,43 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { parseJsonEnv, readEnv, readFirstEnv } from "./env.js";
+import {
+  DEFAULT_ESLINT_EXTENSIONS,
+  DEFAULT_EXCLUDES,
+  DEFAULT_INCLUDE_EXTENSIONS,
+  DEFAULT_QUERIES,
+  defaultBaseUrl,
+  defaultEmbeddingModel,
+  defaultLlmModel
+} from "./defaults.js";
+import {
+  ConfigMissingApiBaseUrlError,
+  ConfigMissingApiKeyError,
+  ConfigUnsupportedProviderError
+} from "../errors/config.errors.js";
 
-export type Provider = "openai" | "gemini";
+export const LLMProviderId = {
+  OpenAI: "openai",
+  Gemini: "gemini",
+  Anthropic: "anthropic",
+  Claude: "claude"
+} as const;
+
+export type LLMProvider = typeof LLMProviderId.OpenAI | typeof LLMProviderId.Gemini;
 
 export interface HadrixConfig {
   projectRoot: string;
   repoPath?: string | null;
   stateDir: string;
   api: {
-    provider: Provider;
+    provider: LLMProvider;
     baseUrl: string;
     apiKey: string;
     headers: Record<string, string>;
   };
   embeddings: {
-    provider: Provider;
+    provider: LLMProvider;
     apiKey?: string;
     model: string;
     endpoint: string;
@@ -24,7 +46,7 @@ export interface HadrixConfig {
     baseUrl?: string;
   };
   llm: {
-    provider: Provider;
+    provider: LLMProvider;
     apiKey?: string;
     model: string;
     endpoint: string;
@@ -78,109 +100,19 @@ export interface LoadConfigParams {
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
 }
-
-const DEFAULT_INCLUDE_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-  ".json",
-  ".py",
-  ".go",
-  ".rb",
-  ".java",
-  ".cs",
-  ".php",
-  ".rs",
-  ".kt",
-  ".swift",
-  ".sql"
-];
-
-const DEFAULT_EXCLUDES = [
-  "**/node_modules/**",
-  "**/.git/**",
-  "**/.hadrix/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/.next/**",
-  "**/coverage/**",
-  "**/out/**"
-];
-
-const DEFAULT_ESLINT_EXTENSIONS = [
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".mjs",
-  ".cjs"
-];
-
-const DEFAULT_QUERIES = [
-  "authentication session token jwt api key",
-  "sql query database orm raw query",
-  "command execution shell exec spawn eval",
-  "http handler request validation",
-  "file upload path traversal",
-  "crypto secret key encryption"
-];
-
-function readEnv(name: string): string | null {
-  const value = process.env[name];
-  if (!value) return null;
-  return value.trim();
-}
-
-function readFirstEnv(names: string[]): string | null {
-  for (const name of names) {
-    const value = readEnv(name);
-    if (value) return value;
-  }
-  return null;
-}
-
-function parseJsonEnv(name: string): Record<string, string> {
-  const raw = readEnv(name);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<string, string>;
-    return parsed ?? {};
-  } catch {
-    return {};
-  }
-}
-
-function defaultBaseUrl(provider: Provider): string {
-  if (provider === "openai") return "https://api.openai.com";
-  return "https://generativelanguage.googleapis.com";
-}
-
-function defaultEmbeddingModel(provider: Provider): string {
-  if (provider === "gemini") return "gemini-embedding-001";
-  return "text-embedding-3-small";
-}
-
-function defaultLlmModel(provider: Provider): string {
-  if (provider === "gemini") return "gemini-2.5-flash";
-  return "gpt-5-nano";
-}
-
 function normalizeGeminiModel(model: string): string {
   return model.replace(/^models\//, "");
 }
 
-function normalizeProvider(raw: string | undefined | null): Provider {
+function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const value = (raw || "").toLowerCase();
-  if (value === "openai" || value === "gemini") {
-    return value as Provider;
+  if (value === LLMProviderId.OpenAI || value === LLMProviderId.Gemini) {
+    return value as LLMProvider;
   }
-  if (value === "anthropic" || value === "claude") {
-    throw new Error("Claude/Anthropic is not supported. Use openai or gemini.");
+  if (value === LLMProviderId.Anthropic || value === LLMProviderId.Claude) {
+    throw new ConfigUnsupportedProviderError();
   }
-  return "openai";
+  return LLMProviderId.OpenAI;
 }
 
 async function loadConfigFile(projectRoot: string, configPath?: string | null): Promise<Partial<HadrixConfig>> {
@@ -221,12 +153,12 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   const embeddingsBaseUrl =
     readEnv("HADRIX_EMBEDDINGS_BASE") ||
     configFile.embeddings?.baseUrl ||
-    (embeddingsProvider === "openai" ? baseUrl : defaultBaseUrl(embeddingsProvider));
+    (embeddingsProvider === LLMProviderId.OpenAI ? baseUrl : defaultBaseUrl(embeddingsProvider));
 
   const llmBaseUrl =
     readEnv("HADRIX_LLM_BASE") ||
     configFile.llm?.baseUrl ||
-    (llmProvider === "openai" ? baseUrl : defaultBaseUrl(llmProvider));
+    (llmProvider === LLMProviderId.OpenAI ? baseUrl : defaultBaseUrl(llmProvider));
 
   const apiKey =
     readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
@@ -254,24 +186,27 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
 
   const embeddingsModel =
-    embeddingsProvider === "gemini" ? normalizeGeminiModel(embeddingsModelRaw) : embeddingsModelRaw;
-  const llmModel = llmProvider === "gemini" ? normalizeGeminiModel(llmModelRaw) : llmModelRaw;
+    embeddingsProvider === LLMProviderId.Gemini
+      ? normalizeGeminiModel(embeddingsModelRaw)
+      : embeddingsModelRaw;
+  const llmModel =
+    llmProvider === LLMProviderId.Gemini ? normalizeGeminiModel(llmModelRaw) : llmModelRaw;
 
   const embeddingsEndpoint =
     readEnv("HADRIX_EMBEDDINGS_ENDPOINT") ||
     configFile.embeddings?.endpoint ||
-    (embeddingsProvider === "openai"
+    (embeddingsProvider === LLMProviderId.OpenAI
       ? `${embeddingsBaseUrl.replace(/\/$/, "")}/v1/embeddings`
-      : embeddingsProvider === "gemini"
+      : embeddingsProvider === LLMProviderId.Gemini
         ? `${embeddingsBaseUrl.replace(/\/$/, "")}/v1beta/models/${embeddingsModel}:batchEmbedContents`
         : "");
 
   const llmEndpoint =
     readEnv("HADRIX_LLM_ENDPOINT") ||
     configFile.llm?.endpoint ||
-    (llmProvider === "openai"
+    (llmProvider === LLMProviderId.OpenAI
       ? `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`
-      : llmProvider === "gemini"
+      : llmProvider === LLMProviderId.Gemini
         ? `${llmBaseUrl.replace(/\/$/, "")}/v1beta/models/${llmModel}:generateContent`
         : "");
 
@@ -352,13 +287,11 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   };
 
   if (!cfg.api.apiKey) {
-    throw new Error(
-      "Missing API key. Set HADRIX_API_KEY (or provider-specific key like OPENAI_API_KEY/GEMINI_API_KEY) or api.apiKey in hadrix.config.json."
-    );
+    throw new ConfigMissingApiKeyError();
   }
 
   if (!cfg.api.baseUrl) {
-    throw new Error("Missing API base URL. Set HADRIX_API_BASE or api.baseUrl in hadrix.config.json.");
+    throw new ConfigMissingApiBaseUrlError();
   }
 
   return {

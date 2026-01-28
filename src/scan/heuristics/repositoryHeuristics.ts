@@ -1,5 +1,5 @@
-import type { RepositoryFileSample } from "../types.js";
-import { splitSecurityHeader } from "./securityHeader.js";
+import type { RepositoryFileSample } from "../../types.js";
+import { splitSecurityHeader } from "../securityHeader.js";
 
 export type FileRole =
   | "ADMIN_ENDPOINT"

@@ -1,3 +1,4 @@
+import { readEnv as readConfigEnv } from "../config/env.js";
 import type { SummaryComparator, SummaryComparison } from "./types.js";
 
 const DEFAULT_MODEL = "gpt-5-nano";
@@ -80,10 +81,7 @@ const RULE_HINT_PATTERNS: Array<{ hint: string; patterns: RegExp[] }> = [
   }
 ];
 
-const readEnv = (name: string): string => {
-  const value = process.env[name];
-  return value ? value.trim() : "";
-};
+const readEnv = (name: string): string => readConfigEnv(name) ?? "";
 
 const resolveOpenAiApiKey = (override?: string): string => {
   if (override && override.trim()) return override.trim();

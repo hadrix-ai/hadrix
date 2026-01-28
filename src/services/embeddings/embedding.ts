@@ -1,6 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { HadrixConfig, Provider } from "../config/loadConfig.js";
+import { LLMProviderId } from "../../config/loadConfig.js";
+import type { HadrixConfig, LLMProvider } from "../../config/loadConfig.js";
+import {
+  EmbeddingMissingApiKeyError,
+  EmbeddingResponseLengthMismatchError,
+  ProviderApiResponseError,
+  ProviderRequestFailedError
+} from "../../errors/provider.errors.js";
 
 interface EmbeddingResponseItem {
   embedding: number[];
@@ -44,7 +51,7 @@ function computeDelayMs(attempt: number, retryAfter: string | null): number {
 async function safeFetch(
   url: string,
   options: RequestInit,
-  provider: Provider,
+  provider: LLMProvider,
   label: string
 ): Promise<Response> {
   let lastError: unknown;
@@ -64,18 +71,18 @@ async function safeFetch(
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${label} request failed (${provider}) to ${url}: ${message}`);
+  throw new ProviderRequestFailedError(label, provider, url, message);
 }
 
-function buildHeaders(config: HadrixConfig, provider: Provider, apiKey: string): Record<string, string> {
+function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...config.api.headers
   };
 
-  if (provider === "openai") {
+  if (provider === LLMProviderId.OpenAI) {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (provider === "gemini") {
+  } else if (provider === LLMProviderId.Gemini) {
     headers["x-goog-api-key"] = apiKey;
   }
 
@@ -89,7 +96,7 @@ function normalizeGeminiEmbeddings(payload: GeminiEmbeddingResponse, expected: n
     .filter((values): values is number[] => Array.isArray(values));
 
   if (vectors.length !== expected) {
-    throw new Error(`Embedding response length mismatch: expected ${expected}, got ${vectors.length}.`);
+    throw new EmbeddingResponseLengthMismatchError(expected, vectors.length);
   }
 
   return vectors;
@@ -102,10 +109,10 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
   const apiKey = config.embeddings.apiKey || config.api.apiKey;
 
   if (!apiKey) {
-    throw new Error("Missing embeddings API key.");
+    throw new EmbeddingMissingApiKeyError();
   }
 
-  if (provider === "gemini") {
+  if (provider === LLMProviderId.Gemini) {
     const modelName = config.embeddings.model.startsWith("models/")
       ? config.embeddings.model
       : `models/${config.embeddings.model}`;
@@ -130,14 +137,14 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
 
     if (!response.ok) {
       const message = payload.error?.message || `Embedding request failed with status ${response.status}`;
-      throw new Error(message);
+      throw new ProviderApiResponseError(message);
     }
 
     return normalizeGeminiEmbeddings(payload, texts.length);
   }
 
   const includeDimensions =
-    provider === "openai" && config.embeddings.model.startsWith("text-embedding-3");
+    provider === LLMProviderId.OpenAI && config.embeddings.model.startsWith("text-embedding-3");
 
   const response = await safeFetch(
     config.embeddings.endpoint,
@@ -158,7 +165,7 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
 
   if (!response.ok) {
     const message = payload.error?.message || `Embedding request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new ProviderApiResponseError(message);
   }
 
   const items = Array.isArray(payload.data) ? payload.data.slice() : [];
@@ -167,7 +174,7 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
   const embeddings = items.map((item) => item.embedding).filter(Boolean);
 
   if (embeddings.length !== texts.length) {
-    throw new Error(`Embedding response length mismatch: expected ${texts.length}, got ${embeddings.length}.`);
+    throw new EmbeddingResponseLengthMismatchError(texts.length, embeddings.length);
   }
 
   return embeddings;

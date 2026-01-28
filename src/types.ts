@@ -1,4 +1,7 @@
-export type Severity = "info" | "low" | "medium" | "high" | "critical";
+import type { CoreFinding, CoreScanResult } from "./types/domain/core-finding.js";
+import type { Severity } from "./types/domain/severity.js";
+
+export type { CoreFinding, CoreScanResult, Severity };
 
 export type SecurityHeader = {
   entry_point: {
@@ -85,24 +88,6 @@ export interface ExistingScanFinding {
   summary: string;
   location?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
-}
-
-export interface CoreFinding {
-  type: "static" | "repository" | "repository_composite";
-  source: string;
-  severity: Severity;
-  summary: string;
-  category?: string | null;
-  location?: Record<string, unknown> | null;
-  details: Record<string, unknown>;
-}
-
-export interface CoreScanResult {
-  findings: CoreFinding[];
-  compositeFindings: CoreFinding[];
-  scannedFiles: number;
-  scannedChunks: number;
-  durationMs: number;
 }
 
 export interface Chunk {

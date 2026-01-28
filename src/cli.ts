@@ -4,6 +4,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
+import { readEnvRaw } from "./config/env.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
@@ -203,9 +204,9 @@ program
       enableFastMode();
     }
 
-    const envSupabaseUrl = process.env.HADRIX_SUPABASE_URL;
-    const envSupabasePassword = process.env.HADRIX_SUPABASE_PASSWORD;
-    const envSupabaseSchema = process.env.HADRIX_SUPABASE_SCHEMA_PATH;
+    const envSupabaseUrl = readEnvRaw("HADRIX_SUPABASE_URL");
+    const envSupabasePassword = readEnvRaw("HADRIX_SUPABASE_PASSWORD");
+    const envSupabaseSchema = readEnvRaw("HADRIX_SUPABASE_SCHEMA_PATH");
     let supabaseConnectionString: string | null = null;
     let supabaseSchemaPath: string | null = null;
     const wantsSupabase = Boolean(

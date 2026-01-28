@@ -1,6 +1,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { readEnvRaw } from "../config/env.js";
 import { getToolsDir } from "./staticScanners.js";
 
 type RunResult = {
@@ -14,7 +15,7 @@ type RunResult = {
 let jellyAvailablePromise: Promise<boolean> | null = null;
 
 function findOnPath(command: string): string | null {
-  const pathEnv = process.env.PATH || "";
+  const pathEnv = readEnvRaw("PATH") ?? "";
   const parts = pathEnv.split(path.delimiter);
   const extList = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
 

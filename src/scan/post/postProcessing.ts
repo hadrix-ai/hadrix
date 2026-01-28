@@ -1,10 +1,10 @@
-import type { ExistingScanFinding, RepositoryScanFinding } from "../types.js";
-import type { DedupeDebug } from "./debugLog.js";
+import type { ExistingScanFinding, RepositoryScanFinding } from "../../types.js";
+import type { DedupeDebug } from "../debugLog.js";
 import {
   buildFindingIdentityKey,
   extractFindingIdentityType,
   normalizeIdentityTypeValue
-} from "./dedupeKey.js";
+} from "../dedupeKey.js";
 
 export type FindingLike = {
   summary: string;

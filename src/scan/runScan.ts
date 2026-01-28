@@ -9,7 +9,7 @@ import { hashFile, toRelative } from "../chunking/chunker.js";
 import { securityChunkFile } from "../chunking/securityChunker.js";
 import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
-import { embedTexts } from "../providers/embedding.js";
+import { embedTexts } from "../services/embeddings/index.js";
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
@@ -26,7 +26,7 @@ import {
   dropRepositorySummaryDuplicates,
   filterFindings,
   normalizeRepositoryFinding
-} from "./postProcessing.js";
+} from "./post/postProcessing.js";
 import type { AnchorIndex, JellyAnchorComputation } from "./jellyAnchors.js";
 import type { ReachabilityIndex } from "./jellyReachability.js";
 import type {

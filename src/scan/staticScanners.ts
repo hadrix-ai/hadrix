@@ -2,6 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { readEnv, readEnvRaw } from "../config/env.js";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
 
@@ -29,7 +30,7 @@ const ESLINT_LEGACY_CONFIG_FILES = [
 
 export function getToolsDir(): string {
   // Allow explicit override (useful in CI, containers, and sudo scenarios).
-  const override = (process.env.HADRIX_TOOLS_DIR || "").trim();
+  const override = readEnv("HADRIX_TOOLS_DIR");
   if (override) return override;
   return path.join(os.homedir(), ".hadrix", "tools");
 }
@@ -59,14 +60,14 @@ function getToolsDirCandidates(): string[] {
   if (primary) candidates.push(primary);
 
   // If running under sudo, also consider the invoking user's home directory.
-  const sudoUser = (process.env.SUDO_USER || "").trim();
+  const sudoUser = readEnv("SUDO_USER");
   if (sudoUser) {
     const sudoHome = lookupHomeDir(sudoUser);
     if (sudoHome) candidates.push(path.join(sudoHome, ".hadrix", "tools"));
   }
 
   // If HOME is set and differs from os.homedir(), consider it too.
-  const envHome = (process.env.HOME || "").trim();
+  const envHome = readEnv("HOME");
   if (envHome) candidates.push(path.join(envHome, ".hadrix", "tools"));
 
   // De-dupe while preserving order.
@@ -175,7 +176,7 @@ function findEslintConfig(scanRoot: string): { configPath: string | null; legacy
 }
 
 function findOnPath(command: string): string | null {
-  const pathEnv = process.env.PATH || "";
+  const pathEnv = readEnvRaw("PATH") ?? "";
   const parts = pathEnv.split(path.delimiter);
   const extList = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
 
