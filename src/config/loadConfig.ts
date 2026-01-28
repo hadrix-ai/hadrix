@@ -165,7 +165,7 @@ function defaultEmbeddingModel(provider: Provider): string {
 
 function defaultLlmModel(provider: Provider): string {
   if (provider === "gemini") return "gemini-2.5-flash";
-  return "gpt-4o-mini";
+  return "gpt-5-nano";
 }
 
 function normalizeGeminiModel(model: string): string {

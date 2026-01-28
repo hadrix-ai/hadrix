@@ -12,6 +12,13 @@ import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
+const DEFAULT_LLM_MODEL = "gpt-5-nano";
+const FAST_LLM_MODEL = "gpt-4o-mini";
+
+function enableFastMode(): void {
+  process.env.HADRIX_LLM_PROVIDER = "openai";
+  process.env.HADRIX_LLM_MODEL = FAST_LLM_MODEL;
+}
 
 class Spinner {
   private frames = ["-", "\\", "|", "/"];
@@ -159,6 +166,7 @@ program
   .option("--repo-full-name <name>", "Repository full name for metadata")
   .option("--repo-id <id>", "Repository id for metadata")
   .option("--commit-sha <sha>", "Commit SHA for metadata")
+  .option("--fast", `Use fast LLM mode (${FAST_LLM_MODEL}); fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}`)
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (
@@ -178,6 +186,7 @@ program
       repoFullName?: string;
       repoId?: string;
       commitSha?: string;
+      fast?: boolean;
       debug?: boolean;
       debugLog?: string;
     }
@@ -189,6 +198,10 @@ program
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const scanStart = Date.now();
     let statusMessage = "Running scan...";
+    const fastMode = Boolean(options.fast);
+    if (fastMode) {
+      enableFastMode();
+    }
 
     const envSupabaseUrl = process.env.HADRIX_SUPABASE_URL;
     const envSupabasePassword = process.env.HADRIX_SUPABASE_PASSWORD;
@@ -254,6 +267,11 @@ program
       }
       console.error(message);
     };
+    if (fastMode) {
+      logger(
+        `Fast mode enabled (${FAST_LLM_MODEL}). Fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}.`
+      );
+    }
 
     try {
       if (spinner) {
@@ -361,6 +379,7 @@ program
   .option("--out-dir <path>", "Directory for eval artifacts (default .hadrix-evals)")
   .option("--json", "Output JSON instead of text")
   .option("--skip-static", "Skip static scanners")
+  .option("--fast", `Use fast LLM mode (${FAST_LLM_MODEL}); fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}`)
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (fixturesDir: string | undefined, options: {
@@ -377,6 +396,7 @@ program
     outDir?: string;
     json?: boolean;
     skipStatic?: boolean;
+    fast?: boolean;
     debug?: boolean;
     debugLog?: string;
   }) => {
@@ -386,6 +406,10 @@ program
     const evalStart = Date.now();
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
+    const fastMode = Boolean(options.fast);
+    if (fastMode) {
+      enableFastMode();
+    }
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
@@ -404,6 +428,11 @@ program
       }
       console.error(message);
     };
+    if (fastMode) {
+      logger(
+        `Fast mode enabled (${FAST_LLM_MODEL}). Fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}.`
+      );
+    }
 
     const parseNumber = (value?: string): number | undefined => {
       if (!value) return undefined;

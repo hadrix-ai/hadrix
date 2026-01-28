@@ -18,6 +18,17 @@ interface ChatCompletionResponse {
   error?: { message?: string };
 }
 
+interface ResponsesApiResponse {
+  output_text?: string;
+  output?: Array<{
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+  error?: { message?: string };
+}
+
 interface GeminiResponse {
   candidates?: Array<{
     content?: {
@@ -155,23 +166,43 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     return text;
   }
 
+  const openAiModel = config.llm.model || "";
+  const isGpt5 = openAiModel.toLowerCase().startsWith("gpt-5");
+  const useMaxCompletionTokens = isGpt5;
+  const gpt5MaxOutputTokens = isGpt5 ? Math.max(config.llm.maxTokens, 2048) : config.llm.maxTokens;
+  const endpoint = isGpt5
+    ? config.llm.endpoint.replace(/\/v1\/chat\/completions\/?$/, "/v1/responses")
+    : config.llm.endpoint;
   const response = await safeFetch(
-    config.llm.endpoint,
+    endpoint,
     {
       method: "POST",
       headers: buildHeaders(config, provider, apiKey),
-      body: JSON.stringify({
-        model: config.llm.model,
-        messages,
-        temperature: config.llm.temperature,
-        max_tokens: config.llm.maxTokens
-      })
+      body: JSON.stringify(
+        useMaxCompletionTokens
+          ? {
+              model: config.llm.model,
+              input: messages.map((message) => ({
+                role: message.role,
+                content: [{ type: "input_text", text: message.content }]
+              })),
+              max_output_tokens: gpt5MaxOutputTokens,
+              reasoning: { effort: "low" },
+              text: { format: { type: "text" }, verbosity: "low" }
+            }
+          : {
+              model: config.llm.model,
+              messages,
+              temperature: config.llm.temperature,
+              max_tokens: config.llm.maxTokens
+            }
+      )
     },
     provider,
     "LLM"
   );
 
-  const payload = (await response.json()) as ChatCompletionResponse;
+  const payload = (await response.json()) as ChatCompletionResponse & ResponsesApiResponse;
 
   if (!response.ok) {
     const message = payload.error?.message || `LLM request failed with status ${response.status}`;
@@ -179,9 +210,20 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   }
 
   const content = payload.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("LLM response missing message content.");
-  }
+  if (content) return content;
 
-  return content;
+  const outputText = payload.output_text;
+  if (outputText && outputText.trim()) return outputText;
+
+  const outputParts =
+    payload.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((part) => part.text)
+      .filter((text): text is string => Boolean(text))
+      .join("") ?? "";
+
+  if (outputParts.trim()) return outputParts;
+
+  const preview = JSON.stringify(payload).slice(0, 2000);
+  throw new Error(`LLM response missing message content. Response preview: ${preview}`);
 }
