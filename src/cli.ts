@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
+import { DEFAULT_LLM_MODEL, FAST_LLM_MODEL, enableFastMode } from "./config/fastMode.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
@@ -13,14 +14,6 @@ import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
-const DEFAULT_LLM_MODEL = "gpt-5-nano";
-const FAST_LLM_MODEL = "gpt-4o-mini";
-
-function enableFastMode(): void {
-  process.env.HADRIX_LLM_PROVIDER = "openai";
-  process.env.HADRIX_LLM_MODEL = FAST_LLM_MODEL;
-}
-
 class Spinner {
   private frames = ["-", "\\", "|", "/"];
   private frameIndex = 0;
@@ -408,9 +401,6 @@ program
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
     const fastMode = Boolean(options.fast);
-    if (fastMode) {
-      enableFastMode();
-    }
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
@@ -471,6 +461,7 @@ program
         summaryMatchThreshold: parseNumber(options.threshold),
         shortCircuitThreshold: parseNumber(options.shortCircuit),
         comparisonConcurrency: parseNumber(options.concurrency),
+        fast: fastMode,
         debug: options.debug,
         debugLogPath,
         output,
