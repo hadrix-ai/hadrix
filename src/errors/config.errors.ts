@@ -1,6 +1,6 @@
 export class ConfigUnsupportedProviderError extends Error {
   constructor() {
-    super("Claude/Anthropic is not supported. Use openai or gemini.");
+    super("Anthropic/Claude is not supported. Use openai.");
     this.name = "ConfigUnsupportedProviderError";
   }
 }
@@ -8,7 +8,7 @@ export class ConfigUnsupportedProviderError extends Error {
 export class ConfigMissingApiKeyError extends Error {
   constructor() {
     super(
-      "Missing API key. Set HADRIX_API_KEY (or provider-specific key like OPENAI_API_KEY/GEMINI_API_KEY) or api.apiKey in hadrix.config.json."
+      "Missing API key. Set HADRIX_API_KEY (or provider-specific key like OPENAI_API_KEY) or api.apiKey in hadrix.config.json."
     );
     this.name = "ConfigMissingApiKeyError";
   }

@@ -4,7 +4,6 @@ import { LLMProviderId } from "../../config/loadConfig.js";
 import type { HadrixConfig, LLMProvider } from "../../config/loadConfig.js";
 import {
   LlmMissingApiKeyError,
-  LlmResponseMissingContentError,
   ProviderApiResponseError,
   ProviderRequestFailedError
 } from "../../errors/provider.errors.js";
@@ -32,15 +31,6 @@ interface ResponsesApiResponse {
       type?: string;
       text?: string;
     }>;
-  }>;
-  error?: { message?: string };
-}
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
   }>;
   error?: { message?: string };
 }
@@ -103,8 +93,6 @@ function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: strin
 
   if (provider === LLMProviderId.OpenAI) {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (provider === LLMProviderId.Gemini) {
-    headers["x-goog-api-key"] = apiKey;
   }
 
   return headers;
@@ -129,48 +117,6 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
 
   if (!apiKey) {
     throw new LlmMissingApiKeyError();
-  }
-
-  if (provider === LLMProviderId.Gemini) {
-    const { system, rest } = splitSystemMessages(messages);
-    const response = await safeFetch(
-      config.llm.endpoint,
-      {
-        method: "POST",
-        headers: buildHeaders(config, provider, apiKey),
-        body: JSON.stringify({
-          system_instruction: system ? { parts: [{ text: system }] } : undefined,
-          contents: rest.map((message) => ({
-            role: message.role === "assistant" ? "model" : "user",
-            parts: [{ text: message.content }]
-          })),
-          generationConfig: {
-            temperature: config.llm.temperature,
-            maxOutputTokens: config.llm.maxTokens
-          }
-        })
-      },
-      provider,
-      "LLM"
-    );
-
-    const payload = (await response.json()) as GeminiResponse;
-
-    if (!response.ok) {
-      const message = payload.error?.message || `LLM request failed with status ${response.status}`;
-      throw new ProviderApiResponseError(message);
-    }
-
-    const text = payload.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text)
-      .filter(Boolean)
-      .join("");
-
-    if (!text) {
-      throw new LlmResponseMissingContentError();
-    }
-
-    return text;
   }
 
   const openAiModel = config.llm.model || "";

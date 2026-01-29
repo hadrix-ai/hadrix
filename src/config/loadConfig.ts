@@ -7,6 +7,7 @@ import {
   DEFAULT_EXCLUDES,
   DEFAULT_INCLUDE_EXTENSIONS,
   DEFAULT_QUERIES,
+  DEFAULT_SEMGREP_CONFIGS,
   defaultBaseUrl,
   defaultEmbeddingModel,
   defaultLlmModel
@@ -19,12 +20,11 @@ import {
 
 export const LLMProviderId = {
   OpenAI: "openai",
-  Gemini: "gemini",
   Anthropic: "anthropic",
   Claude: "claude"
 } as const;
 
-export type LLMProvider = typeof LLMProviderId.OpenAI | typeof LLMProviderId.Gemini;
+export type LLMProvider = typeof LLMProviderId.OpenAI;
 
 export interface HadrixConfig {
   projectRoot: string;
@@ -100,13 +100,9 @@ export interface LoadConfigParams {
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
 }
-function normalizeGeminiModel(model: string): string {
-  return model.replace(/^models\//, "");
-}
-
 function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const value = (raw || "").toLowerCase();
-  if (value === LLMProviderId.OpenAI || value === LLMProviderId.Gemini) {
+  if (value === LLMProviderId.OpenAI) {
     return value as LLMProvider;
   }
   if (value === LLMProviderId.Anthropic || value === LLMProviderId.Claude) {
@@ -161,17 +157,17 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     (llmProvider === LLMProviderId.OpenAI ? baseUrl : defaultBaseUrl(llmProvider));
 
   const apiKey =
-    readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
     configFile.api?.apiKey ||
     "";
 
   const embeddingsApiKey =
-    readFirstEnv(["HADRIX_EMBEDDINGS_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_EMBEDDINGS_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
     configFile.embeddings?.apiKey ||
     apiKey;
 
   const llmApiKey =
-    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
     configFile.llm?.apiKey ||
     apiKey;
 
@@ -180,35 +176,20 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     ...parseJsonEnv("HADRIX_API_HEADERS")
   };
 
-  const embeddingsModelRaw =
-    readEnv("HADRIX_EMBEDDINGS_MODEL") || configFile.embeddings?.model || defaultEmbeddingModel(embeddingsProvider);
-  const llmModelRaw =
-    readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
-
   const embeddingsModel =
-    embeddingsProvider === LLMProviderId.Gemini
-      ? normalizeGeminiModel(embeddingsModelRaw)
-      : embeddingsModelRaw;
+    readEnv("HADRIX_EMBEDDINGS_MODEL") || configFile.embeddings?.model || defaultEmbeddingModel(embeddingsProvider);
   const llmModel =
-    llmProvider === LLMProviderId.Gemini ? normalizeGeminiModel(llmModelRaw) : llmModelRaw;
+    readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
 
   const embeddingsEndpoint =
     readEnv("HADRIX_EMBEDDINGS_ENDPOINT") ||
     configFile.embeddings?.endpoint ||
-    (embeddingsProvider === LLMProviderId.OpenAI
-      ? `${embeddingsBaseUrl.replace(/\/$/, "")}/v1/embeddings`
-      : embeddingsProvider === LLMProviderId.Gemini
-        ? `${embeddingsBaseUrl.replace(/\/$/, "")}/v1beta/models/${embeddingsModel}:batchEmbedContents`
-        : "");
+    `${embeddingsBaseUrl.replace(/\/$/, "")}/v1/embeddings`;
 
   const llmEndpoint =
     readEnv("HADRIX_LLM_ENDPOINT") ||
     configFile.llm?.endpoint ||
-    (llmProvider === LLMProviderId.OpenAI
-      ? `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`
-      : llmProvider === LLMProviderId.Gemini
-        ? `${llmBaseUrl.replace(/\/$/, "")}/v1beta/models/${llmModel}:generateContent`
-        : "");
+    `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
 
   const cfg: HadrixConfig = {
     projectRoot: params.projectRoot,
@@ -263,7 +244,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
         configs:
           (readEnv("HADRIX_SEMGREP_CONFIG")?.split(",").map((v) => v.trim()).filter(Boolean)) ||
           configFile.staticScanners?.semgrep?.configs ||
-          ["p/ci"],
+          DEFAULT_SEMGREP_CONFIGS,
         timeoutSeconds: configFile.staticScanners?.semgrep?.timeoutSeconds ?? 120
       },
       gitleaks: {

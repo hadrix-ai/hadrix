@@ -38,6 +38,20 @@ export const DEFAULT_ESLINT_EXTENSIONS = [
   ".cjs"
 ];
 
+export const DEFAULT_SEMGREP_CONFIGS = [
+  "p/default",
+  "p/security-audit",
+  "p/owasp-top-ten",
+  "p/cwe-top-25",
+  "p/xss",
+  "p/sql-injection",
+  "p/jwt",
+  "p/secrets",
+  "p/javascript",
+  "p/typescript",
+  "p/react"
+];
+
 export const DEFAULT_QUERIES = [
   "authentication session token jwt api key",
   "sql query database orm raw query",
@@ -47,17 +61,28 @@ export const DEFAULT_QUERIES = [
   "crypto secret key encryption"
 ];
 
-export function defaultBaseUrl(provider: "openai" | "gemini"): string {
-  if (provider === "openai") return "https://api.openai.com";
-  return "https://generativelanguage.googleapis.com";
+const DEFAULT_BASE_URLS = {
+  openai: "https://api.openai.com"
+} as const;
+
+const DEFAULT_EMBEDDING_MODELS = {
+  openai: "text-embedding-3-small"
+} as const;
+
+const DEFAULT_LLM_MODELS = {
+  openai: "gpt-5-nano"
+} as const;
+
+type DefaultProviderId = keyof typeof DEFAULT_BASE_URLS;
+
+export function defaultBaseUrl(provider: DefaultProviderId): string {
+  return DEFAULT_BASE_URLS[provider];
 }
 
-export function defaultEmbeddingModel(provider: "openai" | "gemini"): string {
-  if (provider === "gemini") return "gemini-embedding-001";
-  return "text-embedding-3-small";
+export function defaultEmbeddingModel(provider: DefaultProviderId): string {
+  return DEFAULT_EMBEDDING_MODELS[provider];
 }
 
-export function defaultLlmModel(provider: "openai" | "gemini"): string {
-  if (provider === "gemini") return "gemini-2.5-flash";
-  return "gpt-5-nano";
+export function defaultLlmModel(provider: DefaultProviderId): string {
+  return DEFAULT_LLM_MODELS[provider];
 }

@@ -19,11 +19,6 @@ interface EmbeddingResponse {
   error?: { message?: string };
 }
 
-interface GeminiEmbeddingResponse {
-  embeddings?: Array<{ values?: number[] }>;
-  error?: { message?: string };
-}
-
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 500;
@@ -82,24 +77,9 @@ function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: strin
 
   if (provider === LLMProviderId.OpenAI) {
     headers.Authorization = `Bearer ${apiKey}`;
-  } else if (provider === LLMProviderId.Gemini) {
-    headers["x-goog-api-key"] = apiKey;
   }
 
   return headers;
-}
-
-function normalizeGeminiEmbeddings(payload: GeminiEmbeddingResponse, expected: number): number[][] {
-  const embeddings = payload.embeddings ?? [];
-  const vectors = embeddings
-    .map((item) => item.values)
-    .filter((values): values is number[] => Array.isArray(values));
-
-  if (vectors.length !== expected) {
-    throw new EmbeddingResponseLengthMismatchError(expected, vectors.length);
-  }
-
-  return vectors;
 }
 
 export async function embedTexts(config: HadrixConfig, texts: string[]): Promise<number[][]> {
@@ -110,37 +90,6 @@ export async function embedTexts(config: HadrixConfig, texts: string[]): Promise
 
   if (!apiKey) {
     throw new EmbeddingMissingApiKeyError();
-  }
-
-  if (provider === LLMProviderId.Gemini) {
-    const modelName = config.embeddings.model.startsWith("models/")
-      ? config.embeddings.model
-      : `models/${config.embeddings.model}`;
-    const response = await safeFetch(
-      config.embeddings.endpoint,
-      {
-        method: "POST",
-        headers: buildHeaders(config, provider, apiKey),
-        body: JSON.stringify({
-          requests: texts.map((text) => ({
-            model: modelName,
-            content: { parts: [{ text }] },
-            outputDimensionality: config.embeddings.dimensions
-          }))
-        })
-      },
-      provider,
-      "Embedding"
-    );
-
-    const payload = (await response.json()) as GeminiEmbeddingResponse;
-
-    if (!response.ok) {
-      const message = payload.error?.message || `Embedding request failed with status ${response.status}`;
-      throw new ProviderApiResponseError(message);
-    }
-
-    return normalizeGeminiEmbeddings(payload, texts.length);
   }
 
   const includeDimensions =
