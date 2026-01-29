@@ -15,6 +15,7 @@ Evals always use the OpenAI comparator for matching, using the same env as the s
 Optional flags:
 
 - `--spec <id>` / `--group <id>` to run a subset. Available specs:
+  - `evals-sanity-check`
   - `hadrix-evals-react-supabase`
   - `hadrix-evals-nextjs`
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
