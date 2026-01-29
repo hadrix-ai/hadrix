@@ -234,4 +234,24 @@ export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
       },
     ],
   },
+
+  {
+    id: "Orbit-Projects-Sampler-LongFiles",
+    description: "Sampler: long file hot-spans coverage",
+    allowUnexpected: true,
+    expectedFindings: [
+      {
+        filepath: `${P}/backend/supabase/functions/fixtures/long_hot_begin.ts`,
+        expectation: "Use of eval with user input.",
+      },
+      {
+        filepath: `${P}/backend/supabase/functions/fixtures/long_hot_middle.ts`,
+        expectation: "Use of new Function with user input.",
+      },
+      {
+        filepath: `${P}/backend/supabase/functions/fixtures/long_hot_end.ts`,
+        expectation: "Command execution via child_process/exec.",
+      },
+    ],
+  },
 ];

@@ -9,8 +9,9 @@ import { hashFile, toRelative } from "../chunking/chunker.js";
 import { securityChunkFile } from "../chunking/securityChunker.js";
 import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
-import { embedTexts } from "../services/embeddings/index.js";
+// embeddings removed
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
+import { splitSecurityHeader } from "./securityHeader.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
@@ -127,16 +128,7 @@ async function createDebugLogWriter(params: {
   }
 }
 
-function embeddingToBuffer(vector: number[], expectedDims: number): Buffer {
-  if (vector.length !== expectedDims) {
-    throw new Error(`Embedding dimension mismatch: expected ${expectedDims}, got ${vector.length}.`);
-  }
-  const floats = new Float32Array(vector.length);
-  for (let i = 0; i < vector.length; i += 1) {
-    floats[i] = vector[i] ?? 0;
-  }
-  return Buffer.from(floats.buffer);
-}
+// embeddings removed
 
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -764,6 +756,58 @@ function toStaticFindingsFromExisting(findings: ExistingScanFinding[]): StaticFi
     .filter((finding): finding is StaticFinding => Boolean(finding));
 }
 
+function detectHeuristicSinkFindings(chunks: ChunkRow[]): StaticFinding[] {
+  const findings: StaticFinding[] = [];
+  const rules: Array<{ ruleId: string; message: string; severity: StaticFinding["severity"]; pattern: RegExp }> = [
+    { ruleId: "heuristic:eval", message: "Use of eval with user input.", severity: "high", pattern: /\beval\s*\(/i },
+    {
+      ruleId: "heuristic:new_function",
+      message: "Use of new Function with user input.",
+      severity: "high",
+      pattern: /\bnew Function\s*\(/i
+    },
+    {
+      ruleId: "heuristic:child_process_exec",
+      message: "Command execution via child_process/exec.",
+      severity: "high",
+      pattern: /\bchild_process\b|\bexecSync\s*\(|\bexec\s*\(|\bspawn\s*\(/i
+    }
+  ];
+
+  for (const chunk of chunks) {
+    const filepath = normalizePath(chunk.filepath);
+    if (!filepath) continue;
+    const raw = chunk.content ?? "";
+    const body = splitSecurityHeader(raw).body;
+    if (!body) continue;
+    const lines = body.split(/\r?\n/);
+
+    for (const rule of rules) {
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i] ?? "";
+        if (!rule.pattern.test(line)) continue;
+        const startLine = (chunk.start_line ?? 1) + i;
+        findings.push({
+          tool: "eslint",
+          ruleId: rule.ruleId,
+          message: rule.message,
+          severity: rule.severity,
+          filepath,
+          startLine,
+          endLine: startLine,
+          snippet: line.trim() || undefined,
+          details: {
+            note: "Heuristic sink detection"
+          }
+        });
+        break;
+      }
+    }
+  }
+
+  return findings;
+}
+
 function toCoreStaticFindings(params: {
   findings: StaticFinding[];
   repoFullName?: string | null;
@@ -1185,15 +1229,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
     const db = new HadrixDb({
       stateDir: config.stateDir,
-      extensionPath: config.vector.extensionPath,
-      vectorDimensions: config.embeddings.dimensions,
-      vectorMaxElements: config.vector.maxElements,
       logger: log
     });
     const desiredChunkFormat = "security_semantic";
     log("Security chunking enabled.");
   
-    const newEmbeddings: Array<{ chunkId: number; content: string }> = [];
+    // Embeddings removed.
   
     try {
       for (const file of files) {
@@ -1272,38 +1313,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           }))
         );
   
-        const idByUid = new Map(inserted.map((row) => [row.chunkUid, row.id]));
-        for (const chunk of chunks) {
-          const chunkId = idByUid.get(chunk.id);
-          if (!chunkId) continue;
-          newEmbeddings.push({ chunkId, content: chunk.content });
-        }
+        // Embeddings removed.
+        void inserted;
       }
   
-      let embeddingQueue = newEmbeddings;
-      if (db.didResetEmbeddings()) {
-        log("Embedding dimensions changed; rebuilding embeddings for all chunks.");
-        const allChunks = db.getAllChunks();
-        embeddingQueue = allChunks.map((chunk) => ({ chunkId: chunk.id, content: chunk.content }));
-      }
-  
-      if (embeddingQueue.length) {
-        log(`Embedding ${embeddingQueue.length} chunks...`);
-        const batchSize = config.embeddings.batchSize;
-        for (let i = 0; i < embeddingQueue.length; i += batchSize) {
-          const batch = embeddingQueue.slice(i, i + batchSize);
-          const vectors = await embedTexts(
-            config,
-            batch.map((item) => item.content)
-          );
-          const rows = vectors.map((vector, index) => ({
-            chunkId: batch[index]?.chunkId ?? 0,
-            embedding: embeddingToBuffer(vector, config.embeddings.dimensions)
-          }));
-          db.insertEmbeddings(rows);
-        }
-      }
-  
+      // Embeddings removed.
+
       const allChunks = db.getAllChunks();
       const scopedChunks = repoPath
         ? allChunks.filter(
@@ -1320,41 +1335,6 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       let repositoryDescriptor: { fullName: string; repoPaths: string[] } | null = null;
   
       if (scopedChunks.length > 0) {
-        let preferredChunks: ReturnType<typeof toLocalChunk>[] = [];
-        if (config.sampling.queries.length) {
-          log("Retrieving top-k chunks...");
-          const queryEmbeddings = await embedTexts(config, config.sampling.queries);
-          const candidates = new Map<number, number>();
-  
-          for (const vector of queryEmbeddings) {
-            const results = db.querySimilar(
-              embeddingToBuffer(vector, config.embeddings.dimensions),
-              config.sampling.topKPerQuery
-            );
-            for (const result of results) {
-              const existing = candidates.get(result.chunkId);
-              if (existing === undefined || result.distance < existing) {
-                candidates.set(result.chunkId, result.distance);
-              }
-            }
-          }
-  
-          const orderedIds = [...candidates.entries()]
-            .sort((a, b) => a[1] - b[1])
-            .map(([id]) => id);
-  
-          const limitedIds = orderedIds.slice(0, Math.max(1, config.sampling.maxChunks));
-          const rows = db.getChunksByIds(limitedIds);
-          const rowById = new Map(rows.map((row) => [row.id, row]));
-          preferredChunks = limitedIds
-            .map((id) => rowById.get(id))
-            .filter(Boolean)
-            .filter((row) =>
-              repoPath ? row!.filepath === repoPath || row!.filepath.startsWith(`${repoPath}/`) : true
-            )
-            .map((row) => toLocalChunk(row!));
-        }
-  
         log("Heuristic analysis and chunk sampling...");
 
         const localChunks = scopedChunks.map((chunk) =>
@@ -1440,12 +1420,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           return selected.slice(0, 80);
         })();
 
-        const combinedPreferred = [...preferredChunks, ...mustInclude];
-
         fileSamples = buildRepositoryFileSamples(localChunks, {
-          maxFiles: config.sampling.maxChunks,
+          maxFiles: config.sampling.maxFiles,
           maxChunksPerFile: config.sampling.maxChunksPerFile,
-          preferredChunks: combinedPreferred
+          preferredChunks: mustInclude
         });
   
         if (fileSamples.length > 0) {
@@ -1589,8 +1567,9 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       const llmOutput = combinedFindings.map((finding) =>
         toRepositoryFinding(finding, fallbackPath, repoPath)
       );
+      const heuristicSinkFindings = detectHeuristicSinkFindings(scopedChunks);
       const coreStaticFindings = toCoreStaticFindings({
-        findings: staticFindings,
+        findings: [...staticFindings, ...heuristicSinkFindings],
         repoFullName,
         repositoryId,
         repoPath,
@@ -1626,7 +1605,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
       const reportRawFindings = [
         ...toCoreStaticFindings({
-          findings: reportStaticFindings,
+          findings: [...reportStaticFindings, ...heuristicSinkFindings],
           repoFullName,
           repositoryId,
           repoPath,

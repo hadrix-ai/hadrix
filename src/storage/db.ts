@@ -1,59 +1,56 @@
 import path from "node:path";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdirSync } from "node:fs";
 import Database from "better-sqlite3";
-import { MetaRepository } from "../repositories/metaRepository.js";
-import { FileRepository } from "../repositories/fileRepository.js";
-import { ChunkRepository } from "../repositories/chunkRepository.js";
-import { EmbeddingRepository } from "../repositories/embeddingRepository.js";
-import type { FileRow } from "../repositories/fileRepository.js";
-import type { ChunkRow } from "../repositories/chunkRepository.js";
-export type { FileRow } from "../repositories/fileRepository.js";
-export type { ChunkRow } from "../repositories/chunkRepository.js";
 
 const CURRENT_SCHEMA_VERSION = 2;
 
 export interface DbOptions {
   stateDir: string;
-  extensionPath?: string | null;
-  vectorDimensions: number;
-  vectorMaxElements?: number;
   logger?: (message: string) => void;
+}
+
+export interface FileRow {
+  id: number;
+  path: string;
+  hash: string;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface ChunkRow {
+  id: number;
+  chunk_uid: string;
+  filepath: string;
+  chunk_index: number;
+  start_line: number;
+  end_line: number;
+  content: string;
+  chunk_format: string | null;
+  security_header: string | null;
+  primary_symbol: string | null;
+  entry_point: string | null;
+  execution_role: string | null;
+  sinks: string | null;
+  overlap_group_id: string | null;
+  dedupe_key: string | null;
 }
 
 export class HadrixDb {
   private db: Database.Database;
-  private metaRepository: MetaRepository;
-  private fileRepository: FileRepository;
-  private chunkRepository: ChunkRepository;
-  private embeddingRepository: EmbeddingRepository;
-  private vectorDimensions: number;
-  private vectorMaxElements: number;
-  private embeddingReset = false;
-  private vectorMode: "fast" | "portable" = "portable";
-  private fallbackNotified = false;
 
   constructor(private options: DbOptions) {
     mkdirSync(options.stateDir, { recursive: true });
     const dbPath = path.join(options.stateDir, "index.db");
     this.db = new Database(dbPath);
-    this.metaRepository = new MetaRepository(this.db);
-    this.fileRepository = new FileRepository(this.db);
-    this.chunkRepository = new ChunkRepository({
-      db: this.db,
-      log: this.log.bind(this),
-      getVectorMode: () => this.vectorMode,
-      toSqliteInteger: this.toSqliteInteger.bind(this)
-    });
-    this.embeddingRepository = new EmbeddingRepository({
-      db: this.db,
-      log: this.log.bind(this),
-      getVectorMode: () => this.vectorMode,
-      toSqliteInteger: this.toSqliteInteger.bind(this)
-    });
-    this.vectorDimensions = options.vectorDimensions;
-    this.vectorMaxElements = options.vectorMaxElements ?? 200000;
     this.init();
+  }
+
+  private log(message: string) {
+    this.options.logger?.(message);
+  }
+
+  close() {
+    this.db.close();
   }
 
   private init() {
@@ -94,39 +91,25 @@ export class HadrixDb {
       );
     `);
 
-    this.metaRepository.ensureTable();
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
 
     this.runMigrations();
 
-    const existingDims = this.metaRepository.get("embedding_dimensions");
-    if (existingDims && Number(existingDims) !== this.vectorDimensions) {
-      try {
-        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
-      } catch {
-        // Ignore drop failures; we can still fall back to portable mode.
-      }
-      this.embeddingReset = true;
+    // Embeddings removed: drop any leftover table from previous runs.
+    try {
+      this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
+    } catch {
+      // ignore
     }
-
-    const fastEnabled = this.tryEnableFastVectorSearch();
-    if (fastEnabled) {
-      this.vectorMode = "fast";
-      if (!this.ensureEmbeddingsTable("fast")) {
-        this.vectorMode = "portable";
-        this.notifyFallback();
-        this.ensureEmbeddingsTable("portable");
-      }
-    } else {
-      this.vectorMode = "portable";
-      this.notifyFallback();
-      this.ensureEmbeddingsTable("portable");
-    }
-
-    this.metaRepository.set("embedding_dimensions", String(this.vectorDimensions));
   }
 
   private runMigrations() {
-    const rawVersion = this.metaRepository.get("schema_version");
+    const rawVersion = this.getMeta("schema_version");
     const parsed = rawVersion ? Number(rawVersion) : 0;
     let version = Number.isFinite(parsed) ? parsed : 0;
 
@@ -136,7 +119,7 @@ export class HadrixDb {
     }
 
     if (!rawVersion || version !== Number(rawVersion)) {
-      this.metaRepository.set("schema_version", String(version));
+      this.setMeta("schema_version", String(version));
     }
   }
 
@@ -163,191 +146,73 @@ export class HadrixDb {
     return rows.some((row) => row.name === column);
   }
 
-  didResetEmbeddings(): boolean {
-    return this.embeddingReset;
+  private setMeta(key: string, value: string) {
+    this.db
+      .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(key, value);
   }
 
-  private log(message: string) {
-    this.options.logger?.(message);
-  }
-
-  private notifyFallback() {
-    if (this.fallbackNotified) return;
-    this.log("Fast vector search unavailable; using portable mode.");
-    this.fallbackNotified = true;
-  }
-
-  private normalizeRowId(value: unknown): number | null {
-    if (typeof value === "number") {
-      if (!Number.isFinite(value)) return null;
-      const truncated = Math.trunc(value);
-      if (!Number.isSafeInteger(truncated)) return null;
-      return truncated;
-    }
-    if (typeof value === "bigint") {
-      const asNumber = Number(value);
-      if (!Number.isSafeInteger(asNumber)) return null;
-      return asNumber;
-    }
-    if (typeof value === "string") {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) return null;
-      const truncated = Math.trunc(parsed);
-      if (!Number.isSafeInteger(truncated)) return null;
-      return truncated;
-    }
-    return null;
-  }
-
-  private toSqliteInteger(value: unknown): number | bigint | null {
-    const normalized = this.normalizeRowId(value);
-    if (normalized == null) return null;
-    if (this.vectorMode !== "fast") return normalized;
-    return BigInt(normalized);
-  }
-
-  private tryEnableFastVectorSearch(): boolean {
-    if (this.options.extensionPath) {
-      try {
-        this.db.loadExtension(this.options.extensionPath);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    try {
-      const require = createRequire(import.meta.url);
-      const mod = require("vectorlite");
-      const vectorlite = (mod?.default ?? mod) as {
-        vectorlitePath?: () => string;
-      };
-
-      if (typeof vectorlite.vectorlitePath === "function") {
-        const loadable = vectorlite.vectorlitePath();
-        if (loadable) {
-          this.db.loadExtension(loadable);
-          return true;
-        }
-      }
-
-      const pkgPath = require.resolve("vectorlite/package.json");
-      const pkgRoot = path.dirname(pkgPath);
-      const candidate = this.findExtensionFile(pkgRoot);
-      if (candidate) {
-        this.db.loadExtension(candidate);
-        return true;
-      }
-    } catch {
-      return false;
-    }
-
-    return false;
-  }
-
-  private findExtensionFile(root: string): string | null {
-    const exts = process.platform === "win32" ? [".dll"] : process.platform === "darwin" ? [".dylib"] : [".so"];
-    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-    const maxDepth = 4;
-
-    while (queue.length) {
-      const next = queue.shift();
-      if (!next) break;
-      const { dir, depth } = next;
-      if (depth > maxDepth) continue;
-      let entries: string[] = [];
-      try {
-        entries = readdirSync(dir);
-      } catch {
-        continue;
-      }
-
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry);
-        let stat;
-        try {
-          stat = statSync(fullPath);
-        } catch {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          queue.push({ dir: fullPath, depth: depth + 1 });
-          continue;
-        }
-        const lower = entry.toLowerCase();
-        if (!lower.includes("vectorlite")) continue;
-        if (exts.some((ext) => lower.endsWith(ext))) {
-          return fullPath;
-        }
-      }
-    }
-    return null;
-  }
-
-  private ensureEmbeddingsTable(mode: "fast" | "portable"): boolean {
-    const row = this.db
-      .prepare("SELECT sql FROM sqlite_master WHERE name = 'chunk_embeddings' AND type = 'table'")
-      .get() as { sql?: string } | undefined;
-
-    const existingSql = row?.sql?.toLowerCase() ?? "";
-    const isVecTable = existingSql.includes("vectorlite");
-
-    if (mode === "fast" && row && !isVecTable) {
-      try {
-        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
-      } catch {
-        // Ignore drop failures; we'll fall back if needed.
-      }
-      this.embeddingReset = true;
-    }
-
-    if (mode === "portable" && row && isVecTable) {
-      try {
-        this.db.exec("DROP TABLE IF EXISTS chunk_embeddings;");
-      } catch {
-        // Ignore drop failures; we'll fall back if needed.
-      }
-      this.embeddingReset = true;
-    }
-
-    if (mode === "fast") {
-      try {
-        this.db.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings
-          USING vectorlite(
-            embedding float32[${this.vectorDimensions}] cosine,
-            hnsw(max_elements=${this.vectorMaxElements})
-          );
-        `);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS chunk_embeddings (
-        chunk_id INTEGER PRIMARY KEY,
-        embedding BLOB NOT NULL
-      );
-    `);
-    return true;
-  }
-
-  upsertFile(params: { path: string; hash: string; mtimeMs: number; size: number }): FileRow {
-    return this.fileRepository.upsertFile(params);
+  private getMeta(key: string): string | null {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ?? null;
   }
 
   getFileByPath(filePath: string): FileRow | null {
-    return this.fileRepository.getFileByPath(filePath);
+    const row = this.db
+      .prepare("SELECT id, path, hash, mtime_ms as mtimeMs, size FROM files WHERE path = ?")
+      .get(filePath) as FileRow | undefined;
+    return row ?? null;
   }
 
-  getChunkFormatForFile(fileId: number): string | null {
-    return this.chunkRepository.getChunkFormatForFile(fileId);
+  upsertFile(input: { path: string; hash: string; mtimeMs: number; size: number }): FileRow {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO files (path, hash, mtime_ms, size, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+           hash = excluded.hash,
+           mtime_ms = excluded.mtime_ms,
+           size = excluded.size,
+           updated_at = excluded.updated_at`
+      )
+      .run(input.path, input.hash, input.mtimeMs, input.size, now);
+
+    const row = this.getFileByPath(input.path);
+    if (!row) {
+      throw new Error("Failed to upsert file row");
+    }
+    return row;
   }
 
   deleteChunksForFile(fileId: number) {
-    this.chunkRepository.deleteChunksForFile(fileId);
+    this.db.prepare("DELETE FROM chunks WHERE file_id = ?").run(fileId);
+  }
+
+  getChunkFormatForFile(fileId: number): string | null {
+    const row = this.db
+      .prepare("SELECT chunk_format as chunkFormat FROM chunks WHERE file_id = ? LIMIT 1")
+      .get(fileId) as { chunkFormat: string | null } | undefined;
+    return row?.chunkFormat ?? null;
+  }
+
+  private normalizeOptionalString(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private serializeOptionalJson(value: unknown): string | null {
+    if (value == null) return null;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed ? trimmed : null;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return null;
+    }
   }
 
   insertChunks(
@@ -360,40 +225,122 @@ export class HadrixDb {
       endLine: number;
       content: string;
       contentHash: string;
-      chunkFormat?: string | null;
-      securityHeader?: unknown;
-      primarySymbol?: string | null;
-      entryPoint?: string | null;
-      executionRole?: string | null;
-      sinks?: unknown;
-      overlapGroupId?: string | null;
-      dedupeKey?: string | null;
+      chunkFormat: string | null;
+      securityHeader: unknown;
+      primarySymbol: unknown;
+      entryPoint: unknown;
+      executionRole: unknown;
+      sinks: unknown;
+      overlapGroupId: unknown;
+      dedupeKey: unknown;
     }>
   ): Array<{ id: number; chunkUid: string }> {
-    return this.chunkRepository.insertChunks(fileId, filepath, chunks);
-  }
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO chunks (
+        file_id,
+        chunk_uid,
+        filepath,
+        chunk_index,
+        start_line,
+        end_line,
+        content,
+        content_hash,
+        chunk_format,
+        security_header,
+        primary_symbol,
+        entry_point,
+        execution_role,
+        sinks,
+        overlap_group_id,
+        dedupe_key,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const selectId = this.db.prepare("SELECT id FROM chunks WHERE chunk_uid = ?");
 
-  insertEmbeddings(rows: Array<{ chunkId: number; embedding: Buffer }>) {
-    this.embeddingRepository.insertEmbeddings(rows);
-  }
+    const now = new Date().toISOString();
+    const inserted: Array<{ id: number; chunkUid: string }> = [];
+    const tx = this.db.transaction(() => {
+      const seen = new Set<string>();
+      for (const chunk of chunks) {
+        if (seen.has(chunk.chunkUid)) continue;
+        seen.add(chunk.chunkUid);
 
-  getChunksForFile(fileId: number): ChunkRow[] {
-    return this.chunkRepository.getChunksForFile(fileId);
+        insert.run(
+          fileId,
+          chunk.chunkUid,
+          filepath,
+          chunk.chunkIndex,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.content,
+          chunk.contentHash,
+          this.normalizeOptionalString(chunk.chunkFormat),
+          this.serializeOptionalJson(chunk.securityHeader),
+          this.normalizeOptionalString(chunk.primarySymbol),
+          this.normalizeOptionalString(chunk.entryPoint),
+          this.normalizeOptionalString(chunk.executionRole),
+          this.serializeOptionalJson(chunk.sinks),
+          this.normalizeOptionalString(chunk.overlapGroupId),
+          this.normalizeOptionalString(chunk.dedupeKey),
+          now
+        );
+
+        const row = selectId.get(chunk.chunkUid) as { id: number } | undefined;
+        if (row?.id) inserted.push({ id: row.id, chunkUid: chunk.chunkUid });
+      }
+    });
+    tx();
+    return inserted;
   }
 
   getAllChunks(): ChunkRow[] {
-    return this.chunkRepository.getAllChunks();
-  }
-
-  querySimilar(embedding: Buffer, limit: number): Array<{ chunkId: number; distance: number }> {
-    return this.embeddingRepository.querySimilar(embedding, limit);
+    return this.db
+      .prepare(
+        `SELECT
+          id,
+          chunk_uid,
+          filepath,
+          chunk_index,
+          start_line,
+          end_line,
+          content,
+          chunk_format,
+          security_header,
+          primary_symbol,
+          entry_point,
+          execution_role,
+          sinks,
+          overlap_group_id,
+          dedupe_key
+        FROM chunks`
+      )
+      .all() as ChunkRow[];
   }
 
   getChunksByIds(ids: number[]): ChunkRow[] {
-    return this.chunkRepository.getChunksByIds(ids);
-  }
-
-  close() {
-    this.db.close();
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    return this.db
+      .prepare(
+        `SELECT
+          id,
+          chunk_uid,
+          filepath,
+          chunk_index,
+          start_line,
+          end_line,
+          content,
+          chunk_format,
+          security_header,
+          primary_symbol,
+          entry_point,
+          execution_role,
+          sinks,
+          overlap_group_id,
+          dedupe_key
+        FROM chunks WHERE id IN (${placeholders})`
+      )
+      .all(...ids) as ChunkRow[];
   }
 }

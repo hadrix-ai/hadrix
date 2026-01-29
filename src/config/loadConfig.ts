@@ -6,10 +6,8 @@ import {
   DEFAULT_ESLINT_EXTENSIONS,
   DEFAULT_EXCLUDES,
   DEFAULT_INCLUDE_EXTENSIONS,
-  DEFAULT_QUERIES,
   DEFAULT_SEMGREP_CONFIGS,
   defaultBaseUrl,
-  defaultEmbeddingModel,
   defaultLlmModel
 } from "./defaults.js";
 import {
@@ -36,15 +34,6 @@ export interface HadrixConfig {
     apiKey: string;
     headers: Record<string, string>;
   };
-  embeddings: {
-    provider: LLMProvider;
-    apiKey?: string;
-    model: string;
-    endpoint: string;
-    batchSize: number;
-    dimensions: number;
-    baseUrl?: string;
-  };
   llm: {
     provider: LLMProvider;
     apiKey?: string;
@@ -61,15 +50,8 @@ export interface HadrixConfig {
     includeExtensions: string[];
     exclude: string[];
   };
-  vector: {
-    extension: "vectorlite";
-    extensionPath?: string | null;
-    maxElements: number;
-  };
   sampling: {
-    queries: string[];
-    topKPerQuery: number;
-    maxChunks: number;
+    maxFiles: number;
     maxChunksPerFile: number;
   };
   staticScanners: {
@@ -100,6 +82,7 @@ export interface LoadConfigParams {
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
 }
+
 function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const value = (raw || "").toLowerCase();
   if (value === LLMProviderId.OpenAI) {
@@ -137,19 +120,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     readEnv("HADRIX_LLM_PROVIDER") || configFile.llm?.provider || provider
   );
 
-  const embeddingsProvider = normalizeProvider(
-    readEnv("HADRIX_EMBEDDINGS_PROVIDER") || configFile.embeddings?.provider || provider
-  );
-
-  const baseUrl =
-    readEnv("HADRIX_API_BASE") ||
-    configFile.api?.baseUrl ||
-    defaultBaseUrl(provider);
-
-  const embeddingsBaseUrl =
-    readEnv("HADRIX_EMBEDDINGS_BASE") ||
-    configFile.embeddings?.baseUrl ||
-    (embeddingsProvider === LLMProviderId.OpenAI ? baseUrl : defaultBaseUrl(embeddingsProvider));
+  const baseUrl = readEnv("HADRIX_API_BASE") || configFile.api?.baseUrl || defaultBaseUrl(provider);
 
   const llmBaseUrl =
     readEnv("HADRIX_LLM_BASE") ||
@@ -161,11 +132,6 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     configFile.api?.apiKey ||
     "";
 
-  const embeddingsApiKey =
-    readFirstEnv(["HADRIX_EMBEDDINGS_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
-    configFile.embeddings?.apiKey ||
-    apiKey;
-
   const llmApiKey =
     readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
     configFile.llm?.apiKey ||
@@ -176,15 +142,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     ...parseJsonEnv("HADRIX_API_HEADERS")
   };
 
-  const embeddingsModel =
-    readEnv("HADRIX_EMBEDDINGS_MODEL") || configFile.embeddings?.model || defaultEmbeddingModel(embeddingsProvider);
-  const llmModel =
-    readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
-
-  const embeddingsEndpoint =
-    readEnv("HADRIX_EMBEDDINGS_ENDPOINT") ||
-    configFile.embeddings?.endpoint ||
-    `${embeddingsBaseUrl.replace(/\/$/, "")}/v1/embeddings`;
+  const llmModel = readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
 
   const llmEndpoint =
     readEnv("HADRIX_LLM_ENDPOINT") ||
@@ -200,15 +158,6 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       baseUrl,
       apiKey,
       headers
-    },
-    embeddings: {
-      provider: embeddingsProvider,
-      apiKey: embeddingsApiKey,
-      baseUrl: embeddingsBaseUrl,
-      model: embeddingsModel,
-      endpoint: embeddingsEndpoint,
-      batchSize: configFile.embeddings?.batchSize ?? 64,
-      dimensions: configFile.embeddings?.dimensions ?? 1536
     },
     llm: {
       provider: llmProvider,
@@ -226,16 +175,8 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       includeExtensions: configFile.chunking?.includeExtensions ?? DEFAULT_INCLUDE_EXTENSIONS,
       exclude: configFile.chunking?.exclude ?? DEFAULT_EXCLUDES
     },
-    vector: {
-      extension: "vectorlite",
-      extensionPath:
-        readEnv("HADRIX_VECTOR_EXTENSION_PATH") || configFile.vector?.extensionPath || null,
-      maxElements: configFile.vector?.maxElements ?? 200000
-    },
     sampling: {
-      queries: configFile.sampling?.queries ?? DEFAULT_QUERIES,
-      topKPerQuery: configFile.sampling?.topKPerQuery ?? 8,
-      maxChunks: configFile.sampling?.maxChunks ?? 80,
+      maxFiles: configFile.sampling?.maxFiles ?? 80,
       maxChunksPerFile: configFile.sampling?.maxChunksPerFile ?? 5
     },
     staticScanners: {
