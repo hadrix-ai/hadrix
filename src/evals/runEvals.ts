@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
 import { readEnv } from "../config/env.js";
-import { enableFastMode } from "../config/fastMode.js";
+import { enableCheapMode } from "../config/cheapMode.js";
 import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
 import type { CoreFinding, ScanResult } from "../types.js";
@@ -75,6 +75,7 @@ export interface RunEvalsOptions {
   output?: "text" | "json";
   outDir?: string | null;
   skipStatic?: boolean;
+  cheap?: boolean;
   fast?: boolean;
   debug?: boolean;
   debugLogPath?: string | null;
@@ -401,8 +402,8 @@ export function formatEvalsSummaryMarkdown(result: RunEvalsResult): string {
 export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsResult> {
   const start = Date.now();
   const logger = options.logger ?? (() => {});
-  if (options.fast) {
-    enableFastMode();
+  if (options.cheap || options.fast) {
+    enableCheapMode();
   }
   const comparator = createOpenAiSummaryComparator();
   const specsToRun = ALL_EVAL_SPECS.filter((spec) => matchesSpec(spec, options.specId));

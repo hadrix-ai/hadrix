@@ -7,22 +7,40 @@ import {
   DEFAULT_EXCLUDES,
   DEFAULT_INCLUDE_EXTENSIONS,
   DEFAULT_SEMGREP_CONFIGS,
+  cheapLlmModel,
   defaultBaseUrl,
   defaultLlmModel
 } from "./defaults.js";
+import { isCheapModeEnabled } from "./cheapMode.js";
 import {
   ConfigMissingApiBaseUrlError,
-  ConfigMissingApiKeyError,
-  ConfigUnsupportedProviderError
+  ConfigMissingApiKeyError
 } from "../errors/config.errors.js";
 
 export const LLMProviderId = {
   OpenAI: "openai",
-  Anthropic: "anthropic",
+  Anthropic: "anthropic"
+} as const;
+
+const LLMProviderAlias = {
   Claude: "claude"
 } as const;
 
-export type LLMProvider = typeof LLMProviderId.OpenAI;
+export type LLMProvider = typeof LLMProviderId[keyof typeof LLMProviderId];
+
+const PROVIDER_API_KEY_ENV: Record<LLMProvider, string> = {
+  [LLMProviderId.OpenAI]: "OPENAI_API_KEY",
+  [LLMProviderId.Anthropic]: "ANTHROPIC_API_KEY"
+};
+
+const PROVIDER_API_BASE_ENV: Record<LLMProvider, string> = {
+  [LLMProviderId.OpenAI]: "OPENAI_API_BASE",
+  [LLMProviderId.Anthropic]: "ANTHROPIC_API_BASE"
+};
+
+const PROVIDER_ALIASES: Record<string, LLMProvider> = {
+  [LLMProviderAlias.Claude]: LLMProviderId.Anthropic
+};
 
 export interface HadrixConfig {
   projectRoot: string;
@@ -85,12 +103,12 @@ export interface LoadConfigParams {
 
 function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const value = (raw || "").toLowerCase();
-  if (value === LLMProviderId.OpenAI) {
+  if (!value) return LLMProviderId.OpenAI;
+  if (value === LLMProviderId.OpenAI || value === LLMProviderId.Anthropic) {
     return value as LLMProvider;
   }
-  if (value === LLMProviderId.Anthropic || value === LLMProviderId.Claude) {
-    throw new ConfigUnsupportedProviderError();
-  }
+  const alias = PROVIDER_ALIASES[value];
+  if (alias) return alias;
   return LLMProviderId.OpenAI;
 }
 
@@ -120,20 +138,23 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     readEnv("HADRIX_LLM_PROVIDER") || configFile.llm?.provider || provider
   );
 
-  const baseUrl = readEnv("HADRIX_API_BASE") || configFile.api?.baseUrl || defaultBaseUrl(provider);
+  const baseUrl =
+    readFirstEnv(["HADRIX_API_BASE", PROVIDER_API_BASE_ENV[provider]]) ||
+    configFile.api?.baseUrl ||
+    defaultBaseUrl(provider);
 
   const llmBaseUrl =
-    readEnv("HADRIX_LLM_BASE") ||
+    readFirstEnv(["HADRIX_LLM_BASE", PROVIDER_API_BASE_ENV[llmProvider]]) ||
     configFile.llm?.baseUrl ||
-    (llmProvider === LLMProviderId.OpenAI ? baseUrl : defaultBaseUrl(llmProvider));
+    (llmProvider === provider ? baseUrl : defaultBaseUrl(llmProvider));
 
   const apiKey =
-    readFirstEnv(["HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_API_KEY", PROVIDER_API_KEY_ENV[provider]]) ||
     configFile.api?.apiKey ||
     "";
 
   const llmApiKey =
-    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", "OPENAI_API_KEY"]) ||
+    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", PROVIDER_API_KEY_ENV[llmProvider]]) ||
     configFile.llm?.apiKey ||
     apiKey;
 
@@ -142,12 +163,19 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     ...parseJsonEnv("HADRIX_API_HEADERS")
   };
 
-  const llmModel = readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
+  const resolvedLlmModel =
+    readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
+  const llmModel = isCheapModeEnabled() ? cheapLlmModel(llmProvider) : resolvedLlmModel;
+
+  const defaultLlmEndpoint =
+    llmProvider === LLMProviderId.Anthropic
+      ? `${llmBaseUrl.replace(/\/$/, "")}/v1/messages`
+      : `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
 
   const llmEndpoint =
     readEnv("HADRIX_LLM_ENDPOINT") ||
     configFile.llm?.endpoint ||
-    `${llmBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+    defaultLlmEndpoint;
 
   const cfg: HadrixConfig = {
     projectRoot: params.projectRoot,

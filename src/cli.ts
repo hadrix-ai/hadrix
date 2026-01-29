@@ -5,7 +5,13 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
-import { DEFAULT_LLM_MODEL, FAST_LLM_MODEL, enableFastMode } from "./config/fastMode.js";
+import {
+  CHEAP_LLM_MODEL_ANTHROPIC,
+  CHEAP_LLM_MODEL_OPENAI,
+  DEFAULT_LLM_MODEL_ANTHROPIC,
+  DEFAULT_LLM_MODEL_OPENAI,
+  enableCheapMode
+} from "./config/cheapMode.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
@@ -160,7 +166,11 @@ program
   .option("--repo-full-name <name>", "Repository full name for metadata")
   .option("--repo-id <id>", "Repository id for metadata")
   .option("--commit-sha <sha>", "Commit SHA for metadata")
-  .option("--fast", `Use fast LLM mode (${FAST_LLM_MODEL}); fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}`)
+  .option(
+    "--cheap",
+    `Use cheap LLM mode (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}); cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
+  )
+  .option("--fast", "Alias for --cheap")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (
@@ -180,6 +190,7 @@ program
       repoFullName?: string;
       repoId?: string;
       commitSha?: string;
+      cheap?: boolean;
       fast?: boolean;
       debug?: boolean;
       debugLog?: string;
@@ -192,9 +203,9 @@ program
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const scanStart = Date.now();
     let statusMessage = "Running scan...";
-    const fastMode = Boolean(options.fast);
-    if (fastMode) {
-      enableFastMode();
+    const cheapMode = Boolean(options.cheap || options.fast);
+    if (cheapMode) {
+      enableCheapMode();
     }
 
     const envSupabaseUrl = readEnvRaw("HADRIX_SUPABASE_URL");
@@ -261,9 +272,9 @@ program
       }
       console.error(message);
     };
-    if (fastMode) {
+    if (cheapMode) {
       logger(
-        `Fast mode enabled (${FAST_LLM_MODEL}). Fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}.`
+        `Cheap mode enabled (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}). Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
       );
     }
 
@@ -373,7 +384,11 @@ program
   .option("--out-dir <path>", "Directory for eval artifacts (default .hadrix-evals)")
   .option("--json", "Output JSON instead of text")
   .option("--skip-static", "Skip static scanners")
-  .option("--fast", `Use fast LLM mode (${FAST_LLM_MODEL}); fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}`)
+  .option(
+    "--cheap",
+    `Use cheap LLM mode (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}); cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
+  )
+  .option("--fast", "Alias for --cheap")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (fixturesDir: string | undefined, options: {
@@ -390,6 +405,7 @@ program
     outDir?: string;
     json?: boolean;
     skipStatic?: boolean;
+    cheap?: boolean;
     fast?: boolean;
     debug?: boolean;
     debugLog?: string;
@@ -400,7 +416,7 @@ program
     const evalStart = Date.now();
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
-    const fastMode = Boolean(options.fast);
+    const cheapMode = Boolean(options.cheap || options.fast);
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
@@ -419,9 +435,9 @@ program
       }
       console.error(message);
     };
-    if (fastMode) {
+    if (cheapMode) {
       logger(
-        `Fast mode enabled (${FAST_LLM_MODEL}). Fast mode results in fewer results than default ${DEFAULT_LLM_MODEL}.`
+        `Cheap mode enabled (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}). Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
       );
     }
 
@@ -461,7 +477,8 @@ program
         summaryMatchThreshold: parseNumber(options.threshold),
         shortCircuitThreshold: parseNumber(options.shortCircuit),
         comparisonConcurrency: parseNumber(options.concurrency),
-        fast: fastMode,
+        cheap: cheapMode,
+        fast: options.fast,
         debug: options.debug,
         debugLogPath,
         output,

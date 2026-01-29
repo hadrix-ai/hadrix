@@ -94,8 +94,15 @@ Common environment variables:
 - `HADRIX_LLM_ENDPOINT`, `HADRIX_EMBEDDINGS_ENDPOINT`
 - `HADRIX_API_HEADERS` (JSON string)
 - `HADRIX_REPO_PATH`
+- `HADRIX_CHEAP_MODE` (set to `1` to use cheap LLM models)
 - `HADRIX_VECTOR_EXTENSION_PATH`
 - `HADRIX_SEMGREP_PATH`, `HADRIX_GITLEAKS_PATH`, `HADRIX_OSV_SCANNER_PATH`, `HADRIX_SEMGREP_CONFIG`
+- Provider fallbacks: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_BASE`, `ANTHROPIC_API_BASE`
+
+## Providers
+
+Hadrix supports `openai` (default) and `anthropic` (alias: `claude`) for LLM scans.
+For Anthropic, set `HADRIX_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (or `HADRIX_API_KEY`).
 
 ## Monorepo support
 
@@ -121,7 +128,7 @@ HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix evals
 
 Evals always use the OpenAI comparator for matching, using the same env as the scan LLM:
 - `HADRIX_LLM_API_KEY` (or `OPENAI_API_KEY`) must be set for eval comparisons.
-- Defaults to model `gpt-4o-mini`. If `HADRIX_LLM_PROVIDER=openai`, the comparator uses `HADRIX_LLM_MODEL` by default.
+- Defaults to model `gpt-5-nano`. If `HADRIX_LLM_PROVIDER=openai`, the comparator uses `HADRIX_LLM_MODEL` by default.
 
 Optional flags:
 

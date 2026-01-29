@@ -35,10 +35,19 @@ interface ResponsesApiResponse {
   error?: { message?: string };
 }
 
+interface AnthropicMessageResponse {
+  content?: Array<{
+    type?: string;
+    text?: string;
+  }>;
+  error?: { message?: string };
+}
+
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 5000;
+const ANTHROPIC_VERSION = "2023-06-01";
 
 function parseRetryAfterMs(value: string | null): number | null {
   if (!value) return null;
@@ -94,6 +103,10 @@ function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: strin
   if (provider === LLMProviderId.OpenAI) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
+  if (provider === LLMProviderId.Anthropic) {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = ANTHROPIC_VERSION;
+  }
 
   return headers;
 }
@@ -111,12 +124,79 @@ function splitSystemMessages(messages: ChatMessage[]): { system: string; rest: C
   return { system: systemParts.join("\n"), rest };
 }
 
+function extractOpenAiContent(payload: ChatCompletionResponse & ResponsesApiResponse): string | null {
+  const content = payload.choices?.[0]?.message?.content;
+  if (content) return content;
+
+  const outputText = payload.output_text;
+  if (outputText && outputText.trim()) return outputText;
+
+  const outputParts =
+    payload.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((part) => part.text)
+      .filter((text): text is string => Boolean(text))
+      .join("") ?? "";
+
+  if (outputParts.trim()) return outputParts;
+  return null;
+}
+
+function extractAnthropicContent(payload: AnthropicMessageResponse): string | null {
+  const content =
+    payload.content
+      ?.map((part) => part.text)
+      .filter((text): text is string => Boolean(text))
+      .join("") ?? "";
+  if (content.trim()) return content;
+  return null;
+}
+
 export async function runChatCompletion(config: HadrixConfig, messages: ChatMessage[]): Promise<string> {
   const provider = config.llm.provider;
   const apiKey = config.llm.apiKey || config.api.apiKey;
 
   if (!apiKey) {
     throw new LlmMissingApiKeyError();
+  }
+
+  if (provider === LLMProviderId.Anthropic) {
+    const { system, rest } = splitSystemMessages(messages);
+    const body: Record<string, unknown> = {
+      model: config.llm.model,
+      messages: rest.map((message) => ({
+        role: message.role,
+        content: message.content
+      })),
+      max_tokens: config.llm.maxTokens,
+      temperature: config.llm.temperature
+    };
+    if (system.trim()) {
+      body.system = system;
+    }
+
+    const response = await safeFetch(
+      config.llm.endpoint,
+      {
+        method: "POST",
+        headers: buildHeaders(config, provider, apiKey),
+        body: JSON.stringify(body)
+      },
+      provider,
+      "LLM"
+    );
+
+    const payload = (await response.json()) as AnthropicMessageResponse;
+    if (!response.ok) {
+      const message = payload.error?.message || `LLM request failed with status ${response.status}`;
+      throw new ProviderApiResponseError(message);
+    }
+
+    const content = extractAnthropicContent(payload);
+    if (content) return content;
+
+    const preview = JSON.stringify(payload).slice(0, 2000);
+    throw new Error(`LLM response missing message content. Response preview: ${preview}`);
   }
 
   const openAiModel = config.llm.model || "";
@@ -162,20 +242,8 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     throw new ProviderApiResponseError(message);
   }
 
-  const content = payload.choices?.[0]?.message?.content;
+  const content = extractOpenAiContent(payload);
   if (content) return content;
-
-  const outputText = payload.output_text;
-  if (outputText && outputText.trim()) return outputText;
-
-  const outputParts =
-    payload.output
-      ?.flatMap((item) => item.content ?? [])
-      .map((part) => part.text)
-      .filter((text): text is string => Boolean(text))
-      .join("") ?? "";
-
-  if (outputParts.trim()) return outputParts;
 
   const preview = JSON.stringify(payload).slice(0, 2000);
   throw new Error(`LLM response missing message content. Response preview: ${preview}`);
