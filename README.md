@@ -20,7 +20,7 @@ npm run dev -- setup
 ```
 
 ```bash
-HADRIX_PROVIDER=gemini \
+HADRIX_PROVIDER=openai \
 HADRIX_API_KEY=... \
 npm run dev -- scan /path/to/repo
 ```
@@ -40,7 +40,7 @@ Or build once and run the compiled CLI:
 ```bash
 npm run build
 node dist/cli.js setup
-HADRIX_PROVIDER=gemini HADRIX_API_KEY=... node dist/cli.js scan /path/to/repo
+HADRIX_PROVIDER=openai HADRIX_API_KEY=... node dist/cli.js scan /path/to/repo
 ```
 
 ## Run after installing globally
@@ -264,3 +264,7 @@ hadrix scan
                                 v
                            Findings output
 ```
+
+## License
+
+Apache License 2.0. See `LICENSE`.

@@ -2,6 +2,7 @@
   "name": "hadrix",
   "version": "0.1.0",
   "description": "Hadrix open source CLI",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "hadrix": "dist/cli.js"
