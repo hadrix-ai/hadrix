@@ -55,7 +55,7 @@ export interface RunScanOptions {
   logger?: (message: string) => void;
   debug?: boolean;
   debugLogPath?: string | null;
-  supabase?: { connectionString?: string; schemaSnapshotPath?: string } | null;
+  supabase?: { connectionString?: string; schemaSnapshotPath?: string; useCli?: boolean } | null;
 }
 
 type ChunkRow = {
@@ -1098,11 +1098,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     }
   
     let supabaseFindings: StaticFinding[] = [];
-    if (options.supabase?.connectionString || options.supabase?.schemaSnapshotPath) {
+    if (options.supabase?.connectionString || options.supabase?.schemaSnapshotPath || options.supabase?.useCli) {
       log("Fetching Supabase schema...");
       const supabaseResult = await runSupabaseSchemaScan({
         connectionString: options.supabase?.connectionString,
         schemaSnapshotPath: options.supabase?.schemaSnapshotPath,
+        useCli: options.supabase?.useCli ?? false,
         projectRoot: config.projectRoot,
         stateDir: config.stateDir,
         logger: log

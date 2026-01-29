@@ -269,6 +269,239 @@ const DEDUPE_CATEGORY_RULES: Array<{ key: string; patterns: RegExp[] }> = [
   { key: "permissive_cors", patterns: [/cors/i, /cross[- ]origin/i] },
   { key: "unbounded_query", patterns: [/unbounded/i, /missing limit/i, /no pagination/i, /missing pagination/i] }
 ];
+const CATEGORY_KEYS = [
+  "injection",
+  "access_control",
+  "authentication",
+  "secrets",
+  "business_logic",
+  "dependency_risks",
+  "configuration"
+];
+const CATEGORY_SET = new Set(CATEGORY_KEYS);
+const CATEGORY_ALIASES: Record<string, string> = {
+  accesscontrol: "access_control",
+  access_control: "access_control",
+  accesscontrolbypass: "access_control",
+  authorization: "access_control",
+  authz: "access_control",
+  idor: "access_control",
+  rls: "access_control",
+  tenant_isolation: "access_control",
+  row_level_security: "access_control",
+  broken_access_control: "access_control",
+  authentication: "authentication",
+  auth: "authentication",
+  authn: "authentication",
+  authentication_failures: "authentication",
+  auth_failures: "authentication",
+  jwt: "authentication",
+  session: "authentication",
+  login: "authentication",
+  cryptographic_failures: "authentication",
+  secrets: "secrets",
+  secret: "secrets",
+  credentials: "secrets",
+  credential: "secrets",
+  api_key: "secrets",
+  private_key: "secrets",
+  plaintext_secrets: "secrets",
+  injection: "injection",
+  sql_injection: "injection",
+  command_injection: "injection",
+  xss: "injection",
+  configuration: "configuration",
+  misconfiguration: "configuration",
+  security_misconfiguration: "configuration",
+  logging_monitoring_failures: "configuration",
+  logging_and_monitoring_failures: "configuration",
+  software_data_integrity_failures: "configuration",
+  software_and_data_integrity_failures: "configuration",
+  rate_limiting: "configuration",
+  audit_logging: "configuration",
+  timeout: "configuration",
+  unbounded_query: "configuration",
+  cors: "configuration",
+  security_headers: "configuration",
+  insecure_design: "business_logic",
+  business_logic: "business_logic",
+  dependency_risks: "dependency_risks",
+  vulnerable_dependencies: "dependency_risks",
+  supply_chain: "dependency_risks"
+};
+const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
+  {
+    key: "dependency_risks",
+    patterns: [
+      /dependency/i,
+      /dependencies/i,
+      /vulnerable dependenc/i,
+      /supply chain/i,
+      /\bcve-/i,
+      /\bghsa-/i,
+      /\bosv\b/i
+    ]
+  },
+  {
+    key: "injection",
+    patterns: [
+      /injection/i,
+      /sql injection/i,
+      /\bxss\b/i,
+      /cross[- ]?site scripting/i,
+      /command injection/i,
+      /shell injection/i,
+      /\brce\b/i,
+      /code execution/i,
+      /unsafe sql/i,
+      /unsafe query/i,
+      /\beval\b/i,
+      /new function/i,
+      /prototype pollution/i
+    ]
+  },
+  {
+    key: "access_control",
+    patterns: [
+      /access control/i,
+      /authorization/i,
+      /authorisation/i,
+      /\bauthz\b/i,
+      /\bidor\b/i,
+      /insecure direct object/i,
+      /\brls\b/i,
+      /row[- ]level/i,
+      /tenant/i,
+      /org[-_ ]id/i,
+      /ownership/i,
+      /role enforcement/i,
+      /privilege/i
+    ]
+  },
+  {
+    key: "secrets",
+    patterns: [
+      /secret/i,
+      /credential/i,
+      /api key/i,
+      /private key/i,
+      /plaintext/i,
+      /token exposure/i,
+      /token leak/i,
+      /expos\w+ token/i,
+      /sensitive data/i,
+      /\bpii\b/i,
+      /\bemail\b/i
+    ]
+  },
+  {
+    key: "authentication",
+    patterns: [
+      /authentication/i,
+      /\bauthn\b/i,
+      /login/i,
+      /\bjwt\b/i,
+      /session/i,
+      /token/i,
+      /password/i,
+      /\bmfa\b/i,
+      /cryptograph/i
+    ]
+  },
+  {
+    key: "configuration",
+    patterns: [
+      /misconfig/i,
+      /configuration/i,
+      /\bcors\b/i,
+      /\bcsp\b/i,
+      /\bhsts\b/i,
+      /security header/i,
+      /\bheader\b/i,
+      /debug/i,
+      /logging/i,
+      /monitor/i,
+      /audit log/i,
+      /rate limit/i,
+      /throttl/i,
+      /timeout/i,
+      /\bdos\b/i,
+      /denial of service/i,
+      /resilience/i,
+      /pagination/i,
+      /unbounded/i,
+      /integrity/i
+    ]
+  },
+  { key: "business_logic", patterns: [/business logic/i, /insecure design/i, /logic flaw/i] }
+];
+
+function normalizeCategoryToken(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeCategoryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function countCategoryMentions(value: string): number {
+  const normalized = normalizeCategoryText(value);
+  let count = 0;
+  for (const key of CATEGORY_KEYS) {
+    const token = key.replace(/_/g, " ");
+    if (normalized.includes(token)) count += 1;
+  }
+  return count;
+}
+
+function inferCategoryFromText(value: string): string {
+  const normalized = normalizeCategoryText(value);
+  if (!normalized) return "";
+  for (const rule of CATEGORY_INFERENCE_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(normalized))) {
+      return rule.key;
+    }
+  }
+  return "";
+}
+
+function buildCategoryInferenceText(
+  finding: FindingLike,
+  details: Record<string, unknown>,
+  extra?: string
+): string {
+  const parts = [
+    extra ?? "",
+    finding.summary ?? "",
+    extractFindingRuleId(finding),
+    extractFindingKind(finding),
+    typeof details.rationale === "string" ? details.rationale : "",
+    typeof details.recommendation === "string" ? details.recommendation : "",
+    typeof details.description === "string" ? details.description : ""
+  ];
+  return parts.filter((part) => typeof part === "string" && part.trim()).join(" ");
+}
+
+function normalizeCategoryValue(raw: string): string {
+  const normalized = normalizeCategoryToken(raw);
+  if (!normalized) return "";
+  if (CATEGORY_SET.has(normalized)) return normalized;
+  const alias = CATEGORY_ALIASES[normalized];
+  if (alias) return alias;
+  if (countCategoryMentions(raw) > 1) return "";
+  return inferCategoryFromText(raw);
+}
 
 function hasPathSegment(filepath: string, segment: string): boolean {
   return new RegExp(`(^|/)${segment}(/|$)`).test(filepath);
@@ -393,7 +626,12 @@ function extractCandidateTypeForMerge(finding: FindingLike): string {
 function extractFindingCategory(finding: FindingLike): string {
   const details = toRecord(finding.details);
   const raw = details.category ?? details.findingCategory ?? details.finding_category;
-  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  const rawValue = typeof raw === "string" ? raw.trim() : "";
+  const normalized = normalizeCategoryValue(rawValue);
+  if (normalized) return normalized;
+  const includeRaw = rawValue && countCategoryMentions(rawValue) <= 1;
+  const text = buildCategoryInferenceText(finding, details, includeRaw ? rawValue : "");
+  return inferCategoryFromText(text);
 }
 
 function extractDetectorId(finding: FindingLike, sourceFallback?: string): string {
@@ -1348,6 +1586,10 @@ export function normalizeRepositoryFinding(
   if (dedupeKey) {
     details.dedupeKey = dedupeKey;
     details.identityKey = dedupeKey;
+  }
+  const normalizedCategory = extractFindingCategory({ ...finding, details });
+  if (normalizedCategory) {
+    details.category = normalizedCategory;
   }
   return {
     ...finding,

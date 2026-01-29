@@ -1,5 +1,8 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import pg from "pg";
 import type { StaticFinding, Severity } from "../types.js";
 
@@ -10,6 +13,14 @@ const ROUTINE_GRANTEES = [...CLIENT_GRANTEES, "service_role"];
 const WRITE_PRIVILEGES = new Set(["INSERT", "UPDATE", "DELETE", "TRUNCATE"]);
 const SYSTEM_SCHEMA_FILTER = ["pg_catalog", "information_schema"];
 const SYSTEM_SCHEMA_LIKE = ["pg_toast%", "pg_temp_%"];
+const SUPABASE_CLI = "supabase";
+const DEFAULT_SCHEMA_LIST = ["public", "auth", "storage"];
+const STORAGE_EXCLUDE_TABLES = [
+  "storage.objects",
+  "storage.migrations",
+  "storage.s3_multipart_uploads",
+  "storage.s3_multipart_uploads_parts"
+];
 
 type SupabaseSchemaScanResult = {
   findings: StaticFinding[];
@@ -31,6 +42,20 @@ type SupabaseSchemaMetadata = {
   routinePrivileges: Array<Record<string, unknown>>;
   storageBuckets: Array<Record<string, unknown>>;
   errors: Array<{ stage: string; message: string }>;
+};
+
+type SupabaseCliRunResult = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
+
+type SupabaseCliError = Error & { code?: string };
+
+type LoggerControls = {
+  pause?: () => void;
+  resume?: () => void;
 };
 
 function normalizeRelPath(value: string): string {
@@ -63,6 +88,490 @@ function normalizeRoleList(value: unknown): string[] {
       .filter(Boolean);
   }
   return [];
+}
+
+function findOnPath(command: string): string | null {
+  const pathEnv = process.env.PATH ?? "";
+  const parts = pathEnv.split(path.delimiter);
+  const extList = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""];
+  for (const dir of parts) {
+    for (const ext of extList) {
+      const candidate = path.join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveSupabaseCliPath(): string | null {
+  return findOnPath(SUPABASE_CLI);
+}
+
+async function runSupabaseCli(
+  command: string,
+  args: string[],
+  cwd: string
+): Promise<SupabaseCliRunResult> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const proc = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", (err) => reject(err));
+    proc.on("close", (code) => {
+      resolve({
+        exitCode: code,
+        stdout,
+        stderr,
+        durationMs: Date.now() - start
+      });
+    });
+  });
+}
+
+async function runSupabaseCliInteractive(
+  command: string,
+  args: string[],
+  cwd: string
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(command, args, {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (err) => reject(err));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Supabase CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+}
+
+function isSupabaseLinkRequired(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("cannot find project ref") ||
+    (normalized.includes("project ref") && normalized.includes("supabase link")) ||
+    normalized.includes("project not linked");
+}
+
+function isSupabaseLoginRequired(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("access token not provided") ||
+    normalized.includes("supabase login") ||
+    normalized.includes("supabase_access_token");
+}
+
+async function runSupabaseCliDump(params: {
+  cwd: string;
+  outputPath: string;
+  schemas?: string[];
+  dataOnly?: boolean;
+  exclude?: string[];
+}): Promise<void> {
+  const cliPath = resolveSupabaseCliPath();
+  if (!cliPath) {
+    throw new Error("Supabase CLI not found. Install it and run `supabase login` + `supabase link`.");
+  }
+  const args = [
+    "db",
+    "dump",
+    "--linked",
+    "--file",
+    params.outputPath
+  ];
+  if (params.schemas && params.schemas.length > 0) {
+    args.push("--schema", params.schemas.join(","));
+  }
+  if (params.exclude && params.exclude.length > 0) {
+    args.push("--exclude", params.exclude.join(","));
+  }
+  if (params.dataOnly) {
+    args.push("--data-only");
+  }
+  const result = await runSupabaseCli(cliPath, args, params.cwd);
+  if (result.exitCode !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim();
+    const message = detail
+      ? `Supabase CLI failed: ${detail}`
+      : "Supabase CLI failed to dump schema. Ensure you're logged in and the project is linked.";
+    const error: SupabaseCliError = new Error(message);
+    if (detail && isSupabaseLoginRequired(detail)) {
+      error.code = "SUPABASE_LOGIN_REQUIRED";
+    }
+    if (detail && isSupabaseLinkRequired(detail)) {
+      error.code = "SUPABASE_LINK_REQUIRED";
+    }
+    throw error;
+  }
+}
+
+async function ensureSupabaseLoggedIn(cwd: string, log: (message: string) => void): Promise<void> {
+  const cliPath = resolveSupabaseCliPath();
+  if (!cliPath) {
+    throw new Error("Supabase CLI not found. Install it and run `supabase login` + `supabase link`.");
+  }
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "Supabase CLI is not authenticated. Run `supabase login` or set SUPABASE_ACCESS_TOKEN."
+    );
+  }
+  const controls = log as LoggerControls;
+  controls.pause?.();
+  if (process.stderr.isTTY) {
+    process.stderr.write("\n");
+  }
+  log("Supabase CLI not authenticated. Launching `supabase login`...");
+  await runSupabaseCliInteractive(cliPath, ["login"], cwd);
+  log("Finished supabase login.");
+  controls.resume?.();
+}
+
+async function ensureSupabaseLinked(cwd: string, log: (message: string) => void): Promise<void> {
+  const cliPath = resolveSupabaseCliPath();
+  if (!cliPath) {
+    throw new Error("Supabase CLI not found. Install it and run `supabase login` + `supabase link`.");
+  }
+  if (!process.stdin.isTTY) {
+    throw new Error("Supabase project is not linked. Run `supabase link` in this repo to continue.");
+  }
+  const controls = log as LoggerControls;
+  controls.pause?.();
+  if (process.stderr.isTTY) {
+    process.stderr.write("\n");
+  }
+  log("Supabase project not linked. Launching `supabase link`...");
+  await runSupabaseCliInteractive(cliPath, ["link"], cwd);
+  log("Finished supabase link.");
+  controls.resume?.();
+}
+
+async function runSupabaseCliDumpWithRetry(
+  params: {
+    cwd: string;
+    outputPath: string;
+    schemas?: string[];
+    dataOnly?: boolean;
+    exclude?: string[];
+  },
+  log: (message: string) => void
+): Promise<void> {
+  let attemptedLogin = false;
+  let attemptedLink = false;
+  while (true) {
+    try {
+      await runSupabaseCliDump(params);
+      return;
+    } catch (err) {
+      const error = err as SupabaseCliError;
+      if (error?.code === "SUPABASE_LOGIN_REQUIRED" && !attemptedLogin) {
+        attemptedLogin = true;
+        await ensureSupabaseLoggedIn(params.cwd, log);
+        continue;
+      }
+      if (error?.code === "SUPABASE_LINK_REQUIRED" && !attemptedLink) {
+        attemptedLink = true;
+        await ensureSupabaseLinked(params.cwd, log);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+function splitIdentifierParts(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === "\"") {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === "." && !inQuotes) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) parts.push(current);
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+function parseQualifiedName(raw: string): { schema: string; name: string } | null {
+  const cleaned = raw.trim().replace(/;$/, "");
+  if (!cleaned) return null;
+  const parts = splitIdentifierParts(cleaned);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) {
+    return { schema: "public", name: parts[0] };
+  }
+  const schema = parts[0];
+  const name = parts[1];
+  if (!schema || !name) return null;
+  return { schema, name };
+}
+
+function parseRoleList(raw: string): string[] {
+  const cleaned = raw
+    .replace(/WITH GRANT OPTION/gi, "")
+    .replace(/GRANTED BY\s+\S+/gi, "")
+    .trim();
+  return cleaned
+    .split(",")
+    .map((role) => role.trim().replace(/^\"|\"$/g, "").toLowerCase())
+    .filter(Boolean);
+}
+
+function parsePrivilegeList(raw: string): string[] {
+  const cleaned = raw.replace(/ALL PRIVILEGES/gi, "ALL").trim();
+  if (/^ALL$/i.test(cleaned)) {
+    return ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"];
+  }
+  return cleaned
+    .split(",")
+    .map((priv) => priv.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function splitSqlValues(valueText: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inString = false;
+  for (let i = 0; i < valueText.length; i += 1) {
+    const char = valueText[i];
+    if (char === "'") {
+      if (inString && valueText[i + 1] === "'") {
+        current += "'";
+        i += 1;
+        continue;
+      }
+      inString = !inString;
+      continue;
+    }
+    if (char === "," && !inString) {
+      values.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) values.push(current.trim());
+  return values;
+}
+
+function coerceSqlValue(raw: string): string | boolean | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.toUpperCase() === "NULL") return null;
+  if (trimmed.toLowerCase() === "true") return true;
+  if (trimmed.toLowerCase() === "false") return false;
+  return trimmed;
+}
+
+function parseStorageBucketsFromSql(sql: string, errors: SupabaseSchemaMetadata["errors"]): Array<Record<string, unknown>> {
+  const buckets: Array<Record<string, unknown>> = [];
+  const insertRegex = /INSERT\s+INTO\s+storage\.buckets\s*\(([^)]+)\)\s+VALUES\s*\(([^;]+)\);/gi;
+  for (const match of sql.matchAll(insertRegex)) {
+    const columns = match[1]
+      .split(",")
+      .map((col) => col.trim().replace(/^\"|\"$/g, "").toLowerCase());
+    const values = splitSqlValues(match[2]);
+    if (columns.length !== values.length) {
+      errors.push({ stage: "storage_buckets_parse", message: "Column/value length mismatch in INSERT." });
+      continue;
+    }
+    const row: Record<string, unknown> = {};
+    for (let i = 0; i < columns.length; i += 1) {
+      row[columns[i]] = coerceSqlValue(values[i]);
+    }
+    buckets.push(row);
+  }
+
+  const copyRegex = /COPY\s+storage\.buckets\s*\(([^)]+)\)\s+FROM stdin;\n([\s\S]*?)\n\\\./gi;
+  for (const match of sql.matchAll(copyRegex)) {
+    const columns = match[1]
+      .split(",")
+      .map((col) => col.trim().replace(/^\"|\"$/g, "").toLowerCase());
+    const rows = match[2].split("\n");
+    for (const line of rows) {
+      if (!line.trim()) continue;
+      const values = line.split("\t");
+      const row: Record<string, unknown> = {};
+      for (let i = 0; i < columns.length; i += 1) {
+        const raw = values[i] ?? "";
+        if (raw === "\\N") {
+          row[columns[i]] = null;
+        } else if (raw === "t" || raw === "true") {
+          row[columns[i]] = true;
+        } else if (raw === "f" || raw === "false") {
+          row[columns[i]] = false;
+        } else {
+          row[columns[i]] = raw;
+        }
+      }
+      buckets.push(row);
+    }
+  }
+
+  return buckets;
+}
+
+function parseSchemaDumpToMetadata(
+  schemaSql: string,
+  storageSql: string
+): SupabaseSchemaMetadata {
+  const errors: SupabaseSchemaMetadata["errors"] = [];
+  const rlsByTable = new Map<string, { enabled: boolean; forced: boolean }>();
+  const policies: Array<Record<string, unknown>> = [];
+  const tablePrivileges: Array<Record<string, unknown>> = [];
+  const columnPrivileges: Array<Record<string, unknown>> = [];
+  const columnAcl: Array<Record<string, unknown>> = [];
+  const routinePrivileges: Array<Record<string, unknown>> = [];
+  const tables: Array<Record<string, unknown>> = [];
+
+  const tableRegex = /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([^\s(]+)\s*\(/gi;
+  for (const match of schemaSql.matchAll(tableRegex)) {
+    const parsed = parseQualifiedName(match[1]);
+    if (!parsed) continue;
+    tables.push({ table_schema: parsed.schema, table_name: parsed.name });
+    const key = tableKey(parsed.schema, parsed.name);
+    if (!rlsByTable.has(key)) {
+      rlsByTable.set(key, { enabled: false, forced: false });
+    }
+  }
+
+  const rlsRegex = /ALTER\s+TABLE(?:\s+ONLY)?\s+([^\s;]+)\s+(ENABLE|DISABLE|FORCE)\s+ROW\s+LEVEL\s+SECURITY/gi;
+  for (const match of schemaSql.matchAll(rlsRegex)) {
+    const parsed = parseQualifiedName(match[1]);
+    if (!parsed) continue;
+    const key = tableKey(parsed.schema, parsed.name);
+    const entry = rlsByTable.get(key) ?? { enabled: false, forced: false };
+    const action = match[2].toUpperCase();
+    if (action === "ENABLE") entry.enabled = true;
+    if (action === "DISABLE") entry.enabled = false;
+    if (action === "FORCE") entry.forced = true;
+    rlsByTable.set(key, entry);
+  }
+
+  const policyRegex = /CREATE\s+POLICY\s+([\s\S]+?)\s+ON\s+([^\s]+)\s+([\s\S]*?);/gi;
+  for (const match of schemaSql.matchAll(policyRegex)) {
+    const policyName = match[1].trim().replace(/^\"|\"$/g, "");
+    const target = parseQualifiedName(match[2]);
+    if (!target) continue;
+    const tail = match[3];
+    const cmdMatch = tail.match(/\bFOR\b\s+(ALL|SELECT|INSERT|UPDATE|DELETE)\b/i);
+    const toMatch = tail.match(/\bTO\b\s+([^\n]+?)(?:\bUSING\b|\bWITH\b|\bFOR\b|$)/i);
+    const rolesRaw = toMatch ? toMatch[1].trim() : "";
+    policies.push({
+      schemaname: target.schema,
+      tablename: target.name,
+      policyname: policyName,
+      roles: rolesRaw,
+      cmd: cmdMatch ? cmdMatch[1].toUpperCase() : null
+    });
+  }
+
+  const grantTableRegex = /GRANT\s+([\s\S]+?)\s+ON\s+TABLE\s+([^\s]+)\s+TO\s+([\s\S]+?);/gi;
+  for (const match of schemaSql.matchAll(grantTableRegex)) {
+    const privilegePart = match[1].trim();
+    const target = parseQualifiedName(match[2]);
+    if (!target) continue;
+    const key = tableKey(target.schema, target.name);
+    if (!rlsByTable.has(key)) {
+      rlsByTable.set(key, { enabled: false, forced: false });
+    }
+    const roles = parseRoleList(match[3]);
+    const columnMatch = privilegePart.match(/^(\w+)\s*\(([^)]+)\)/i);
+    if (columnMatch) {
+      const priv = columnMatch[1].toUpperCase();
+      for (const role of roles) {
+        columnPrivileges.push({
+          table_schema: target.schema,
+          table_name: target.name,
+          grantee: role,
+          privilege_type: priv
+        });
+      }
+      columnAcl.push({
+        table_schema: target.schema,
+        table_name: target.name,
+        has_column_acl: true
+      });
+      continue;
+    }
+    const privileges = parsePrivilegeList(privilegePart);
+    for (const role of roles) {
+      for (const priv of privileges) {
+        tablePrivileges.push({
+          table_schema: target.schema,
+          table_name: target.name,
+          grantee: role,
+          privilege_type: priv
+        });
+      }
+    }
+  }
+
+  const grantRoutineRegex = /GRANT\s+EXECUTE\s+ON\s+(?:FUNCTION|PROCEDURE)\s+([^\s]+)\s+TO\s+([\s\S]+?);/gi;
+  for (const match of schemaSql.matchAll(grantRoutineRegex)) {
+    const targetRaw = match[1].trim();
+    const beforeArgs = targetRaw.split("(")[0];
+    const target = parseQualifiedName(beforeArgs);
+    if (!target) continue;
+    const roles = parseRoleList(match[2]);
+    for (const role of roles) {
+      routinePrivileges.push({
+        routine_schema: target.schema,
+        routine_name: target.name,
+        specific_name: "",
+        grantee: role
+      });
+    }
+  }
+
+  const storageBuckets = parseStorageBucketsFromSql(storageSql, errors);
+  const rls = Array.from(rlsByTable.entries()).map(([key, state]) => {
+    const [schema, table] = key.split(".");
+    return {
+      table_schema: schema,
+      table_name: table,
+      rls_enabled: state.enabled,
+      rls_forced: state.forced
+    };
+  });
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    tables,
+    columns: [],
+    indexes: [],
+    constraints: [],
+    policies,
+    rls,
+    tablePrivileges,
+    columnAcl,
+    columnPrivileges,
+    routines: [],
+    routinePrivileges,
+    storageBuckets,
+    errors
+  };
 }
 
 function schemaFilter(column: string): string {
@@ -112,12 +621,14 @@ function makeFinding(params: {
 export async function runSupabaseSchemaScan(params: {
   connectionString?: string;
   schemaSnapshotPath?: string;
+  useCli?: boolean;
   projectRoot: string;
   stateDir: string;
   logger?: (message: string) => void;
 }): Promise<SupabaseSchemaScanResult> {
   const log = params.logger ?? (() => {});
   const fromSnapshot = Boolean(params.schemaSnapshotPath);
+  const fromCli = Boolean(params.useCli);
   let schemaPath = "";
   let metadata: SupabaseSchemaMetadata;
   if (params.schemaSnapshotPath) {
@@ -350,8 +861,45 @@ ORDER BY name;
     };
 
     await writeFile(schemaPath, JSON.stringify(metadata, null, 2), "utf-8");
+  } else if (params.useCli) {
+    let tmpDir: string | null = null;
+    try {
+      tmpDir = await mkdtemp(path.join(tmpdir(), "hadrix-supabase-"));
+      const schemaDumpPath = path.join(tmpDir, "schema.sql");
+      const storageDumpPath = path.join(tmpDir, "storage.sql");
+      await runSupabaseCliDumpWithRetry(
+        {
+          cwd: params.projectRoot,
+          outputPath: schemaDumpPath,
+          schemas: DEFAULT_SCHEMA_LIST
+        },
+        log
+      );
+      await runSupabaseCliDumpWithRetry(
+        {
+          cwd: params.projectRoot,
+          outputPath: storageDumpPath,
+          schemas: ["storage"],
+          dataOnly: true,
+          exclude: STORAGE_EXCLUDE_TABLES
+        },
+        log
+      );
+      const schemaSql = await readFile(schemaDumpPath, "utf-8");
+      const storageSql = await readFile(storageDumpPath, "utf-8");
+      metadata = parseSchemaDumpToMetadata(schemaSql, storageSql);
+
+      const schemaDir = path.join(params.stateDir, "supabase");
+      schemaPath = path.join(schemaDir, "schema.json");
+      await mkdir(schemaDir, { recursive: true });
+      await writeFile(schemaPath, JSON.stringify(metadata, null, 2), "utf-8");
+    } finally {
+      if (tmpDir) {
+        await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
   } else {
-    throw new Error("Supabase schema scan requires a connection string or schema snapshot path.");
+    throw new Error("Supabase schema scan requires a connection string, CLI access, or schema snapshot path.");
   }
 
   const schemaRelPath = normalizeRelPath(path.relative(params.projectRoot, schemaPath));
@@ -619,7 +1167,9 @@ ORDER BY name;
     log(
       fromSnapshot
         ? `Supabase schema scan loaded snapshot from ${schemaRelPath}.`
-        : `Supabase schema scan complete. Metadata written to ${schemaRelPath}.`
+        : fromCli
+          ? `Supabase schema scan via CLI complete. Metadata written to ${schemaRelPath}.`
+          : `Supabase schema scan complete. Metadata written to ${schemaRelPath}.`
     );
   }
 

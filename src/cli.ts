@@ -201,7 +201,7 @@ program
     const isJsonOutput = format === "json" || format === "core-json";
     const useSpinner = !isJsonOutput && process.stderr.isTTY;
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
-    const scanStart = Date.now();
+    let scanStart = Date.now();
     let statusMessage = "Running scan...";
     const cheapMode = Boolean(options.cheap || options.fast);
     if (cheapMode) {
@@ -213,6 +213,7 @@ program
     const envSupabaseSchema = readEnvRaw("HADRIX_SUPABASE_SCHEMA_PATH");
     let supabaseConnectionString: string | null = null;
     let supabaseSchemaPath: string | null = null;
+    let useSupabaseCli = false;
     const wantsSupabase = Boolean(
       options.supabase ||
         options.supabaseUrl ||
@@ -225,18 +226,13 @@ program
     if (wantsSupabase) {
       supabaseSchemaPath = options.supabaseSchema ?? envSupabaseSchema ?? null;
       if (!supabaseSchemaPath) {
-        let conn = options.supabaseUrl ?? envSupabaseUrl ?? "";
-        let password = options.supabasePassword ?? envSupabasePassword ?? null;
-        if (!conn && process.stdin.isTTY && !isJsonOutput) {
-          conn = await promptHidden("Supabase project URL: ");
+        const conn = options.supabaseUrl ?? envSupabaseUrl ?? "";
+        const password = options.supabasePassword ?? envSupabasePassword ?? null;
+        if (conn.trim()) {
+          supabaseConnectionString = buildSupabaseConnectionString(conn, password);
+        } else {
+          useSupabaseCli = true;
         }
-        if (!password && process.stdin.isTTY && !isJsonOutput) {
-          password = await promptHidden("Supabase database password: ");
-        }
-        if (!conn.trim()) {
-          throw new Error("Supabase connection string is required.");
-        }
-        supabaseConnectionString = buildSupabaseConnectionString(conn, password);
       }
     } else if (process.stdin.isTTY && !isJsonOutput) {
       const dbPrompt = [
@@ -250,26 +246,54 @@ program
         defaultIndex: 1
       });
       if (choice === 0) {
-        const conn = await promptHidden("Supabase project URL: ");
-        const password = await promptHidden("Supabase database password: ");
-        if (conn.trim()) {
-          supabaseConnectionString = buildSupabaseConnectionString(conn, password);
-        }
+        useSupabaseCli = true;
       }
     }
 
     const formatElapsed = () => formatDuration(Date.now() - scanStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+    let pausedAt: number | null = null;
+    let loggerPaused = false;
 
-    const logger = (message: string) => {
+    type ScanLogger = ((message: string) => void) & {
+      pause?: () => void;
+      resume?: () => void;
+    };
+
+    const logger: ScanLogger = (message: string) => {
       if (isJsonOutput) return;
-      if (spinner) {
+      if (spinner && !loggerPaused) {
         statusMessage = message;
         spinner.update(formatStatus(statusMessage));
         return;
       }
       console.error(message);
+    };
+    logger.pause = () => {
+      loggerPaused = true;
+      if (pausedAt === null) {
+        pausedAt = Date.now();
+      }
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      spinner?.stop();
+    };
+    logger.resume = () => {
+      if (pausedAt !== null) {
+        scanStart += Date.now() - pausedAt;
+        pausedAt = null;
+      }
+      loggerPaused = false;
+      if (!spinner) return;
+      spinner.start(formatStatus(statusMessage));
+      if (!elapsedTimer) {
+        elapsedTimer = setInterval(() => {
+          spinner.update(formatStatus(statusMessage));
+        }, 1000);
+      }
     };
     if (cheapMode) {
       logger(
@@ -279,6 +303,7 @@ program
 
     try {
       if (spinner) {
+        scanStart = Date.now();
         spinner.start(formatStatus(statusMessage));
         elapsedTimer = setInterval(() => {
           spinner.update(formatStatus(statusMessage));
@@ -304,7 +329,9 @@ program
             ? { schemaSnapshotPath: supabaseSchemaPath }
             : supabaseConnectionString
               ? { connectionString: supabaseConnectionString }
-              : null
+              : useSupabaseCli
+                ? { useCli: true }
+                : null
         });
 
       let result;
