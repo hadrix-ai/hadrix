@@ -40,7 +40,8 @@ const CATEGORY_THEME_LABELS: Record<string, string> = {
   secrets: "Secrets",
   business_logic: "Logic issues",
   dependency_risks: "Dependency risks",
-  configuration: "Configuration"
+  configuration: "Configuration",
+  supabase: "Supabase"
 };
 
 const THEME_EMOJI: Record<string, string> = {
@@ -51,6 +52,7 @@ const THEME_EMOJI: Record<string, string> = {
   "Logic issues": "🧠",
   "Dependency risks": "📦",
   Configuration: "🛡️",
+  Supabase: "🟩",
   "Auth/AuthZ gaps": "🔐",
   "Command execution surface": "🧨",
   "Webhook trust issues": "🔗",
@@ -444,19 +446,21 @@ function themeFromCategory(category?: string | null): string | null {
 }
 
 function themeFromCanonicalKey(canonical: string): string {
-  if (canonical.startsWith("title:")) return "Other";
-  if (canonical.includes("authorization") || canonical.includes("idor") || canonical.includes("auth")) {
+  const base = canonical.startsWith("title:") ? canonical.slice("title:".length) : canonical;
+  if (base.includes("authorization") || base.includes("idor") || base.includes("auth")) {
     return "Auth/AuthZ gaps";
   }
-  if (canonical.includes("command_injection")) return "Command execution surface";
-  if (canonical.startsWith("webhook_")) return "Webhook trust issues";
-  if (canonical.includes("token") || canonical.includes("jwt")) return "Token/session weaknesses";
-  if (canonical.includes("error") || canonical.includes("debug")) return "Verbose errors / debug exposure";
-  if (canonical.includes("missing_headers")) return "Missing security headers";
-  if (canonical.includes("data_exposure")) return "Excessive data exposure";
-  if (canonical.includes("rate")) return "Missing rate limiting / lockout";
-  if (canonical.includes("mass_assignment")) return "Mass assignment";
-  return "Other";
+  if (base.includes("command_injection")) return "Command execution surface";
+  if (base.startsWith("webhook_") || base.includes("webhook")) return "Webhook trust issues";
+  if (base.includes("token") || base.includes("jwt")) return "Token/session weaknesses";
+  if (base.includes("error") || base.includes("debug")) return "Verbose errors / debug exposure";
+  if (base.includes("missing_headers") || base.includes("security_header")) return "Missing security headers";
+  if (base.includes("data_exposure") || base.includes("exposure")) return "Excessive data exposure";
+  if (base.includes("rate") || base.includes("throttle") || base.includes("lockout")) {
+    return "Missing rate limiting / lockout";
+  }
+  if (base.includes("mass_assignment")) return "Mass assignment";
+  return "Configuration";
 }
 
 function themeFromFinding(finding: Finding): string {
@@ -484,16 +488,14 @@ function buildSummary(groups: GroupedFinding[]): string {
     bySeverity[sevLabel] = (bySeverity[sevLabel] ?? 0) + 1;
     bySource[group.representative.source] += 1;
 
-    if (group.representative.source !== "static") {
-      const theme = themeFromFinding(group.representative);
-      const existing = themeCounts.get(theme);
-      if (!existing) {
-        themeCounts.set(theme, { count: 1, worst: group.representative.severity });
-      } else {
-        existing.count += 1;
-        if (severityRank(group.representative.severity) > severityRank(existing.worst)) {
-          existing.worst = group.representative.severity;
-        }
+    const theme = themeFromFinding(group.representative);
+    const existing = themeCounts.get(theme);
+    if (!existing) {
+      themeCounts.set(theme, { count: 1, worst: group.representative.severity });
+    } else {
+      existing.count += 1;
+      if (severityRank(group.representative.severity) > severityRank(existing.worst)) {
+        existing.worst = group.representative.severity;
       }
     }
   }
@@ -504,8 +506,7 @@ function buildSummary(groups: GroupedFinding[]): string {
       const aScore = severityRank(a[1].worst) * 1000 + a[1].count;
       const bScore = severityRank(b[1].worst) * 1000 + b[1].count;
       return bScore - aScore || a[0].localeCompare(b[0]);
-    })
-    .slice(0, 5);
+    });
 
   const themeLines = orderedThemes.length
     ? orderedThemes
@@ -521,7 +522,7 @@ function buildSummary(groups: GroupedFinding[]): string {
     "----------------",
     `- Findings: ${total} total (🔥 CRITICAL ${bySeverity.CRITICAL}, 🚨 HIGH ${bySeverity.HIGH}, ⚠️ MEDIUM ${bySeverity.MEDIUM}, 🟢 LOW ${bySeverity.LOW}, ℹ️ INFO ${bySeverity.INFO})`,
     `- Sources: ${bySource.static} static, ${bySource.llm} llm`,
-    "- Highest-risk themes:",
+    "- Categories:",
     themeLines,
     "- PRIORITY FIX ORDER (fastest risk reduction):",
     "  P0: Fix missing server-side auth/authz on sensitive endpoints (admin/delete/list, webhooks, repo scanning)",

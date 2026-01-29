@@ -276,7 +276,8 @@ const CATEGORY_KEYS = [
   "secrets",
   "business_logic",
   "dependency_risks",
-  "configuration"
+  "configuration",
+  "supabase"
 ];
 const CATEGORY_SET = new Set(CATEGORY_KEYS);
 const CATEGORY_ALIASES: Record<string, string> = {
@@ -306,6 +307,9 @@ const CATEGORY_ALIASES: Record<string, string> = {
   api_key: "secrets",
   private_key: "secrets",
   plaintext_secrets: "secrets",
+  data_exposure: "secrets",
+  information_disclosure: "secrets",
+  info_disclosure: "secrets",
   injection: "injection",
   sql_injection: "injection",
   command_injection: "injection",
@@ -313,13 +317,16 @@ const CATEGORY_ALIASES: Record<string, string> = {
   configuration: "configuration",
   misconfiguration: "configuration",
   security_misconfiguration: "configuration",
+  verbose_errors: "configuration",
+  error_disclosure: "configuration",
+  audit_logging: "configuration",
+  rate_limiting: "configuration",
+  timeout: "configuration",
+  dos: "configuration",
   logging_monitoring_failures: "configuration",
   logging_and_monitoring_failures: "configuration",
   software_data_integrity_failures: "configuration",
   software_and_data_integrity_failures: "configuration",
-  rate_limiting: "configuration",
-  audit_logging: "configuration",
-  timeout: "configuration",
   unbounded_query: "configuration",
   cors: "configuration",
   security_headers: "configuration",
@@ -327,7 +334,22 @@ const CATEGORY_ALIASES: Record<string, string> = {
   business_logic: "business_logic",
   dependency_risks: "dependency_risks",
   vulnerable_dependencies: "dependency_risks",
-  supply_chain: "dependency_risks"
+  supply_chain: "dependency_risks",
+  supabase: "supabase",
+  supabase_security: "supabase",
+  supabase_misconfiguration: "supabase",
+  a01_broken_access_control: "access_control",
+  a02_security_misconfiguration: "configuration",
+  a03_injection: "injection",
+  a04_cryptographic_failures: "authentication",
+  a05_insecure_design: "business_logic",
+  a06_authentication_failures: "authentication",
+  a07_software_data_integrity_failures: "configuration",
+  a07_software_and_data_integrity_failures: "configuration",
+  a08_logging_monitoring_failures: "configuration",
+  a08_logging_and_monitoring_failures: "configuration",
+  a09_dos_and_resilience: "configuration",
+  a10_vulnerable_dependencies: "dependency_risks"
 };
 const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
   {
@@ -353,6 +375,7 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
       /shell injection/i,
       /\brce\b/i,
       /code execution/i,
+      /\bexecute\b.*\bcode\b/i,
       /unsafe sql/i,
       /unsafe query/i,
       /\beval\b/i,
@@ -367,6 +390,7 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
       /authorization/i,
       /authorisation/i,
       /\bauthz\b/i,
+      /unauthorized/i,
       /\bidor\b/i,
       /insecure direct object/i,
       /\brls\b/i,
@@ -375,6 +399,9 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
       /org[-_ ]id/i,
       /ownership/i,
       /role enforcement/i,
+      /\brole\b/i,
+      /\badmin\b/i,
+      /permission/i,
       /privilege/i
     ]
   },
@@ -384,12 +411,21 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
       /secret/i,
       /credential/i,
       /api key/i,
+      /api_key/i,
+      /apikey/i,
+      /anon key/i,
+      /anon_key/i,
+      /service role/i,
+      /service_role/i,
+      /supabase key/i,
       /private key/i,
       /plaintext/i,
       /token exposure/i,
       /token leak/i,
       /expos\w+ token/i,
+      /data exposure/i,
       /sensitive data/i,
+      /\bsensitive\b/i,
       /\bpii\b/i,
       /\bemail\b/i
     ]
@@ -398,9 +434,13 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
     key: "authentication",
     patterns: [
       /authentication/i,
+      /unauthenticated/i,
+      /authenticat/i,
       /\bauthn\b/i,
       /login/i,
       /\bjwt\b/i,
+      /bearer/i,
+      /auth header/i,
       /session/i,
       /token/i,
       /password/i,
@@ -418,6 +458,8 @@ const CATEGORY_INFERENCE_RULES: Array<{ key: string; patterns: RegExp[] }> = [
       /\bhsts\b/i,
       /security header/i,
       /\bheader\b/i,
+      /verbose/i,
+      /error/i,
       /debug/i,
       /logging/i,
       /monitor/i,
@@ -455,6 +497,11 @@ function normalizeCategoryText(value: string): string {
     .trim();
 }
 
+function allowSupabaseCategory(details: Record<string, unknown>): boolean {
+  const tool = typeof details.tool === "string" ? details.tool.toLowerCase() : "";
+  return tool === "supabase" || tool === "static_supabase";
+}
+
 function countCategoryMentions(value: string): number {
   const normalized = normalizeCategoryText(value);
   let count = 0;
@@ -481,11 +528,19 @@ function buildCategoryInferenceText(
   details: Record<string, unknown>,
   extra?: string
 ): string {
+  const location = toRecord(finding.location);
+  const filepathRaw =
+    (location.filepath ?? location.filePath ?? location.path ?? location.file) as unknown;
+  const repoPathRaw = location.repoPath ?? location.repo_path;
+  const filepath = typeof filepathRaw === "string" ? filepathRaw : "";
+  const repoPath = typeof repoPathRaw === "string" ? repoPathRaw : "";
   const parts = [
     extra ?? "",
     finding.summary ?? "",
     extractFindingRuleId(finding),
     extractFindingKind(finding),
+    filepath,
+    repoPath,
     typeof details.rationale === "string" ? details.rationale : "",
     typeof details.recommendation === "string" ? details.recommendation : "",
     typeof details.description === "string" ? details.description : ""
@@ -625,13 +680,27 @@ function extractCandidateTypeForMerge(finding: FindingLike): string {
 
 function extractFindingCategory(finding: FindingLike): string {
   const details = toRecord(finding.details);
-  const raw = details.category ?? details.findingCategory ?? details.finding_category;
+  const raw =
+    details.category ??
+    details.findingCategory ??
+    details.finding_category ??
+    (finding as any).category;
   const rawValue = typeof raw === "string" ? raw.trim() : "";
   const normalized = normalizeCategoryValue(rawValue);
-  if (normalized) return normalized;
+  if (normalized) {
+    if (normalized === "supabase" && !allowSupabaseCategory(details)) {
+      return "";
+    }
+    return normalized;
+  }
   const includeRaw = rawValue && countCategoryMentions(rawValue) <= 1;
   const text = buildCategoryInferenceText(finding, details, includeRaw ? rawValue : "");
-  return inferCategoryFromText(text);
+  const inferred = inferCategoryFromText(text);
+  return inferred === "supabase" && !allowSupabaseCategory(details) ? "" : inferred;
+}
+
+export function inferFindingCategory(finding: FindingLike): string {
+  return extractFindingCategory(finding) || "configuration";
 }
 
 function extractDetectorId(finding: FindingLike, sourceFallback?: string): string {

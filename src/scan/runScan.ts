@@ -26,6 +26,7 @@ import {
   dedupeRepositoryFindingsAgainstExisting,
   dropRepositorySummaryDuplicates,
   filterFindings,
+  inferFindingCategory,
   normalizeRepositoryFinding
 } from "./post/postProcessing.js";
 import type { AnchorIndex, JellyAnchorComputation } from "./jellyAnchors.js";
@@ -996,7 +997,11 @@ function toRepositoryFinding(
   const details = toRecord(finding.details);
   const categoryRaw =
     details.category ?? details.findingCategory ?? details.finding_category ?? null;
-  const category = typeof categoryRaw === "string" ? categoryRaw.trim() : null;
+  let category = typeof categoryRaw === "string" ? categoryRaw.trim() : null;
+  if (!category) {
+    const inferred = inferFindingCategory({ summary: finding.summary, details, location: finding.location ?? null });
+    category = inferred || null;
+  }
   const location = normalizeLocation(finding.location ?? null, fallbackPath, repoPath);
   const evidence = mergeStringArrays(
     toStringArray(finding.evidence),
@@ -1697,11 +1702,30 @@ function toStaticFindings(staticFindings: StaticFinding[], repoPath?: string | n
     if (normalizedRepoPath && (filepath === normalizedRepoPath || filepath.startsWith(`${normalizedRepoPath}/`))) {
       location.repoPath = normalizedRepoPath;
     }
+    let category: string | null = null;
+    if (finding.tool === "osv-scanner") {
+      category = "dependency_risks";
+    } else if (finding.tool === "gitleaks") {
+      category = "secrets";
+    } else if (finding.tool === "supabase") {
+      category = "supabase";
+    } else {
+      category = inferFindingCategory({
+        summary: finding.message,
+        details: {
+          tool: `static_${finding.tool}`,
+          ruleId: finding.ruleId,
+          snippet: finding.snippet ?? null
+        },
+        location
+      }) || null;
+    }
     return {
       id: sha256(`${finding.tool}:${finding.ruleId}:${finding.filepath}:${finding.startLine}:${finding.endLine}`),
       title: `${finding.tool}: ${finding.ruleId}`,
       severity: finding.severity,
       description: finding.message,
+      category,
       location,
       evidence: finding.snippet,
       remediation: undefined,

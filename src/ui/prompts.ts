@@ -19,6 +19,17 @@ function isTerminalInteractive(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function displayLineCount(value: string, columns: number): number {
+  const plain = stripAnsi(value);
+  if (!plain) return 1;
+  const width = Math.max(1, columns);
+  return Math.max(1, Math.ceil(plain.length / width));
+}
+
 export async function promptSelect(
   question: string,
   choices: string[],
@@ -30,12 +41,12 @@ export async function promptSelect(
   const defaultIndex = clampIndex(options.defaultIndex ?? 0, choices.length);
   let selected = defaultIndex;
   let rendered = false;
+  let renderedLines = 0;
   const questionLines = question.split("\n");
-  const totalLines = questionLines.length + choices.length;
 
   const render = () => {
-    if (rendered) {
-      process.stdout.write(`\x1b[${totalLines}A`);
+    if (rendered && renderedLines > 0) {
+      process.stdout.write(`\x1b[${renderedLines}A`);
     }
     const lines = [
       ...questionLines,
@@ -46,10 +57,13 @@ export async function promptSelect(
         return active ? pc.green(line) : line;
       })
     ];
+    const columns = Math.max(process.stdout.columns ?? 80, 20);
+    renderedLines = 0;
     for (const line of lines) {
       process.stdout.write("\x1b[2K\r");
       process.stdout.write(line);
       process.stdout.write("\n");
+      renderedLines += displayLineCount(line, columns);
     }
     rendered = true;
   };
