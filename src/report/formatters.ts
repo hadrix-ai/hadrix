@@ -33,7 +33,24 @@ function severityEmoji(severity: Finding["severity"]): string {
   }
 }
 
+const CATEGORY_THEME_LABELS: Record<string, string> = {
+  injection: "Injection",
+  access_control: "Access control",
+  authentication: "Authentication",
+  secrets: "Secrets",
+  business_logic: "Logic issues",
+  dependency_risks: "Dependency risks",
+  configuration: "Configuration"
+};
+
 const THEME_EMOJI: Record<string, string> = {
+  Injection: "💉",
+  "Access control": "🔐",
+  Authentication: "🗝️",
+  Secrets: "🔎",
+  "Logic issues": "🧠",
+  "Dependency risks": "📦",
+  Configuration: "🛡️",
   "Auth/AuthZ gaps": "🔐",
   "Command execution surface": "🧨",
   "Webhook trust issues": "🔗",
@@ -50,8 +67,7 @@ function themeEmoji(theme: string): string {
 }
 
 function findingEmoji(finding: Finding): string {
-  const canonical = canonicalizeLlmTitle(finding.title);
-  const theme = themeFromCanonicalKey(canonical);
+  const theme = themeFromFinding(finding);
   return THEME_EMOJI[theme] ?? severityEmoji(finding.severity);
 }
 
@@ -415,6 +431,18 @@ function severityHeaderLabel(severity: Finding["severity"]): string {
   }
 }
 
+function normalizeCategory(raw?: string | null): string | null {
+  if (!raw) return null;
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
+  return normalized || null;
+}
+
+function themeFromCategory(category?: string | null): string | null {
+  const normalized = normalizeCategory(category);
+  if (!normalized) return null;
+  return CATEGORY_THEME_LABELS[normalized] ?? null;
+}
+
 function themeFromCanonicalKey(canonical: string): string {
   if (canonical.startsWith("title:")) return "Other";
   if (canonical.includes("authorization") || canonical.includes("idor") || canonical.includes("auth")) {
@@ -429,6 +457,13 @@ function themeFromCanonicalKey(canonical: string): string {
   if (canonical.includes("rate")) return "Missing rate limiting / lockout";
   if (canonical.includes("mass_assignment")) return "Mass assignment";
   return "Other";
+}
+
+function themeFromFinding(finding: Finding): string {
+  const byCategory = themeFromCategory(finding.category);
+  if (byCategory) return byCategory;
+  const canonical = canonicalizeLlmTitle(finding.title);
+  return themeFromCanonicalKey(canonical);
 }
 
 function buildSummary(groups: GroupedFinding[]): string {
@@ -450,8 +485,7 @@ function buildSummary(groups: GroupedFinding[]): string {
     bySource[group.representative.source] += 1;
 
     if (group.representative.source !== "static") {
-      const canonical = canonicalizeLlmTitle(group.representative.title);
-      const theme = themeFromCanonicalKey(canonical);
+      const theme = themeFromFinding(group.representative);
       const existing = themeCounts.get(theme);
       if (!existing) {
         themeCounts.set(theme, { count: 1, worst: group.representative.severity });

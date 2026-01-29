@@ -34,6 +34,7 @@ export interface Finding {
   title: string;
   severity: Severity;
   description: string;
+  category?: string | null;
   location: {
     filepath: string;
     startLine: number;

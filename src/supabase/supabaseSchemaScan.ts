@@ -142,11 +142,28 @@ export async function runSupabaseSchemaScan(params: {
     };
     schemaPath = resolved;
   } else if (params.connectionString) {
-    const client = new Client({ connectionString: params.connectionString });
+    const client = new Client({
+      connectionString: params.connectionString,
+      ssl: { rejectUnauthorized: true }
+    });
 
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("password authentication failed")) {
+        throw new Error(
+          "Supabase authentication failed. Please verify your database password. \n" +
+          "You can find it in: Supabase Dashboard > Database > Settings > Database password > Reset database password. \n" +
+          "If you don't yet know your DB password, you need to select 'Reset database password' as Supabase doesn't allow directly viewing it. \n It's unlikely you've used database password for connection yet as" + 
+          "supabase ANON_KEY (client-side) and SERVICE_ROLE_KEY (server-side) are the only keys that should be used for connection in the majority of cases."
+        );
+      }
+      throw err;
+    }
 
     const errors: SupabaseSchemaMetadata["errors"] = [];
+
     const safeQuery = async (stage: string, sql: string) => {
       try {
         return await client.query(sql);
@@ -156,6 +173,11 @@ export async function runSupabaseSchemaScan(params: {
         return null;
       }
     };
+
+    await safeQuery("session_readonly", "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;");
+    await safeQuery("session_statement_timeout", "SET statement_timeout = '30s';");
+    await safeQuery("session_lock_timeout", "SET lock_timeout = '5s';");
+    await safeQuery("session_idle_timeout", "SET idle_in_transaction_session_timeout = '30s';");
 
     const tableSchemaFilter = schemaFilter("table_schema");
     const schemaNameFilter = schemaFilter("n.nspname");

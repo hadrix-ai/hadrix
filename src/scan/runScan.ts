@@ -994,6 +994,9 @@ function toRepositoryFinding(
   repoPath?: string | null
 ): Finding {
   const details = toRecord(finding.details);
+  const categoryRaw =
+    details.category ?? details.findingCategory ?? details.finding_category ?? null;
+  const category = typeof categoryRaw === "string" ? categoryRaw.trim() : null;
   const location = normalizeLocation(finding.location ?? null, fallbackPath, repoPath);
   const evidence = mergeStringArrays(
     toStringArray(finding.evidence),
@@ -1012,6 +1015,7 @@ function toRepositoryFinding(
     title,
     severity: finding.severity,
     description,
+    category,
     location,
     evidence: evidence.length ? evidence.join(" | ") : undefined,
     remediation,

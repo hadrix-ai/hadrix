@@ -131,7 +131,7 @@ function buildSupabaseConnectionString(raw: string, password?: string | null): s
   }
   const secret = password?.trim();
   if (!secret) {
-    throw new Error("Supabase DB password is required.");
+    throw new Error("Supabase database password is required.");
   }
   const encoded = encodeURIComponent(secret);
   return `postgresql://postgres:${encoded}@db.${projectRef}.supabase.co:5432/postgres`;
@@ -231,7 +231,7 @@ program
           conn = await promptHidden("Supabase project URL: ");
         }
         if (!password && process.stdin.isTTY && !isJsonOutput) {
-          password = await promptHidden("Supabase DB password: ");
+          password = await promptHidden("Supabase database password: ");
         }
         if (!conn.trim()) {
           throw new Error("Supabase connection string is required.");
@@ -242,17 +242,16 @@ program
       const dbPrompt = [
         "Would you like to also scan your database for misconfigured RLS, column privileges, public storage, and more?",
         "This is strongly recommended as most security issues for vibe coders are in database misconfigurations.",
-        "All data is stored locally on your device, never on any of our servers.",
-        "See https://cli.hadrix.ai for more information and see our OSS code https://github.com/hadrix-ai/hadrix.",
+        "All data is stored locally on your device. See https://cli.hadrix.ai for more information and see our OSS code https://github.com/hadrix-ai/hadrix.",
         "",
-        "Select a database provider:"
+        "If so, select a database provider below. If not, then skip."
       ].join("\n");
       const choice = await promptSelect(dbPrompt, ["Supabase", "Skip"], {
         defaultIndex: 1
       });
       if (choice === 0) {
         const conn = await promptHidden("Supabase project URL: ");
-        const password = await promptHidden("Supabase DB password: ");
+        const password = await promptHidden("Supabase database password: ");
         if (conn.trim()) {
           supabaseConnectionString = buildSupabaseConnectionString(conn, password);
         }
