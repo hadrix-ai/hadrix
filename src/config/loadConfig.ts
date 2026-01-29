@@ -61,6 +61,7 @@ export interface HadrixConfig {
     temperature: number;
     baseUrl?: string;
     maxConcurrency?: number;
+    estimatedTokensPerTask?: number;
     rateLimit?: {
       requestsPerMinute?: number;
       tokensPerMinute?: number;
@@ -202,6 +203,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(readEnv("HADRIX_LLM_TOKENS_PER_MINUTE")) ??
     parsePositiveNumber(configFile.llm?.rateLimit?.tokensPerMinute);
 
+  const llmEstimatedTokensPerTask =
+    parsePositiveNumber(readEnv("HADRIX_LLM_EST_TOKENS_PER_TASK")) ??
+    parsePositiveNumber(configFile.llm?.estimatedTokensPerTask);
+
   const llmRateLimit = {
     ...(llmRequestsPerMinute ? { requestsPerMinute: llmRequestsPerMinute } : {}),
     ...(llmTokensPerMinute ? { tokensPerMinute: llmTokensPerMinute } : {}),
@@ -226,6 +231,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       maxTokens: configFile.llm?.maxTokens ?? 1200,
       temperature: configFile.llm?.temperature ?? 0.1,
       maxConcurrency: llmMaxConcurrency ?? undefined,
+      estimatedTokensPerTask: llmEstimatedTokensPerTask ?? undefined,
       rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,
     },
     chunking: {

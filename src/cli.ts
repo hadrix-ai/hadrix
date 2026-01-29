@@ -91,6 +91,18 @@ function formatDuration(durationMs: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
+function shouldSuppressCliError(message: string): boolean {
+  const lowered = message.toLowerCase();
+  if (lowered.includes("claude.com/en/api/rate-limits")) return true;
+  if (lowered.includes("anthropic.com/contact-sales")) return true;
+  return lowered.includes("organization's rate limit") && lowered.includes("input tokens per minute");
+}
+
+function logCliError(message: string): void {
+  if (shouldSuppressCliError(message)) return;
+  console.error(pc.red(`Error: ${message}`));
+}
+
 function buildSupabaseConnectionString(raw: string, password?: string | null): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -389,7 +401,7 @@ program
       }
       spinner?.stop();
       const message = err instanceof Error ? err.message : String(err);
-      console.error(pc.red(`Error: ${message}`));
+      logCliError(message);
       process.exitCode = 2;
     }
   });
@@ -548,7 +560,7 @@ program
         }
       }
       const message = err instanceof Error ? err.message : String(err);
-      console.error(pc.red(`Error: ${message}`));
+      logCliError(message);
       process.exitCode = 2;
     }
   });

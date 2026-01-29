@@ -7,7 +7,7 @@ import {
   ProviderApiResponseError,
   ProviderRequestFailedError
 } from "../../errors/provider.errors.js";
-import { LlmRateLimiter } from "./llmRateLimiter.js";
+import { RateLimitManager } from "./rateLimitManager.js";
 
 export type ChatRole = "system" | "user" | "assistant";
 
@@ -16,12 +16,19 @@ export interface ChatMessage {
   content: string;
 }
 
+type RateLimitReservation = Awaited<ReturnType<RateLimitManager["acquire"]>>;
+
 interface ChatCompletionResponse {
   choices?: Array<{
     message?: {
       content?: string;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
   error?: { message?: string };
 }
 
@@ -33,6 +40,11 @@ interface ResponsesApiResponse {
       text?: string;
     }>;
   }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  };
   error?: { message?: string };
 }
 
@@ -41,6 +53,12 @@ interface AnthropicMessageResponse {
     type?: string;
     text?: string;
   }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
   error?: { message?: string };
 }
 
@@ -51,8 +69,7 @@ const MAX_DELAY_MS = 5000;
 const ANTHROPIC_VERSION = "2023-06-01";
 const RATE_LIMIT_BASE_DELAY_MS = 10_000;
 const RATE_LIMIT_MAX_DELAY_MS = 60_000;
-
-const rateLimiter = new LlmRateLimiter();
+const rateLimitManagers = new Map<string, RateLimitManager>();
 
 function parseRetryAfterMs(value: string | null): number | null {
   if (!value) return null;
@@ -87,29 +104,57 @@ async function safeFetch(
   options: RequestInit,
   provider: LLMProvider,
   label: string,
-  requestTokens: number
-): Promise<Response> {
+  requestTokens: number,
+  rateLimitManager?: RateLimitManager
+): Promise<{ response: Response; reservation?: RateLimitReservation }> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const release = await rateLimiter.acquire(requestTokens);
+    const reservation = rateLimitManager ? await rateLimitManager.acquire(requestTokens) : null;
     try {
       const response = await fetch(url, options);
-      if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) {
-        release();
-        return response;
-      }
       const isRateLimit = response.status === 429;
-      const retryAfter = response.headers.get("retry-after");
-      const delayMs = computeDelayMs(attempt, retryAfter, isRateLimit);
       if (isRateLimit) {
-        rateLimiter.noteCooldown(delayMs);
+        const delayMs = rateLimitManager && reservation
+          ? rateLimitManager.finalizeRateLimit(reservation, response, attempt)
+          : computeDelayMs(attempt, response.headers.get("retry-after"), true);
+        if (attempt < MAX_ATTEMPTS) {
+          response.body?.cancel();
+          reservation?.releaseConcurrency();
+          await delay(delayMs);
+          continue;
+        }
+        reservation?.releaseConcurrency();
+        return { response };
       }
-      response.body?.cancel();
-      release();
-      await delay(delayMs);
+
+      if (RETRYABLE_STATUSES.has(response.status) && attempt < MAX_ATTEMPTS) {
+        if (rateLimitManager && reservation) {
+          rateLimitManager.finalizeError(reservation, response);
+        }
+        const retryAfter = response.headers.get("retry-after");
+        const delayMs = computeDelayMs(attempt, retryAfter, false);
+        response.body?.cancel();
+        reservation?.releaseConcurrency();
+        await delay(delayMs);
+        continue;
+      }
+
+      if (!response.ok) {
+        if (rateLimitManager && reservation) {
+          rateLimitManager.finalizeError(reservation, response);
+        }
+        reservation?.releaseConcurrency();
+        return { response };
+      }
+
+      reservation?.releaseConcurrency();
+      return { response, reservation: reservation ?? undefined };
     } catch (err) {
       lastError = err;
-      release();
+      if (rateLimitManager && reservation) {
+        rateLimitManager.finalizeError(reservation, null);
+      }
+      reservation?.releaseConcurrency();
       if (attempt === MAX_ATTEMPTS) break;
       await delay(computeDelayMs(attempt, null, false));
     }
@@ -135,6 +180,22 @@ function buildHeaders(config: HadrixConfig, provider: LLMProvider, apiKey: strin
 
   return headers;
 }
+
+const resolveRateLimitManager = (config: HadrixConfig, apiKey: string): RateLimitManager => {
+  const key = `${config.llm.provider}|${config.llm.endpoint}|${config.llm.model}|${apiKey}`;
+  const existing = rateLimitManagers.get(key);
+  if (existing) {
+    existing.setMaxConcurrency(config.llm.maxConcurrency);
+    return existing;
+  }
+  const manager = new RateLimitManager({
+    provider: config.llm.provider,
+    model: config.llm.model,
+    maxConcurrency: config.llm.maxConcurrency
+  });
+  rateLimitManagers.set(key, manager);
+  return manager;
+};
 
 function splitSystemMessages(messages: ChatMessage[]): { system: string; rest: ChatMessage[] } {
   const systemParts: string[] = [];
@@ -177,6 +238,42 @@ function extractAnthropicContent(payload: AnthropicMessageResponse): string | nu
   return null;
 }
 
+function normalizeUsageCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
+}
+
+function extractOpenAiUsageTokens(
+  payload: ChatCompletionResponse & ResponsesApiResponse
+): number | null {
+  const usage = payload.usage;
+  if (!usage) return null;
+  const total = normalizeUsageCount(usage.total_tokens);
+  if (total !== null) return total;
+  const prompt = normalizeUsageCount(usage.prompt_tokens);
+  const completion = normalizeUsageCount(usage.completion_tokens);
+  if (prompt !== null || completion !== null) {
+    return (prompt ?? 0) + (completion ?? 0);
+  }
+  const input = normalizeUsageCount(usage.input_tokens);
+  const output = normalizeUsageCount(usage.output_tokens);
+  if (input !== null || output !== null) {
+    return (input ?? 0) + (output ?? 0);
+  }
+  return null;
+}
+
+function extractAnthropicUsageTokens(payload: AnthropicMessageResponse): number | null {
+  const usage = payload.usage;
+  if (!usage) return null;
+  const input = normalizeUsageCount(usage.input_tokens) ?? 0;
+  const output = normalizeUsageCount(usage.output_tokens) ?? 0;
+  const cacheCreate = normalizeUsageCount(usage.cache_creation_input_tokens) ?? 0;
+  const cacheRead = normalizeUsageCount(usage.cache_read_input_tokens) ?? 0;
+  const total = input + output + cacheCreate + cacheRead;
+  return Number.isFinite(total) ? total : null;
+}
+
 export async function runChatCompletion(config: HadrixConfig, messages: ChatMessage[]): Promise<string> {
   const provider = config.llm.provider;
   const apiKey = config.llm.apiKey || config.api.apiKey;
@@ -185,16 +282,12 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     throw new LlmMissingApiKeyError();
   }
 
-  rateLimiter.configure({
-    maxConcurrency: config.llm.maxConcurrency ?? null,
-    requestsPerMinute: config.llm.rateLimit?.requestsPerMinute ?? null,
-    tokensPerMinute: config.llm.rateLimit?.tokensPerMinute ?? null,
-  });
-
   const model = config.llm.model || "";
   const isGpt5 = provider === LLMProviderId.OpenAI && model.toLowerCase().startsWith("gpt-5");
   const maxOutputTokens = isGpt5 ? Math.max(config.llm.maxTokens, 2048) : config.llm.maxTokens;
   const requestTokens = estimateTokensFromMessages(messages, maxOutputTokens);
+  const headers = buildHeaders(config, provider, apiKey);
+  const rateLimitManager = resolveRateLimitManager(config, apiKey);
 
   if (provider === LLMProviderId.Anthropic) {
     const { system, rest } = splitSystemMessages(messages);
@@ -211,22 +304,27 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
       body.system = system;
     }
 
-    const response = await safeFetch(
+    const { response, reservation } = await safeFetch(
       config.llm.endpoint,
       {
         method: "POST",
-        headers: buildHeaders(config, provider, apiKey),
+        headers,
         body: JSON.stringify(body)
       },
       provider,
       "LLM",
-      requestTokens
+      requestTokens,
+      rateLimitManager
     );
 
     const payload = (await response.json()) as AnthropicMessageResponse;
     if (!response.ok) {
       const message = payload.error?.message || `LLM request failed with status ${response.status}`;
       throw new ProviderApiResponseError(message);
+    }
+
+    if (reservation) {
+      rateLimitManager.finalizeSuccess(reservation, response, extractAnthropicUsageTokens(payload));
     }
 
     const content = extractAnthropicContent(payload);
@@ -240,11 +338,11 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   const endpoint = isGpt5
     ? config.llm.endpoint.replace(/\/v1\/chat\/completions\/?$/, "/v1/responses")
     : config.llm.endpoint;
-  const response = await safeFetch(
+  const { response, reservation } = await safeFetch(
     endpoint,
     {
       method: "POST",
-      headers: buildHeaders(config, provider, apiKey),
+      headers,
       body: JSON.stringify(
         useMaxCompletionTokens
           ? {
@@ -267,7 +365,8 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     },
     provider,
     "LLM",
-    requestTokens
+    requestTokens,
+    rateLimitManager
   );
 
   const payload = (await response.json()) as ChatCompletionResponse & ResponsesApiResponse;
@@ -275,6 +374,10 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   if (!response.ok) {
     const message = payload.error?.message || `LLM request failed with status ${response.status}`;
     throw new ProviderApiResponseError(message);
+  }
+
+  if (reservation) {
+    rateLimitManager.finalizeSuccess(reservation, response, extractOpenAiUsageTokens(payload));
   }
 
   const content = extractOpenAiContent(payload);
