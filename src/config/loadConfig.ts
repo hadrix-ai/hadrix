@@ -60,6 +60,11 @@ export interface HadrixConfig {
     maxTokens: number;
     temperature: number;
     baseUrl?: string;
+    maxConcurrency?: number;
+    rateLimit?: {
+      requestsPerMinute?: number;
+      tokensPerMinute?: number;
+    };
   };
   chunking: {
     maxChars: number;
@@ -110,6 +115,14 @@ function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const alias = PROVIDER_ALIASES[value];
   if (alias) return alias;
   return LLMProviderId.OpenAI;
+}
+
+function parsePositiveNumber(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed <= 0) return null;
+  return parsed;
 }
 
 async function loadConfigFile(projectRoot: string, configPath?: string | null): Promise<Partial<HadrixConfig>> {
@@ -177,6 +190,23 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     configFile.llm?.endpoint ||
     defaultLlmEndpoint;
 
+  const llmMaxConcurrency =
+    parsePositiveNumber(readEnv("HADRIX_LLM_MAX_CONCURRENCY")) ??
+    parsePositiveNumber(configFile.llm?.maxConcurrency);
+
+  const llmRequestsPerMinute =
+    parsePositiveNumber(readEnv("HADRIX_LLM_REQUESTS_PER_MINUTE")) ??
+    parsePositiveNumber(configFile.llm?.rateLimit?.requestsPerMinute);
+
+  const llmTokensPerMinute =
+    parsePositiveNumber(readEnv("HADRIX_LLM_TOKENS_PER_MINUTE")) ??
+    parsePositiveNumber(configFile.llm?.rateLimit?.tokensPerMinute);
+
+  const llmRateLimit = {
+    ...(llmRequestsPerMinute ? { requestsPerMinute: llmRequestsPerMinute } : {}),
+    ...(llmTokensPerMinute ? { tokensPerMinute: llmTokensPerMinute } : {}),
+  };
+
   const cfg: HadrixConfig = {
     projectRoot: params.projectRoot,
     repoPath: readEnv("HADRIX_REPO_PATH") || configFile.repoPath || null,
@@ -194,7 +224,9 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       model: llmModel,
       endpoint: llmEndpoint,
       maxTokens: configFile.llm?.maxTokens ?? 1200,
-      temperature: configFile.llm?.temperature ?? 0.1
+      temperature: configFile.llm?.temperature ?? 0.1,
+      maxConcurrency: llmMaxConcurrency ?? undefined,
+      rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,
     },
     chunking: {
       maxChars: configFile.chunking?.maxChars ?? 1200,

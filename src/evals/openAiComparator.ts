@@ -1,7 +1,7 @@
 import { readEnv as readConfigEnv } from "../config/env.js";
 import type { SummaryComparator, SummaryComparison } from "./types.js";
 
-const DEFAULT_MODEL = "gpt-5-nano";
+const DEFAULT_MODEL = "gpt-5.2";
 const DEFAULT_TIMEOUT_MS = 60000;
 const FALLBACK_THRESHOLD = 0.47;
 const SHORT_FALLBACK_THRESHOLD = 0.35;
