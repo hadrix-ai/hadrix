@@ -1,7 +1,9 @@
+import OpenAI from "openai";
+
 import { readEnv as readConfigEnv } from "../config/env.js";
 import type { SummaryComparator, SummaryComparison } from "./types.js";
 
-const DEFAULT_MODEL = "gpt-5.2";
+const DEFAULT_MODEL = "gpt-5.1-codex-mini";
 const DEFAULT_TIMEOUT_MS = 60000;
 const FALLBACK_THRESHOLD = 0.47;
 const SHORT_FALLBACK_THRESHOLD = 0.35;
@@ -129,6 +131,45 @@ const safeJsonParse = (value: string): Record<string, unknown> | null => {
   }
 };
 
+type OpenAiResponseShape = {
+  output_text?: string | null;
+  output?: Array<{
+    content?: Array<{
+      type?: string;
+      text?: string | null;
+    }>;
+  }>;
+};
+
+type OpenAiResponsesMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+const buildResponsesInput = (messages: OpenAiResponsesMessage[]) =>
+  messages.map((message) => ({
+    role: message.role,
+    content: [{ type: "input_text", text: message.content }]
+  }));
+
+const extractOutputText = (response: OpenAiResponseShape): string | null => {
+  const direct = typeof response.output_text === "string" ? response.output_text : "";
+  if (direct.trim()) return direct;
+  const fallback =
+    response.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((part) => part.text)
+      .filter((text): text is string => Boolean(text))
+      .join("") ?? "";
+  return fallback.trim() ? fallback : null;
+};
+
+const normalizeOpenAiBaseUrl = (value: string): string => {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) return "https://api.openai.com/v1";
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+};
+
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_RETRY_WAIT_MS = 60_000;
 const BASE_RETRY_WAIT_MS = 1_000;
@@ -155,15 +196,53 @@ const buildRetryDelay = (attempt: number, remainingMs: number): number => {
   return Math.min(Math.max(0, Math.round(jitter)), remainingMs);
 };
 
-const annotateRetry = (error: Error, params: { retryable: boolean; status?: number; retryAfterMs?: number | null }) => {
-  (error as any).retryable = params.retryable;
-  if (typeof params.status === "number") {
-    (error as any).status = params.status;
+const extractErrorStatus = (err: unknown): number | null => {
+  if (!err || typeof err !== "object") return null;
+  const direct = (err as { status?: unknown }).status;
+  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+  const statusCode = (err as { statusCode?: unknown }).statusCode;
+  if (typeof statusCode === "number" && Number.isFinite(statusCode)) return statusCode;
+  const responseStatus = (err as { response?: { status?: unknown } }).response?.status;
+  if (typeof responseStatus === "number" && Number.isFinite(responseStatus)) {
+    return responseStatus;
   }
-  if (typeof params.retryAfterMs === "number") {
-    (error as any).retryAfterMs = params.retryAfterMs;
+  return null;
+};
+
+const readHeaderValue = (headers: unknown, name: string): string | null => {
+  if (!headers) return null;
+  if (typeof headers === "object" && "get" in headers && typeof (headers as Headers).get === "function") {
+    const value = (headers as Headers).get(name);
+    return typeof value === "string" ? value : null;
   }
-  return error;
+  if (typeof headers === "object") {
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() !== name.toLowerCase()) continue;
+      if (typeof value === "string") return value;
+      if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+    }
+  }
+  return null;
+};
+
+const extractRetryAfterMs = (err: unknown): number | null => {
+  if (!err || typeof err !== "object") return null;
+  const headers =
+    (err as { headers?: unknown }).headers ??
+    (err as { response?: { headers?: unknown } }).response?.headers ??
+    (err as { rawResponse?: { headers?: unknown } }).rawResponse?.headers ??
+    null;
+  const retryAfter = readHeaderValue(headers, "retry-after");
+  return parseRetryAfter(retryAfter);
+};
+
+const isLikelyNetworkError = (err: Error): boolean => {
+  const combined = `${err.name} ${err.message}`.toLowerCase();
+  if (combined.includes("timeout") || combined.includes("timed out")) return true;
+  if (combined.includes("network") || combined.includes("fetch failed")) return true;
+  if (combined.includes("connection")) return true;
+  if (combined.includes("socket") && combined.includes("hang up")) return true;
+  return false;
 };
 
 const stripGhsaTokens = (value: string): string =>
@@ -641,12 +720,18 @@ export function createOpenAiSummaryComparator(options?: {
       "Missing OpenAI API key for eval comparator. Set HADRIX_LLM_API_KEY or OPENAI_API_KEY (or use HADRIX_API_KEY when HADRIX_PROVIDER=openai)."
     );
   }
-  const baseUrl = resolveOpenAiBaseUrl(options?.baseUrl).replace(/\/+$/, "");
+  const baseUrl = normalizeOpenAiBaseUrl(resolveOpenAiBaseUrl(options?.baseUrl));
   const model = resolveModel(options?.model);
   const timeoutMs = options?.timeoutMs && Number.isFinite(options.timeoutMs)
     ? Math.max(1000, Math.trunc(options.timeoutMs))
     : DEFAULT_TIMEOUT_MS;
-  const supportsTemperature = !model.toLowerCase().startsWith("gpt-5-");
+    const supportsTemperature = !model.toLowerCase().startsWith("gpt-5");
+  const client = new OpenAI({
+    apiKey,
+    baseURL: baseUrl,
+    timeout: timeoutMs,
+    maxRetries: 0
+  });
 
   return async ({ expected, actual }): Promise<SummaryComparison> => {
     if (osvPackageAliasMatch(expected, actual)) {
@@ -705,117 +790,71 @@ export function createOpenAiSummaryComparator(options?: {
       return fallback();
     }
 
-    const requestUrl = `${baseUrl}/v1/chat/completions`;
     let attempt = 0;
     let waitedMs = 0;
 
     while (true) {
       attempt += 1;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetch(requestUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
+        const promptMessages: OpenAiResponsesMessage[] = [
+          {
+            role: "system",
+            content: [
+              "You are an evaluation judge for security scan results.",
+              "Determine whether an actual finding summary matches an expected security issue/fix description.",
+              "The expected expectation and actual summary may not precisely match but should describe the same security issue.",
+              "Even if the expected and actual summary do not match exactly, if they describe the same security issue, the match should be true.",
+              "The expected text may describe the issue, the fix, or both.",
+              "Rule/category hints may be provided; if they conflict between expected and actual, the match should be false.",
+              "Return ONLY valid JSON with keys: match (boolean), score (0-1 number), rationale (string).",
+            ].join("\n")
           },
-          body: JSON.stringify({
-            model,
-            response_format: { type: "json_object" },
-            ...(supportsTemperature ? { temperature: 0 } : {}),
-            messages: [
-              {
-                role: "system",
-                content: [
-                  "You are an evaluation judge for security scan results.",
-                  "Determine whether an actual finding summary matches an expected security issue/fix description.",
-                  "The expected expectation and actual summary may not precisely match but should describe the same security issue.",
-                  "Even if the expected and actual summary do not match exactly, if they describe the same security issue, the match should be true.",
-                  "The expected text may describe the issue, the fix, or both.",
-                  "Rule/category hints may be provided; if they conflict between expected and actual, the match should be false.",
-                  "Return ONLY valid JSON with keys: match (boolean), score (0-1 number), rationale (string).",
-                ].join("\n"),
+          {
+            role: "user",
+            content: JSON.stringify({
+              expected: {
+                id: expected.id ?? null,
+                filepath: expected.filepath,
+                expectation: expected.expectation,
+                severity: expected.severity ?? null,
+                source: expected.source ?? null,
+                ruleId: expected.ruleId ?? null,
+                ruleHints: expectedHints,
               },
-              {
-                role: "user",
-                content: JSON.stringify({
-                  expected: {
-                    id: expected.id ?? null,
-                    filepath: expected.filepath,
-                    expectation: expected.expectation,
-                    severity: expected.severity ?? null,
-                    source: expected.source ?? null,
-                    ruleId: expected.ruleId ?? null,
-                    ruleHints: expectedHints,
-                  },
-                  actual: {
-                    id: actual.id,
-                    summary: actual.summary,
-                    severity: actual.severity ?? null,
-                    source: actual.source ?? null,
-                    location: actual.location ?? null,
-                    ruleHints: actualHints,
-                    details: {
-                      ruleId:
-                        typeof actual.details?.ruleId === "string"
-                          ? actual.details.ruleId
-                          : null,
-                      mergedRuleIds:
-                        Array.isArray(actual.details?.mergedRuleIds)
-                          ? actual.details?.mergedRuleIds
-                          : null,
-                      tool:
-                        typeof actual.details?.tool === "string"
-                          ? actual.details.tool
-                          : null,
-                    },
-                  },
-                }),
+              actual: {
+                id: actual.id,
+                summary: actual.summary,
+                severity: actual.severity ?? null,
+                source: actual.source ?? null,
+                location: actual.location ?? null,
+                ruleHints: actualHints,
+                details: {
+                  ruleId:
+                    typeof actual.details?.ruleId === "string"
+                      ? actual.details.ruleId
+                      : null,
+                  mergedRuleIds:
+                    Array.isArray(actual.details?.mergedRuleIds)
+                      ? actual.details?.mergedRuleIds
+                      : null,
+                  tool:
+                    typeof actual.details?.tool === "string"
+                      ? actual.details.tool
+                      : null,
+                },
               },
-            ],
-          }),
-          signal: controller.signal,
+            }),
+          },
+        ];
+
+        const response = await client.responses.create({
+          model,
+          input: buildResponsesInput(promptMessages),
+          ...(supportsTemperature ? { temperature: 0 } : {}),
+          text: { format: { type: "json_object" } }
         });
 
-        const contentType = response.headers.get("content-type") ?? "";
-        const rawText = await response.text();
-        const preview = rawText.trim().replace(/\s+/g, " ").slice(0, 200);
-        const payload = safeJsonParse(rawText) as {
-          choices?: Array<{ message?: { content?: string } }>;
-          error?: { message?: string };
-        } | null;
-
-        if (!response.ok) {
-          const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
-          const message =
-            (payload && payload.error?.message) ||
-            `OpenAI request failed with status ${response.status}. ` +
-              `content-type=${contentType || "unknown"}. ` +
-              (preview ? `body_preview="${preview}". ` : "") +
-              `Check HADRIX_LLM_BASE/OPENAI_API_BASE or network proxies.`;
-          throw annotateRetry(
-            new Error(message),
-            {
-              retryable: RETRYABLE_STATUS.has(response.status),
-              status: response.status,
-              retryAfterMs
-            }
-          );
-        }
-
-        if (!payload || typeof payload !== "object") {
-          throw annotateRetry(
-            new Error(
-              `OpenAI response was not valid JSON (status ${response.status}, content-type=${contentType || "unknown"}). ` +
-                (preview ? `body_preview="${preview}". ` : "") +
-                `Check HADRIX_LLM_BASE/OPENAI_API_BASE or network proxies.`
-            ),
-            { retryable: false, status: response.status }
-          );
-        }
-
-        const content = payload.choices?.[0]?.message?.content ?? "";
+        const content = extractOutputText(response as OpenAiResponseShape) ?? "";
         const parsed = safeJsonParse(content);
         if (!parsed) {
           return fallback();
@@ -835,10 +874,12 @@ export function createOpenAiSummaryComparator(options?: {
         return { match, score, rationale };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        const status = extractErrorStatus(error);
         const retryable =
-          Boolean((error as any).retryable) ||
+          (typeof status === "number" && RETRYABLE_STATUS.has(status)) ||
           error.name === "AbortError" ||
-          error.name === "TypeError";
+          error.name === "TypeError" ||
+          isLikelyNetworkError(error);
         if (!retryable) {
           throw error;
         }
@@ -846,8 +887,7 @@ export function createOpenAiSummaryComparator(options?: {
         if (remaining <= 0) {
           throw error;
         }
-        const retryAfterMs =
-          typeof (error as any).retryAfterMs === "number" ? (error as any).retryAfterMs : null;
+        const retryAfterMs = extractRetryAfterMs(error);
         const delay = retryAfterMs != null
           ? Math.min(Math.max(0, Math.round(retryAfterMs)), remaining)
           : buildRetryDelay(attempt, remaining);
@@ -856,8 +896,6 @@ export function createOpenAiSummaryComparator(options?: {
         }
         await sleep(delay);
         waitedMs += delay;
-      } finally {
-        clearTimeout(timeout);
       }
     }
   };

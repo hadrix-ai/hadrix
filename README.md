@@ -107,6 +107,7 @@ Common environment variables:
 
 Hadrix supports `openai` (default) and `anthropic` (alias: `claude`) for LLM scans.
 For Anthropic, set `HADRIX_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (or `HADRIX_API_KEY`).
+Hadrix uses the official OpenAI and Anthropic SDKs. OpenAI requests use the Responses API by default, and Anthropic requests use the Messages API. If you override `HADRIX_LLM_BASE` or `HADRIX_LLM_ENDPOINT`, provide a base URL (the SDKs handle endpoint paths).
 
 ## Monorepo support
 
@@ -122,7 +123,7 @@ You can also set `repoPath` in `hadrix.config.json` or `HADRIX_REPO_PATH`.
 
 ## Running evals locally
 
-Evals are a repo-only workflow. The fixtures live under `./evals` in this repo and are not shipped in the npm package. See `evals/README.md` for the full eval runner guide.
+Evals are a repo-only workflow. The fixtures live under `./evals` in this repo and are not shipped in the npm package. Evals always use the OpenAI SDK comparator (Responses API) for matching. See `evals/README.md` for the full eval runner guide.
 
 ## Static scanners
 

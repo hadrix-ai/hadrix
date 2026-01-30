@@ -159,7 +159,7 @@ function isMissingScannersError(message: string): boolean {
 
 program
   .name("hadrix")
-  .description("Hadrix local security scan")
+  .description("Hadrix local security scan (OpenAI Responses API by default; Anthropic Messages API via SDKs)")
   .version("0.1.0");
 
 program

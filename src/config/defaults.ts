@@ -71,12 +71,12 @@ const DEFAULT_EMBEDDING_MODELS = {
 } as const;
 
 const DEFAULT_LLM_MODELS = {
-  openai: "gpt-5.2",
+  openai: "gpt-5.2-codex",
   anthropic: "claude-opus-4-5"
 } as const;
 
 const CHEAP_LLM_MODELS = {
-  openai: "gpt-5-nano",
+  openai: "gpt-5.1-codex-mini",
   anthropic: "claude-haiku-4-5"
 } as const;
 
