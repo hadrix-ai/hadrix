@@ -1,4 +1,5 @@
 import path from "node:path";
+import crypto from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   RepositoryScanFinding,
   Severity
 } from "../types.js";
+import type { ScanResumeStore } from "./scanResume.js";
 import { runChatCompletion } from "../services/llm/index.js";
 import {
   buildRepositoryCompositeSystemPrompt,
@@ -53,6 +55,7 @@ export interface RepositoryScanInput {
   existingFindings: ExistingScanFinding[];
   mapConcurrency?: number;
   debug?: DedupeDebug;
+  resume?: ScanResumeStore;
 }
 
 export interface CompositeScanInput {
@@ -93,6 +96,7 @@ type RuleScanTask = {
   systemPrompt: string;
   roleSummary: Record<string, number>;
   existingFindings: ExistingScanFinding[];
+  taskKey: string;
 };
 
 type ScopeGateAction = "allow" | "suppress" | "downgrade";
@@ -220,6 +224,19 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   missing_least_privilege: "configuration"
 };
 
+function buildRuleTaskKey(ruleId: string, file: RepositoryFileSample): string {
+  const contentHash = crypto.createHash("sha256").update(file.content ?? "").digest("hex");
+  const raw = [
+    ruleId,
+    file.path,
+    String(file.chunkIndex),
+    String(file.startLine),
+    String(file.endLine),
+    contentHash
+  ].join("|");
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
 export async function scanRepository(input: RepositoryScanInput): Promise<RepositoryScanFinding[]> {
   if (input.files.length === 0) {
     return [];
@@ -244,6 +261,10 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
     rulePrompts.set(rule.id, combinedSystemPrompt);
   }
+
+  const resumeResults = input.resume?.getRuleResults() ?? new Map<string, RepositoryScanFinding[]>();
+  const resumedFindings: RepositoryScanFinding[] = [];
+  let resumedTaskCount = 0;
 
   const tasks: RuleScanTask[] = [];
   for (const file of input.files) {
@@ -302,13 +323,23 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       const matchedCandidates = filterCandidateFindingsForRule(rule, fileContext).map(
         (candidate) => candidate.type
       );
+      const taskKey = buildRuleTaskKey(rule.id, file);
+      if (resumeResults.has(taskKey)) {
+        const stored = resumeResults.get(taskKey);
+        if (stored && stored.length > 0) {
+          resumedFindings.push(...stored);
+        }
+        resumedTaskCount += 1;
+        continue;
+      }
       tasks.push({
         rule,
         file,
         fileContext,
         systemPrompt,
         roleSummary: insights.roleSummary,
-        existingFindings
+        existingFindings,
+        taskKey
       });
       if (input.debug) {
         logDebug(input.debug, {
@@ -337,9 +368,11 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     }
   }
 
+  await input.resume?.setRuleTaskCount(tasks.length + resumedTaskCount);
+
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
   const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
-    const { rule, file, fileContext, roleSummary, existingFindings: existing } = task;
+    const { rule, file, fileContext, roleSummary, existingFindings: existing, taskKey } = task;
     const ruleRequiredControls = filterControlsForRule(rule, fileContext);
     const ruleCandidateFindings = filterCandidateFindingsForRule(rule, fileContext);
 
@@ -399,11 +432,14 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       const gated = applyScopeGateToFindings(scoped, gateDecision);
       const overlapGroupId = file.overlapGroupId ?? null;
       if (overlapGroupId) {
-        return gated.map((finding) => ({
+        const adjusted = gated.map((finding) => ({
           ...finding,
           details: { ...toRecord(finding.details), overlapGroupId }
         }));
+        await input.resume?.recordRuleResult(taskKey, adjusted);
+        return adjusted;
       }
+      await input.resume?.recordRuleResult(taskKey, gated);
       return gated;
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
@@ -428,7 +464,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     }
   });
 
-  const llmFindings = results.flatMap((result) => result);
+  const llmFindings = [...resumedFindings, ...results.flatMap((result) => result)];
   const promoted = promoteCandidateFindings({
     repository: input.repository,
     insights,

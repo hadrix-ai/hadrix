@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@eslint/compat": "^1.3.2",

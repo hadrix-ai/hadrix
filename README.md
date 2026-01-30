@@ -5,7 +5,7 @@ Default scans target common source files plus schema files (including `.sql`).
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 22
 - Python 3 (needed to install semgrep via `hadrix setup`)
 - Optional: native vectorlite extension for faster vector search (auto-detected)
 

@@ -16,6 +16,7 @@ import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
 import { runSetup } from "./setup/runSetup.js";
+import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import type { ExistingScanFinding } from "./types.js";
 
@@ -220,6 +221,32 @@ program
       enableCheapMode();
     }
 
+    const stateDir = path.join(projectRoot, ".hadrix");
+    let resumeMode: "new" | "resume" = "new";
+    const resumeState = await loadScanResumeState(stateDir);
+    const canPromptResume = Boolean(process.stdin.isTTY && process.stdout.isTTY && !isJsonOutput);
+    if (resumeState && resumeState.status !== "complete") {
+      const timestamp = resumeState.updatedAt || resumeState.startedAt;
+      const lines = [
+        `Interrupted scan detected (last update ${timestamp}).`,
+        resumeState.lastError?.message ? `Last error: ${resumeState.lastError.message}` : null,
+        "Would you like to resume it?"
+      ].filter(Boolean) as string[];
+      if (canPromptResume) {
+        const ok = await promptYesNo(lines.join("\n"), { defaultYes: true });
+        if (ok) {
+          resumeMode = "resume";
+        } else {
+          await clearScanResumeState(stateDir);
+        }
+      } else {
+        resumeMode = "resume";
+        if (!isJsonOutput) {
+          console.error(`Resuming interrupted scan from ${timestamp}.`);
+        }
+      }
+    }
+
     const envSupabaseUrl = readEnvRaw("HADRIX_SUPABASE_URL");
     const envSupabasePassword = readEnvRaw("HADRIX_SUPABASE_PASSWORD");
     const envSupabaseSchema = readEnvRaw("HADRIX_SUPABASE_SCHEMA_PATH");
@@ -337,6 +364,7 @@ program
           logger,
           debug: options.debug,
           debugLogPath: options.debugLog,
+          resume: resumeMode,
           supabase: supabaseSchemaPath
             ? { schemaSnapshotPath: supabaseSchemaPath }
             : supabaseConnectionString

@@ -21,6 +21,9 @@ import { discoverEntryPoints } from "./entryPoints.js";
 import { buildJellyReachabilityIndex } from "./jellyReachability.js";
 import { buildFindingIdentityKey } from "./dedupeKey.js";
 import { runSupabaseSchemaScan } from "../supabase/supabaseSchemaScan.js";
+import { ProviderRequestFailedError } from "../errors/provider.errors.js";
+import { clearScanResumeState, createScanResumeStore } from "./scanResume.js";
+import type { ScanResumeStore } from "./scanResume.js";
 import {
   dedupeFindings,
   dedupeRepositoryFindingsAgainstExisting,
@@ -57,6 +60,7 @@ export interface RunScanOptions {
   debug?: boolean;
   debugLogPath?: string | null;
   supabase?: { connectionString?: string; schemaSnapshotPath?: string; useCli?: boolean } | null;
+  resume?: "off" | "new" | "resume";
 }
 
 type ChunkRow = {
@@ -133,6 +137,17 @@ async function createDebugLogWriter(params: {
 
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
+}
+
+function buildRepoSnapshot(entries: string[]): { hash: string; fileCount: number } | null {
+  if (entries.length === 0) return null;
+  const sorted = [...entries].sort();
+  const hasher = crypto.createHash("sha256");
+  for (const entry of sorted) {
+    hasher.update(entry);
+    hasher.update("\n");
+  }
+  return { hash: hasher.digest("hex"), fileCount: sorted.length };
 }
 
 function normalizePath(value: string): string {
@@ -1032,6 +1047,7 @@ function toRepositoryFinding(
 export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   const start = Date.now();
   let debugWriter: DebugLogWriter | null = null;
+  let resumeStore: ScanResumeStore | null = null;
 
   try {
     const config = await loadConfig({
@@ -1041,6 +1057,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     });
 
     const log = options.logger ?? (() => {});
+    const resumeMode = options.resume ?? "off";
     debugWriter = await createDebugLogWriter({
       enabled: Boolean(options.debug || options.debugLogPath),
       requestedPath: options.debugLogPath ?? null,
@@ -1049,6 +1066,20 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     });
     const debugContext = (stage: string): DedupeDebug | undefined =>
       debugWriter ? { stage, log: debugWriter.log } : undefined;
+    const isResumeEligibleError = (err: unknown): boolean => {
+      if (err instanceof ProviderRequestFailedError) return true;
+      const name = typeof err === "object" && err ? (err as { name?: unknown }).name : null;
+      return name === "ProviderRequestFailedError";
+    };
+    const handleResumeError = async (err: unknown, stage: "rule" | "composite") => {
+      if (!resumeStore || resumeMode === "off") return;
+      const message = err instanceof Error ? err.message : String(err);
+      if (isResumeEligibleError(err)) {
+        await resumeStore.markInterrupted(message, stage);
+        return;
+      }
+      await clearScanResumeState(config.stateDir);
+    };
     const repoRoot = config.projectRoot;
     const explicitRepoPath = normalizeRepoPath(options.repoPath ?? config.repoPath ?? "");
     let repoPath: string | null = explicitRepoPath || null;
@@ -1243,6 +1274,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     });
     const desiredChunkFormat = "security_semantic";
     log("Security chunking enabled.");
+    const repoSnapshotEntries: string[] = [];
   
     // Embeddings removed.
   
@@ -1258,6 +1290,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         } catch {
           continue;
         }
+        repoSnapshotEntries.push(`${normalizedRelPath}:${fileHash}`);
         const existing = db.getFileByPath(relPath);
         const existingFormat = existing ? db.getChunkFormatForFile(existing.id) : null;
   
@@ -1329,6 +1362,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
       // Embeddings removed.
 
+      const repoSnapshot = resumeMode !== "off" ? buildRepoSnapshot(repoSnapshotEntries) : null;
       const allChunks = db.getAllChunks();
       const scopedChunks = repoPath
         ? allChunks.filter(
@@ -1343,6 +1377,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       let compositeFindings: RepositoryScanFinding[] = [];
       let fileSamples: RepositoryFileSample[] = [];
       let repositoryDescriptor: { fullName: string; repoPaths: string[] } | null = null;
+
+      if (resumeMode !== "off" && scannedChunks === 0) {
+        await clearScanResumeState(config.stateDir);
+      }
   
       if (scopedChunks.length > 0) {
         log("Heuristic analysis and chunk sampling...");
@@ -1435,23 +1473,45 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           maxChunksPerFile: config.sampling.maxChunksPerFile,
           preferredChunks: mustInclude
         });
-  
+
+        if (fileSamples.length === 0 && resumeMode !== "off") {
+          await clearScanResumeState(config.stateDir);
+        }
+
         if (fileSamples.length > 0) {
           repositoryDescriptor = {
             fullName: repoFullName,
             repoPaths: repoPath ? [repoPath] : []
           };
-  
+
+          if (resumeMode !== "off") {
+            resumeStore = await createScanResumeStore({
+              stateDir: config.stateDir,
+              scanRoot,
+              repoPath: repoPath ?? null,
+              repoSnapshot,
+              mode: resumeMode,
+              logger: log
+            });
+            await resumeStore.setStage("rule");
+          }
+
           log("LLM scan (rule pass)...");
-        llmFindings = await scanRepository({
-          config,
-          repository: repositoryDescriptor,
-          files: fileSamples,
-          existingFindings,
-          debug: debugContext("llm_rule_pass")
-        });
+          try {
+            llmFindings = await scanRepository({
+              config,
+              repository: repositoryDescriptor,
+              files: fileSamples,
+              existingFindings,
+              debug: debugContext("llm_rule_pass"),
+              resume: resumeStore ?? undefined
+            });
+          } catch (err) {
+            await handleResumeError(err, "rule");
+            throw err;
+          }
+        }
       }
-    }
   
       if (llmFindings.length > 0) {
         llmFindings = llmFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
@@ -1513,15 +1573,29 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         repositoryDescriptor &&
         (llmFindings.length || existingFindings.length)
       ) {
-        log("LLM scan (composite pass)...");
-        compositeFindings = await scanRepositoryComposites({
-          config,
-          repository: repositoryDescriptor,
-          files: fileSamples,
-          existingFindings,
-          priorFindings: llmFindings,
-          debug: debugContext("llm_composite_pass")
-        });
+        const resumedComposite = resumeStore?.getCompositeResults();
+        if (resumedComposite !== null && resumedComposite !== undefined) {
+          compositeFindings = resumedComposite;
+        } else {
+          if (resumeStore) {
+            await resumeStore.setStage("composite");
+          }
+          log("LLM scan (composite pass)...");
+          try {
+            compositeFindings = await scanRepositoryComposites({
+              config,
+              repository: repositoryDescriptor,
+              files: fileSamples,
+              existingFindings,
+              priorFindings: llmFindings,
+              debug: debugContext("llm_composite_pass")
+            });
+            await resumeStore?.recordCompositeResult(compositeFindings);
+          } catch (err) {
+            await handleResumeError(err, "composite");
+            throw err;
+          }
+        }
       }
   
       if (compositeFindings.length > 0) {
@@ -1668,7 +1742,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         }
       }
   
-      return {
+      const scanResult: ScanResult = {
         findings: [...toStaticFindings(staticFindings, repoPath), ...llmOutput],
         scannedFiles: files.length,
         scannedChunks,
@@ -1680,6 +1754,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         coreFindings,
         coreCompositeFindings
       };
+      if (resumeStore) {
+        await resumeStore.markCompleted();
+      }
+      return scanResult;
     } finally {
       db.close();
     }
