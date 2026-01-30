@@ -7,10 +7,7 @@ export async function POST(req: NextRequest) {
   const email = String((body as any).email ?? "");
   const password = String((body as any).password ?? "");
 
-  // HADRIX_VULN: A06 Authentication Failures
-  // Unlimited login attempts (no throttling or lockout).
   if (!vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts")) {
-    // Placeholder for rate limiting.
   }
 
   if (!email || !password) {

@@ -7,8 +7,6 @@ export async function POST(req: NextRequest) {
   const auth = getAuthContext(req);
   const body = await req.json().catch(() => ({}));
 
-  // HADRIX_VULN: A05 Insecure Design
-  // No rate limit on API token creation.
 
   if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
@@ -21,13 +19,9 @@ export async function POST(req: NextRequest) {
   const sb = supabaseAdmin();
   await sb.from("api_tokens").insert({
     user_id: auth.userId,
-    // HADRIX_VULN: A04 Cryptographic Failures
-    // Storing tokens in plaintext.
     token_plaintext: vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db") ? token : null
   });
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // Logging plaintext tokens.
   if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
     console.log("api token:", token);
   }

@@ -18,9 +18,6 @@ export async function getAuthContext(req: Request): Promise<AuthContext> {
   const authHeader = req.headers.get("authorization");
   const rawToken = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
 
-  // HADRIX_VULN: A04 Cryptographic Failures
-  // Weak/fallback secret used for JWT handling and token "validation" in Edge Functions.
-  // (This block intentionally does NOT perform proper signature verification.)
   if (rawToken && vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback")) {
     const jwtSecret = Deno.env.get("JWT_SECRET") ?? "changeme";
     console.log("jwt secret (fallback):", jwtSecret);
@@ -42,8 +39,6 @@ export async function getAuthContext(req: Request): Promise<AuthContext> {
     }
   }
 
-  // HADRIX_VULN: A06 Authentication Failures
-  // When enabled, do not validate JWT properly; treat "presence of header" as authenticated.
   if (vulnEnabled("vulnerabilities.A06_authentication_failures.jwt_not_validated_in_edge")) {
     return {
       userId: rawToken ? "unknown-user" : null,

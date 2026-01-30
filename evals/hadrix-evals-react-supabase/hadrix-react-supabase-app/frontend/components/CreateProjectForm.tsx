@@ -19,8 +19,6 @@ export function CreateProjectForm({ onCreated }: { onCreated?: (p: CreatedProjec
     setStatus("Creating...");
     try {
       if (vulnEnabled("vulnerabilities.A05_insecure_design.frontend_direct_db_write")) {
-        // HADRIX_VULN: A05 Insecure Design
-        // Client-side writes directly to Supabase without server/edge gating.
         const { data, error } = await supabase.from("projects").insert({
           name,
           org_id: orgId,
@@ -35,8 +33,6 @@ export function CreateProjectForm({ onCreated }: { onCreated?: (p: CreatedProjec
 
       const res = await callEdgeFunction<{ project: CreatedProject; error: string | null }>("create-project", {
         name,
-        // HADRIX_VULN: A05 Insecure Design
-        // Trusting a client-provided orgId for tenant routing.
         orgId,
         description,
         descriptionHtml

@@ -30,8 +30,6 @@ create table if not exists public.projects (
   org_id uuid references public.organizations(id) on delete cascade,
   name text not null,
   description text,
-  -- HADRIX_VULN: A03 Injection
-  -- This field is rendered with dangerouslySetInnerHTML when a toggle is enabled.
   description_html text,
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now()
@@ -49,8 +47,6 @@ create table if not exists public.audit_logs (
 create table if not exists public.api_tokens (
   id bigserial primary key,
   user_id uuid references public.profiles(id) on delete cascade,
-  -- HADRIX_VULN: A04 Cryptographic Failures
-  -- Tokens stored in plaintext for realism (API keys, integration tokens).
   token_plaintext text not null,
   created_at timestamptz not null default now()
 );

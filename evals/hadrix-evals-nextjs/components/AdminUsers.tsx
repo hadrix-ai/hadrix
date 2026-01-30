@@ -20,8 +20,6 @@ export function AdminUsers() {
       try {
         const role = window.localStorage.getItem("role") ?? "member";
 
-        // HADRIX_VULN: A01 Broken Access Control
-        // Frontend-only role enforcement based on localStorage.
         if (vulnEnabled("vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement") && role !== "admin") {
           setError("You are not an admin (client-side check).");
           return;

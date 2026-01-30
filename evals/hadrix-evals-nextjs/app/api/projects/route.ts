@@ -21,8 +21,6 @@ export async function GET(req: NextRequest) {
 
   let query = sb.from("projects").select("id, org_id, name, description, description_html");
 
-  // HADRIX_VULN: A03 Injection
-  // Unsafe query-builder usage with user-controlled OR filter string.
   if (filter && vulnEnabled("vulnerabilities.A03_injection.unsafe_query_builder_filter")) {
     query = query.or(filter);
   }
@@ -35,8 +33,6 @@ export async function GET(req: NextRequest) {
     query = query.eq("org_id", orgId);
   }
 
-  // HADRIX_VULN: A05 Insecure Design
-  // No tenant isolation by design (list all projects).
   if (!trustClientOrgId && !vulnEnabled("vulnerabilities.A05_insecure_design.no_tenant_isolation_by_design")) {
     if (!auth.orgId) {
       return NextResponse.json({ error: "missing org" }, { status: 401, headers: corsHeaders(origin) });
@@ -44,8 +40,6 @@ export async function GET(req: NextRequest) {
     query = query.eq("org_id", auth.orgId);
   }
 
-  // HADRIX_VULN: A09 DoS / Resilience
-  // Unbounded queries without limits when enabled.
   if (!vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries")) {
     query = query.limit(50);
   }
@@ -68,17 +62,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing name" }, { status: 400, headers: corsHeaders(origin) });
   }
 
-  // HADRIX_VULN: A05 Insecure Design
-  // No rate limiting on project creation.
 
-  // HADRIX_VULN: A06 Authentication Failures
-  // Trusting frontend-only auth state (auth.userId can be synthetic if JWT validation is disabled).
   if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401, headers: corsHeaders(origin) });
   }
 
-  // HADRIX_VULN: A01 Broken Access Control
-  // Cross-org data insertion by trusting client-provided orgId.
   const trustClientOrgId =
     vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
     vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
@@ -92,16 +80,12 @@ export async function POST(req: NextRequest) {
       name,
       org_id: finalOrgId || null,
       description: description || null,
-      // HADRIX_VULN: A03 Injection
-      // Storing HTML that is rendered with dangerouslySetInnerHTML in the frontend.
       description_html: descriptionHtml || null,
       created_by: auth.userId
     })
     .select("id, org_id, name")
     .single();
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // Logging potentially sensitive request body (includes org IDs and content).
   if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
     console.log("create-project body:", body);
   }

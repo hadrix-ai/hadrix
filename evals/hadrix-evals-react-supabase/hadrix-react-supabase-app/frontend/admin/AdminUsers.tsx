@@ -23,8 +23,6 @@ export function AdminUsers() {
         const { data } = await supabase.auth.getUser();
         const role = (data.user?.user_metadata as any)?.role ?? "member";
 
-        // HADRIX_VULN: A01 Broken Access Control
-        // Frontend-only role enforcement: hiding admin UI based on client claims.
         if (vulnEnabled("vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement") && role !== "admin") {
           setError("You are not an admin (client-side check).");
           return;

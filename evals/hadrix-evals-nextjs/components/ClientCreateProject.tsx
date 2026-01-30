@@ -28,8 +28,6 @@ export function ClientCreateProject() {
     setStatus("Creating...");
     try {
       if (vulnEnabled("vulnerabilities.A05_insecure_design.frontend_direct_db_write")) {
-        // HADRIX_VULN: A05 Insecure Design
-        // Client-side writes directly to Supabase without server/edge gating.
         const { data, error } = await supabase.from("projects").insert({
           name,
           org_id: orgId,

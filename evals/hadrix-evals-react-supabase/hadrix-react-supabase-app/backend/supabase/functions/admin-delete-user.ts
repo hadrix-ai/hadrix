@@ -17,8 +17,6 @@ Deno.serve(async (req) => {
     });
   }
 
-  // HADRIX_VULN: A01 Broken Access Control
-  // Admin endpoint without server-side role check when enabled.
   const requireAdmin = !vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check");
   if (requireAdmin && auth.role !== "admin") {
     return new Response(JSON.stringify({ error: "forbidden" }), {
@@ -29,14 +27,10 @@ Deno.serve(async (req) => {
 
   const sb = supabaseAdmin();
 
-  // HADRIX_VULN: A02 Security Misconfiguration
-  // Secrets logged to console.
   if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.log_secrets")) {
     console.log("service role key:", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
   }
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // No audit log for destructive admin action when enabled.
   const writeAudit = !vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.no_audit_logs");
 
   const { error } = await sb.auth.admin.deleteUser(userId);

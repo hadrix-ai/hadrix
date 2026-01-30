@@ -8,14 +8,9 @@ async function loginAction(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const magicToken = String(formData.get("magicToken") ?? "");
 
-  // HADRIX_VULN: A06 Authentication Failures
-  // Unlimited login attempts (no throttling or lockout).
   if (!vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts")) {
-    // Placeholder for rate limiting.
   }
 
-  // HADRIX_VULN: A04 Cryptographic Failures
-  // Accept magic links without validating expiration.
   if (magicToken && vulnEnabled("vulnerabilities.A04_cryptographic_failures.magic_link_no_expiration_assumption")) {
     const token = signSession({ sub: "magic-user", email, role: "member" });
     cookies().set("session", token);

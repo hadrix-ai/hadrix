@@ -39,8 +39,6 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
       <p style={{ color: "#777" }}>Org: {project.org_id}</p>
 
       {useHtml ? (
-        // HADRIX_VULN: A03 Injection
-        // XSS: unsafe HTML rendering from DB/user-controlled field.
         <div dangerouslySetInnerHTML={{ __html: project.description_html ?? "" }} />
       ) : (
         <p>{project.description ?? "(no description)"}</p>

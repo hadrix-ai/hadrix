@@ -11,12 +11,8 @@ export async function callEdgeFunction<T = unknown>(
 ): Promise<T> {
   const session = (await supabase.auth.getSession()).data.session;
 
-  // HADRIX_VULN: A06 Authentication Failures
-  // Trusting a stale/forged frontend session state (or even missing session) is treated as "good enough".
   const accessToken = session?.access_token ?? "";
 
-  // HADRIX_VULN: A02 Security Misconfiguration
-  // Misuse of anon key as bearer token (over-privileged client key usage).
   const bearer = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
     ? env.supabaseAnonKey
     : accessToken;

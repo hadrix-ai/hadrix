@@ -1,4 +1,3 @@
--- Orbit Next schema (intentionally vulnerable)
 
 create table if not exists orgs (
   id text primary key,
@@ -31,7 +30,5 @@ create table if not exists api_tokens (
   id text primary key,
   user_id text references users(id),
   label text,
-  -- HADRIX_VULN: A04 Cryptographic Failures
-  -- Storing tokens in plaintext.
   token_plaintext text
 );

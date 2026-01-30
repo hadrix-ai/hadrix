@@ -4,8 +4,6 @@ import { supabaseAdmin } from "./_shared/supabase.ts";
 import { vulnEnabled } from "./_shared/hadrix.ts";
 
 function insecureToken() {
-  // HADRIX_VULN: A04 Cryptographic Failures
-  // Insecure random token generation (predictable / low entropy).
   return `${Math.random().toString(36).slice(2)}.${Date.now()}`;
 }
 
@@ -31,15 +29,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  // HADRIX_VULN: A05 Insecure Design
-  // No rate limiting on token issuance.
 
   const useInsecure = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens");
   const token = useInsecure ? insecureToken() : secureToken();
   const sb = supabaseAdmin();
 
-  // HADRIX_VULN: A04 Cryptographic Failures
-  // Store tokens in plaintext (see schema).
   const storePlaintext = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db");
   const storedValue = storePlaintext ? token : await sha256Hex(token);
 
@@ -49,8 +43,6 @@ Deno.serve(async (req) => {
     .select("id, user_id, token_plaintext, created_at")
     .single();
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // Log the plaintext token.
   if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
     console.log("issued token:", token);
   }

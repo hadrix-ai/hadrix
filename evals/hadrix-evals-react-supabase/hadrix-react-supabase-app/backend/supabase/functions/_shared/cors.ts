@@ -1,8 +1,6 @@
 import { vulnEnabled } from "./hadrix.ts";
 
 export function corsHeaders(origin?: string): Record<string, string> {
-  // HADRIX_VULN: A02 Security Misconfiguration
-  // Overly permissive CORS (allow-all) when toggle is enabled.
   const allowAll = vulnEnabled("vulnerabilities.A02_security_misconfiguration.cors_allow_all");
 
   return {

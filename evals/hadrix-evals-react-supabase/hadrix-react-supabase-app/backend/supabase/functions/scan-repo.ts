@@ -25,11 +25,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  // HADRIX_VULN: A09 DoS / Resilience
-  // No timeouts on external calls / subprocesses.
 
-  // HADRIX_VULN: A03 Injection
-  // Command injection when enabled: repoUrl is concatenated into a shell command.
   const injected = vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo");
 
   const cmd = injected
@@ -38,15 +34,11 @@ Deno.serve(async (req) => {
 
   const result = await runShell(cmd);
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // Logging full command output (potential secrets in URLs).
   if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
     console.log("scan-repo cmd:", cmd);
     console.log("scan-repo result:", result);
   }
 
-  // HADRIX_VULN: A09 DoS / Resilience
-  // Retry storm on failure when enabled.
   if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms") && result.code !== 0) {
     for (let i = 0; i < 5; i++) {
       await runShell(cmd);

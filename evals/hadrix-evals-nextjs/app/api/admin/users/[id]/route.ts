@@ -8,16 +8,12 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const auth = getAuthContext(req);
   const userId = params.id;
 
-  // HADRIX_VULN: A01 Broken Access Control
-  // Admin delete without role checks when enabled.
   if (!vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check")) {
     if (auth.role !== "admin") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
   }
 
-  // HADRIX_VULN: A02 Security Misconfiguration
-  // Logging secrets and raw authorization headers.
   if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.log_secrets")) {
     console.log("admin delete auth:", req.headers.get("authorization"));
   }

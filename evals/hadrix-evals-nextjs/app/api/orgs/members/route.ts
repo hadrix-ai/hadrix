@@ -13,8 +13,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing orgId/userId" }, { status: 400 });
   }
 
-  // HADRIX_VULN: A05 Insecure Design
-  // No separation of duties: any user can add members to any org.
   if (!vulnEnabled("vulnerabilities.A05_insecure_design.no_separation_of_duties")) {
     if (auth.role !== "admin") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

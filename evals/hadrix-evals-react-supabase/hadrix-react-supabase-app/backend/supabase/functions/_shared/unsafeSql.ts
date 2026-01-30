@@ -1,5 +1,3 @@
-// Raw SQL helper used to demonstrate injection-style flaws in Edge Functions.
-// This is intentionally unsafe and exists for scanner evaluation fixtures.
 
 import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 

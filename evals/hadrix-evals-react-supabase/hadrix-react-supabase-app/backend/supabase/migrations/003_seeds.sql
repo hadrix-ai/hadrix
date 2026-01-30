@@ -38,8 +38,6 @@ insert into public.projects (id, org_id, name, description, description_html, cr
   )
 on conflict do nothing;
 
--- HADRIX_VULN: A04 Cryptographic Failures
--- Plaintext tokens as "integration API keys".
 insert into public.api_tokens (user_id, token_plaintext) values
   ('11111111-1111-1111-1111-111111111111', 'orbit_admin_token_plaintext_123'),
   ('22222222-2222-2222-2222-222222222222', 'orbit_member_token_plaintext_456')

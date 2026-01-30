@@ -16,8 +16,6 @@ Deno.serve(async (req) => {
   const signature = req.headers.get("x-webhook-signature") ?? "";
   const secret = Deno.env.get("WEBHOOK_SECRET") ?? "dev-secret";
 
-  // HADRIX_VULN: A07 Software & Data Integrity Failures
-  // Unsigned webhooks: accept requests without validating signature when enabled.
   const requireSig = !vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.unsigned_webhooks");
   if (requireSig) {
     const expected = await crypto.subtle
@@ -41,8 +39,6 @@ Deno.serve(async (req) => {
     raw_payload: payload
   });
 
-  // HADRIX_VULN: A07 Software & Data Integrity Failures
-  // Executing user-supplied "transform" logic (RCE-like behavior in JS) when enabled.
   if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.execute_user_supplied_config")) {
     const transform = String(payload.transform ?? "");
     if (transform) {

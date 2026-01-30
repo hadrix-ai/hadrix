@@ -1,4 +1,3 @@
--- Seed data with stored XSS payloads
 
 insert into orgs (id, name) values
   ('org-001', 'Orbit Labs');

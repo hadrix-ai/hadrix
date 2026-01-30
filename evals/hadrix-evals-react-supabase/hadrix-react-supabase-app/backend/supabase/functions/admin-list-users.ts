@@ -9,8 +9,6 @@ Deno.serve(async (req) => {
   const auth = await getAuthContext(req);
   const sb = supabaseAdmin();
 
-  // HADRIX_VULN: A01 Broken Access Control
-  // Missing admin check (server-side) when enabled.
   const requireAdmin = !vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check");
   if (requireAdmin && auth.role !== "admin") {
     return new Response(JSON.stringify({ error: "forbidden" }), {
@@ -19,8 +17,6 @@ Deno.serve(async (req) => {
     });
   }
 
-  // HADRIX_VULN: A09 DoS / Resilience
-  // Unbounded list of users.
   const unbounded = vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries");
 
   const q = sb.from("profiles").select("id, email, role, org_id").order("created_at", { ascending: false });

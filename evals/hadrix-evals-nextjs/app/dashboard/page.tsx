@@ -20,7 +20,6 @@ async function getOrgSummary(orgId: string) {
 export default async function DashboardPage({ searchParams }: { searchParams: { orgId?: string } }) {
   const orgId = searchParams.orgId ?? "";
 
-  // Intentionally sequential data fetching (waterfall) instead of parallel.
   const orgSummary = await getOrgSummary(orgId);
   const data = await getProjects(orgId);
 

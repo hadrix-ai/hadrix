@@ -12,8 +12,6 @@ export default function LoginPage() {
     e.preventDefault();
     setStatus("Signing in...");
 
-    // HADRIX_VULN: A06 Authentication Failures
-    // No login rate limiting / lockout UX (unlimited attempts).
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setStatus(error ? `Error: ${error.message}` : "Signed in!");
   }

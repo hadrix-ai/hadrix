@@ -14,8 +14,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing repoUrl" }, { status: 400 });
   }
 
-  // HADRIX_VULN: A09 DoS / Resilience
-  // No timeout or circuit breaker around external fetch.
   await fetchExternal("https://example.com/health");
 
   let attempts = 1;
@@ -26,8 +24,6 @@ export async function POST(req: NextRequest) {
   let output = "";
   for (let i = 0; i < attempts; i += 1) {
     if (vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo")) {
-      // HADRIX_VULN: A03 Injection
-      // Command injection by concatenating repoUrl into shell command.
       const { stdout, stderr } = await execAsync(`git ls-remote ${repoUrl}`);
       output += stdout + stderr;
     } else {
@@ -36,8 +32,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // HADRIX_VULN: A08 Logging & Monitoring Failures
-  // Logging sensitive command output.
   if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
     console.log("scan output:", output);
   }

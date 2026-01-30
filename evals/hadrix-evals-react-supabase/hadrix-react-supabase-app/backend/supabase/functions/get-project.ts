@@ -18,8 +18,6 @@ Deno.serve(async (req) => {
     });
   }
 
-  // HADRIX_VULN: A02 Security Misconfiguration
-  // Debug endpoint behavior: returning auth context and headers in responses when enabled.
   if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
     return new Response(
       JSON.stringify({
@@ -32,8 +30,6 @@ Deno.serve(async (req) => {
     );
   }
 
-  // HADRIX_VULN: A03 Injection
-  // SQL injection via raw query string concatenation.
   if (vulnEnabled("vulnerabilities.A03_injection.sql_injection_raw_query")) {
     const sql = `select id, org_id, name, description, description_html from public.projects where id = '${id}' limit 1;`;
     const rows = await unsafeSql<any>(sql);
@@ -42,13 +38,10 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Choose client: anon vs admin (misconfiguration can allow admin-like data access patterns).
   const sb = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
     ? supabaseAnon()
     : supabaseAdmin();
 
-  // HADRIX_VULN: A01 Broken Access Control
-  // IDOR: fetch by ID without verifying tenant membership/ownership when enabled.
   const skipOwnershipCheck = vulnEnabled("vulnerabilities.A01_broken_access_control.idor_get_project");
 
   if (skipOwnershipCheck) {
