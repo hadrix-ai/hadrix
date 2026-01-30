@@ -30,6 +30,11 @@ type SdkResponseWrapper<T> = {
 
 type NonSystemChatMessage = ChatMessage & { role: Exclude<ChatMessage["role"], "system"> };
 
+type AnthropicThinkingConfig = {
+  type: "enabled";
+  budget_tokens: number;
+};
+
 const splitSystemMessages = (
   messages: ChatMessage[]
 ): { system: string; rest: NonSystemChatMessage[] } => {
@@ -43,6 +48,14 @@ const splitSystemMessages = (
     }
   }
   return { system: systemParts.join("\n"), rest };
+};
+
+const resolveThinkingConfig = (input: LlmAdapterInput): AnthropicThinkingConfig | null => {
+  if (!input.reasoning) return null;
+  const rawBudget = Math.max(1024, Math.floor(input.maxTokens * 0.5));
+  const budget = Math.min(rawBudget, input.maxTokens - 1);
+  if (!Number.isFinite(budget) || budget < 1024) return null;
+  return { type: "enabled", budget_tokens: budget };
 };
 
 const normalizeUsageCount = (value: unknown): number | undefined => {
@@ -112,17 +125,25 @@ export async function runAnthropicAdapter(
   });
 
   const { system, rest } = splitSystemMessages(input.messages);
+  const thinking = resolveThinkingConfig(input);
+  const temperature = thinking ? 1 : input.temperature;
 
-  const responsePromise = client.messages.create({
+  const request: Record<string, unknown> = {
     model: input.model,
     max_tokens: input.maxTokens,
-    temperature: input.temperature,
+    temperature,
     system: system.trim() ? system : undefined,
     messages: rest.map((message) => ({
       role: message.role,
       content: message.content
     }))
-  });
+  };
+  if (thinking) {
+    request.thinking = thinking;
+  }
+
+  // SDK types lag the API for "thinking", so we pass a loose shape.
+  const responsePromise = client.messages.create(request as any);
 
   const { data, response: rawResponse } = await unwrapSdkResponse(responsePromise);
   const responseShape = data as AnthropicResponseShape;

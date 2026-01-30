@@ -41,7 +41,11 @@ const shouldIncludeTemperature = (model: string): boolean => {
   return !lowered.startsWith("gpt-5");
 };
 
-const buildReasoning = (model: string): { effort: "medium" | "high" } | undefined => {
+const buildReasoning = (
+  model: string,
+  reasoningEnabled?: boolean
+): { effort: "medium" | "high" } | undefined => {
+  if (reasoningEnabled !== true) return undefined;
   const lowered = model.toLowerCase();
   if (!lowered.startsWith("gpt-5")) return undefined;
   if (lowered.includes("mini") || lowered.includes("nano")) {
@@ -115,7 +119,7 @@ export async function runOpenAiAdapter(
     max_output_tokens: input.maxTokens,
     text: { format: { type: "text" } }
   };
-  const reasoning = buildReasoning(input.model);
+  const reasoning = buildReasoning(input.model, input.reasoning);
   if (reasoning) {
     request.reasoning = reasoning;
   }

@@ -184,6 +184,7 @@ program
     `Use cheap LLM mode (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}); cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
   )
   .option("--fast", "Alias for --cheap")
+  .option("--reasoning", "Enable LLM reasoning mode")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (
@@ -205,6 +206,7 @@ program
       commitSha?: string;
       cheap?: boolean;
       fast?: boolean;
+      reasoning?: boolean;
       debug?: boolean;
       debugLog?: string;
     }
@@ -217,8 +219,12 @@ program
     let scanStart = Date.now();
     let statusMessage = "Running scan...";
     const cheapMode = Boolean(options.cheap || options.fast);
+    const reasoningMode = Boolean(options.reasoning);
     if (cheapMode) {
       enableCheapMode();
+    }
+    if (reasoningMode) {
+      process.env.HADRIX_LLM_REASONING = "1";
     }
 
     const stateDir = path.join(projectRoot, ".hadrix");
@@ -455,6 +461,7 @@ program
     `Use cheap LLM mode (default for evals). OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}. Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
   )
   .option("--fast", "Alias for --cheap")
+  .option("--reasoning", "Enable LLM reasoning mode")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (fixturesDir: string | undefined, options: {
@@ -473,6 +480,7 @@ program
     skipStatic?: boolean;
     cheap?: boolean;
     fast?: boolean;
+    reasoning?: boolean;
     debug?: boolean;
     debugLog?: string;
   }) => {
@@ -483,6 +491,10 @@ program
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
     const cheapMode = options.fast ? true : options.cheap ?? true;
+    const reasoningMode = Boolean(options.reasoning);
+    if (reasoningMode) {
+      process.env.HADRIX_LLM_REASONING = "1";
+    }
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;

@@ -23,6 +23,7 @@ export interface LlmAdapterInput {
   messages: ChatMessage[];
   temperature: number;
   maxTokens: number;
+  reasoning?: boolean;
 }
 
 export interface LlmAdapterUsage {
@@ -114,6 +115,14 @@ const resolveAdapterHeaders = (config: HadrixConfig): Record<string, string> | u
   return Object.keys(filtered).length ? filtered : undefined;
 };
 
+const resolveReasoningModel = (config: HadrixConfig): string => {
+  if (config.llm.reasoning !== true) {
+    return config.llm.model;
+  }
+  const candidate = (config.llm.reasoningModel ?? "").trim();
+  return candidate || config.llm.model;
+};
+
 const estimateTokensFromMessages = (messages: ChatMessage[], maxOutputTokens: number): number => {
   const charCount = messages.reduce((total, message) => total + message.content.length, 0);
   const estimatedInput = Math.ceil(charCount / 4);
@@ -185,22 +194,33 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     throw new LlmMissingApiKeyError();
   }
 
-  const model = config.llm.model || "";
+  const model = resolveReasoningModel(config);
+  const effectiveConfig =
+    model === config.llm.model
+      ? config
+      : {
+          ...config,
+          llm: {
+            ...config.llm,
+            model
+          }
+        };
   const isGpt5 = provider === LLMProviderId.OpenAI && model.toLowerCase().startsWith("gpt-5");
-  const maxTokens = isGpt5 ? Math.max(config.llm.maxTokens, 2048) : config.llm.maxTokens;
+  const maxTokens = isGpt5 ? Math.max(config.llm.maxTokens, 4096) : config.llm.maxTokens;
   const estimatedTokens = estimateTokensFromMessages(messages, maxTokens);
   const baseUrl = resolveSdkBaseUrl(config);
   const defaultHeaders = resolveAdapterHeaders(config);
-  const rateLimitManager = resolveRateLimitManager(config, apiKey, baseUrl);
+  const rateLimitManager = resolveRateLimitManager(effectiveConfig, apiKey, baseUrl);
   await rateLimitManager.beforeRequest(estimatedTokens);
-  const limiter = resolveConcurrencyLimiter(config, apiKey, baseUrl);
+  const limiter = resolveConcurrencyLimiter(effectiveConfig, apiKey, baseUrl);
   const release = limiter ? await limiter.acquire() : null;
   const adapterInput: LlmAdapterInput = {
     provider,
-    model: config.llm.model,
+    model,
     messages,
     temperature: config.llm.temperature,
-    maxTokens
+    maxTokens,
+    reasoning: config.llm.reasoning
   };
 
   try {

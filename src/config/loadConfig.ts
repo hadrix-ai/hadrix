@@ -1,7 +1,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { parseJsonEnv, readEnv, readFirstEnv } from "./env.js";
+import { parseJsonEnv, readEnv, readEnvRaw, readFirstEnv } from "./env.js";
 import {
   DEFAULT_ESLINT_EXTENSIONS,
   DEFAULT_EXCLUDES,
@@ -62,6 +62,8 @@ export interface HadrixConfig {
     baseUrl?: string;
     maxConcurrency?: number;
     estimatedTokensPerTask?: number;
+    reasoning?: boolean;
+    reasoningModel?: string;
     rateLimit?: {
       requestsPerMinute?: number;
       tokensPerMinute?: number;
@@ -126,6 +128,16 @@ function parsePositiveNumber(value: string | number | null | undefined): number 
   return parsed;
 }
 
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
 async function loadConfigFile(projectRoot: string, configPath?: string | null): Promise<Partial<HadrixConfig>> {
   const candidates = configPath
     ? [path.resolve(projectRoot, configPath)]
@@ -181,6 +193,17 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
   const llmModel = isCheapModeEnabled() ? cheapLlmModel(llmProvider) : resolvedLlmModel;
 
+  const llmReasoning =
+    parseOptionalBoolean(readEnvRaw("HADRIX_LLM_REASONING")) ??
+    parseOptionalBoolean(configFile.llm?.reasoning);
+
+  const llmReasoningModelRaw =
+    readEnv("HADRIX_LLM_REASONING_MODEL") || configFile.llm?.reasoningModel;
+  const llmReasoningModel =
+    typeof llmReasoningModelRaw === "string" && llmReasoningModelRaw.trim()
+      ? llmReasoningModelRaw.trim()
+      : resolvedLlmModel;
+
   const defaultLlmEndpoint =
     llmProvider === LLMProviderId.Anthropic
       ? `${llmBaseUrl.replace(/\/$/, "")}/v1/messages`
@@ -232,6 +255,8 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       temperature: configFile.llm?.temperature ?? 0.1,
       maxConcurrency: llmMaxConcurrency ?? undefined,
       estimatedTokensPerTask: llmEstimatedTokensPerTask ?? undefined,
+      reasoning: llmReasoning,
+      reasoningModel: llmReasoningModel,
       rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,
     },
     chunking: {

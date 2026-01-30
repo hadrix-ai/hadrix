@@ -96,6 +96,8 @@ Common environment variables:
 - `HADRIX_API_BASE`, `HADRIX_LLM_BASE`, `HADRIX_EMBEDDINGS_BASE`
 - `HADRIX_LLM_ENDPOINT`, `HADRIX_EMBEDDINGS_ENDPOINT`
 - `HADRIX_LLM_MAX_CONCURRENCY`, `HADRIX_LLM_REQUESTS_PER_MINUTE`, `HADRIX_LLM_TOKENS_PER_MINUTE`
+- `HADRIX_LLM_REASONING` (set to `1` to enable reasoning mode)
+- `HADRIX_LLM_REASONING_MODEL` (optional model override when reasoning is enabled)
 - `HADRIX_API_HEADERS` (JSON string)
 - `HADRIX_REPO_PATH`
 - `HADRIX_CHEAP_MODE` (set to `1` to use cheap LLM models)
@@ -196,6 +198,7 @@ Scan reports are written under `<scan-target>/.hadrix/reports`, including:
 - `--supabase` / `--supabase-url <url>` / `--supabase-password <password>` / `--supabase-schema <path>`
 - `--existing-findings <path>` JSON array or file path for prior findings.
 - `--repo-full-name <name>` / `--repo-id <id>` / `--commit-sha <sha>` metadata overrides.
+- `--reasoning` enables reasoning mode (uses the reasoning model when configured).
 - `--debug` enables debug logging to a file.
 - `--debug-log <path>` sets the debug log file path (implies `--debug`).
 
@@ -210,6 +213,7 @@ Scan reports are written under `<scan-target>/.hadrix/reports`, including:
 - `--out-dir <path>`
 - `--json`
 - `--skip-static`
+- `--reasoning`
 - `--debug` / `--debug-log <path>`
 
 ## Chunking and anchors
