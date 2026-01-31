@@ -133,6 +133,7 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "permissive_cors",
   "debug_auth_leak",
   "missing_webhook_signature",
+  "weak_webhook_secret",
   "missing_webhook_config_integrity",
   "webhook_code_execution",
   "jwt_validation_bypass",
@@ -144,12 +145,14 @@ const CANDIDATE_PROMOTION_TYPES = new Set<string>([
   "anon_key_bearer",
   "missing_bearer_token",
   "frontend_direct_db_write",
+  "tenant_isolation_missing",
   "sensitive_logging",
   "command_output_logging",
   "unbounded_query",
   "missing_timeout",
   "frontend_only_authorization",
   "frontend_login_rate_limit",
+  "missing_mfa",
   "missing_rate_limiting",
   "missing_lockout",
   "missing_audit_logging",
@@ -167,6 +170,7 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   permissive_cors: "medium",
   debug_auth_leak: "medium",
   missing_webhook_signature: "high",
+  weak_webhook_secret: "high",
   missing_webhook_config_integrity: "medium",
   webhook_code_execution: "high",
   jwt_validation_bypass: "high",
@@ -178,12 +182,14 @@ const CANDIDATE_SEVERITY: Record<string, Severity> = {
   anon_key_bearer: "medium",
   missing_bearer_token: "high",
   frontend_direct_db_write: "medium",
+  tenant_isolation_missing: "high",
   sensitive_logging: "medium",
   command_output_logging: "medium",
   unbounded_query: "medium",
   missing_timeout: "medium",
   frontend_only_authorization: "medium",
   frontend_login_rate_limit: "medium",
+  missing_mfa: "medium",
   missing_rate_limiting: "medium",
   missing_lockout: "medium",
   missing_audit_logging: "medium",
@@ -199,6 +205,7 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   permissive_cors: "configuration",
   debug_auth_leak: "authentication",
   missing_webhook_signature: "authentication",
+  weak_webhook_secret: "authentication",
   missing_webhook_config_integrity: "configuration",
   webhook_code_execution: "authentication",
   jwt_validation_bypass: "authentication",
@@ -210,12 +217,14 @@ const CANDIDATE_CATEGORY: Record<string, string> = {
   anon_key_bearer: "authentication",
   missing_bearer_token: "authentication",
   frontend_direct_db_write: "access_control",
+  tenant_isolation_missing: "access_control",
   sensitive_logging: "secrets",
   command_output_logging: "secrets",
   unbounded_query: "configuration",
   missing_timeout: "configuration",
   frontend_only_authorization: "access_control",
   frontend_login_rate_limit: "authentication",
+  missing_mfa: "authentication",
   missing_rate_limiting: "configuration",
   missing_lockout: "authentication",
   missing_audit_logging: "configuration",
@@ -1054,7 +1063,7 @@ function stripExtension(value: string): string {
 function deriveServerActionSymbol(filepath: string): string {
   const normalized = normalizePath(filepath);
   if (!normalized) return "";
-  const match = normalized.match(/(?:^|\/)app\/(?:[^/]+\/)*actions\/(.+)$/i);
+  const match = normalized.match(/(?:^|\/)app\/(?:[^/]+\/)*_?actions\/(.+)$/i);
   if (match?.[1]) {
     return stripExtension(match[1]);
   }

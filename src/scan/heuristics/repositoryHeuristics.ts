@@ -106,7 +106,8 @@ export const REQUIRED_CONTROLS: Record<FileRole, string[]> = {
     "authentication",
     "authorization:role",
     "audit_logging",
-    "rate_limiting"
+    "rate_limiting",
+    "mfa"
   ],
   USER_READ_ENDPOINT: ["authentication", "authorization:ownership_or_membership"],
   USER_WRITE_ENDPOINT: [
@@ -154,8 +155,8 @@ const BACKEND_PATH_HINTS = [
 ];
 const APP_ROUTER_API_PATH_PATTERN = /(^|\/)(src\/)?app\/api(\/|$)/i;
 const SERVER_ACTION_PATH_PATTERNS = [
-  /^app\/actions(?:\/|$|\.)/i,
-  /\/app\/actions(?:\/|$|\.)/i
+  /^app\/_?actions(?:\/|$|\.)/i,
+  /\/app\/_?actions(?:\/|$|\.)/i
 ];
 const BACKGROUND_PATH_HINTS = [
   "/jobs/",
@@ -230,11 +231,26 @@ const RATE_LIMIT_PATTERNS = [
   /express-rate-limit/i,
   /upstash\/ratelimit/i
 ];
+const RATE_LIMIT_USAGE_PATTERNS = [
+  /\brate[_-]?limit\w*\s*\(/i,
+  /\bratelimit\w*\s*\(/i,
+  /\bwithRateLimit\w*\s*\(/i,
+  /\bthrottle\w*\s*\(/i,
+  /\blimiter\w*\.(consume|check|limit|penalize|get)\s*\(/i,
+  /\brateLimit\w*\.(consume|check|limit|penalize|get)\s*\(/i
+];
 const RATE_LIMIT_NEGATION_PATTERNS = [
   /\bno\s+rate[_-]?limit\b/i,
   /\bwithout\s+rate[_-]?limit\b/i,
   /\bdisable(?:d)?\s+rate[_-]?limit\b/i,
   /\brate[_-]?limit\s*disabled\b/i,
+  /\brate[_-]?limit(?:ing)?\s*[:=]\s*(false|0)\b/i,
+  /\brateLimitEnabled\s*[:=]\s*false\b/i,
+  /\brateLimitDisabled\s*[:=]\s*true\b/i,
+  /\bdisableRateLimit\b/i,
+  /\bskipRateLimit\b/i,
+  /\bbypassRateLimit\b/i,
+  /\bnoRateLimit\b/i,
   /\bno\s+throttl/i,
   /\bunthrottled\b/i,
   /\bunlimited\s+requests?\b/i,
@@ -397,9 +413,20 @@ const DB_ID_PATTERNS = [
 const OWNERSHIP_FILTER_PATTERNS = [
   /\.eq\(\s*['"](org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)['"]/i,
   /\.in\(\s*['"](org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)['"]/i,
+  /\.filter\(\s*['"](org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)['"]/i,
+  /\.contains\(\s*['"](org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)['"]/i,
   /\.match\(\s*\{[^}]*\b(org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)\b/i,
   /\bwhere\s*\(\s*\{[^}]*\b(org_id|orgId|user_id|userId|tenant_id|tenantId|owner_id|ownerId|team_id|teamId|workspace_id|workspaceId|account_id|accountId)\b/i,
   /\bWHERE\b[^\n]{0,120}\b(org_id|user_id|tenant_id|owner_id|team_id|workspace_id|account_id)\b/i
+];
+const TENANT_COLLECTION_PATTERNS = [
+  /\.from\(\s*['"](orgs?|organizations?|tenants?|accounts?|workspaces?|teams?)\b/i,
+  /\.from\(\s*(?:[A-Z_]*ORG[A-Z_]*|[A-Z_]*TENANT[A-Z_]*|[A-Z_]*WORKSPACE[A-Z_]*|[A-Z_]*ACCOUNT[A-Z_]*|[A-Z_]*TEAM[A-Z_]*)\b/i,
+  /\bdb\.(orgs?|organizations?|tenants?|accounts?|workspaces?|teams?)\b/i,
+  /\b(orgs?|organizations?|tenants?|accounts?|workspaces?|teams?)\.(findAll|findMany)\b/i,
+  /\b(prisma|db)\.(orgs?|organization|organizations|tenant|tenants|workspace|workspaces|account|accounts|team|teams)\.(findMany|findFirst|findUnique)\b/i,
+  /\bfetch\s*\(\s*['"][^'"]*\/api\/(orgs?|organizations?|tenants?|accounts?|workspaces?|teams?)\b/i,
+  /\baxios\.(get|post|put|patch|delete)\s*\(\s*['"][^'"]*\/api\/(orgs?|organizations?|tenants?|accounts?|workspaces?|teams?)\b/i
 ];
 
 const DB_WRITE_PATTERNS = [/\.(insert|update|upsert|create(?:Many|One)?)\s*\(/i, /\.rpc\s*\(/i];
@@ -504,6 +531,9 @@ const AUDIT_DISABLE_PATTERNS = [
   /\bskip[_\s-]?audit\b/i,
   /\bdisable(?:d)?[_\s-]?audit\b/i,
   /\baud(it)?_?log(?:s)?\s*disabled\b/i,
+  /\baudit(?:ing)?Enabled\b[^\n]{0,20}false\b/i,
+  /\baudit(?:ing)?Enabled\s*[:=]\s*false\b/i,
+  /!\s*audit(?:ing)?Enabled\b/i,
   /vulnEnabled\s*\([^)]*audit/i
 ];
 
@@ -570,7 +600,17 @@ const SQL_INJECTION_PATTERNS = [
   /`[^`]*\b(select|insert|update|delete)\b[^`]*\$\{[^}]+}/i,
   /\b(select|insert|update|delete)\b[^\n]{0,120}\+[^\n]{0,120}\b(req\.|params\.|query\.|body\.)/i
 ];
-const RAW_SQL_HELPER_PATTERNS = [/\braw\s+sql\b/i, /\bunsafe\s+sql\b/i, /\bsql\s+helper\b/i];
+const RAW_SQL_HELPER_PATTERNS = [
+  /\braw\s+sql\b/i,
+  /\bunsafe\s+sql\b/i,
+  /\bsql\s+helper\b/i,
+  /\bunsafeSql\b/i,
+  /\brawSql\b/i,
+  /\bqueryRawUnsafe\b/i,
+  /\bexecuteRawUnsafe\b/i,
+  /\bsql\.unsafe\b/i,
+  /\bunsafeQuery\b/i
+];
 
 const QUERY_BUILDER_PATTERNS = [
   /\.(or|filter|ilike|order|textSearch)\s*\([^\n]*(req\.|params\.|query\.|body\.)/i,
@@ -646,6 +686,12 @@ const WEBHOOK_SIGNATURE_PATTERNS = [
   /\bx-.*-signature\b/i,
   /\bwebhook-secret\b/i
 ];
+const WEBHOOK_SECRET_FALLBACK_PATTERNS = [
+  /\bWEBHOOK_[A-Z0-9_]*SECRET\b[^\n]*(\|\||\?\?)[^\n]*['"][^'"]+['"]/i,
+  /\bwebhook[A-Za-z0-9_]*Secret\b[^\n]*(\|\||\?\?)[^\n]*['"][^'"]+['"]/i,
+  /\bwebhook[A-Za-z0-9_]*secret\b[^\n]*(\|\||\?\?)[^\n]*['"][^'"]+['"]/i,
+  /\bwebhook[A-Za-z0-9_]*secret\b\s*=\s*['"][^'"]+['"]/i
+];
 
 const WEBHOOK_CONFIG_PATTERNS = [
   /\bconfigUrl\w*\b/i,
@@ -714,7 +760,7 @@ const ADMIN_CONTEXT_PATTERNS = [
   /service[\s_-]*role/i
 ];
 const NEXT_PUBLIC_SECRET_PATTERNS = [
-  /\bNEXT_PUBLIC_[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE|ADMIN|SIGNING|JWT)(?:_?[A-Z0-9_]*KEY)?\b/i
+  /\bNEXT_PUBLIC_[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE|ADMIN|SIGNING|JWT|TOKEN|API_KEY|APIKEY)(?:_?[A-Z0-9_]*KEY)?\b/i
 ];
 const STORAGE_CONTEXT_PATTERNS = [
   /\bbucket\b/i,
@@ -729,6 +775,11 @@ const PUBLIC_BUCKET_PATTERNS = [
   /\bpublic[-_]?read[-_]?write\b/i,
   /\bpublic[-_]?bucket\b/i,
   /\bpublic[-_]?assets?\b/i,
+  /\bpublic\s*:\s*(true|1|["']true["'])\b/i,
+  /\bisPublic\s*:\s*(true|1|["']true["'])\b/i,
+  /\bpublic\s*=\s*(true|1|["']true["'])\b/i,
+  /\.makePublic\s*\(/i,
+  /\.setPublic\s*\(/i,
   /\bbucket\b[^\n]{0,40}\bpublic\b/i,
   /\bpublic\b[^\n]{0,40}\bbucket\b/i
 ];
@@ -757,6 +808,18 @@ const LOCKOUT_PATTERNS = [
   /\blogin\s*attempts?\b/i,
   /\bmax(?:imum)?\s*attempts?\b/i,
   /\bbrute[- ]?force\b/i
+];
+const MFA_PATTERNS = [
+  /\bmfa\b/i,
+  /\b2fa\b/i,
+  /\bmulti[-\s]?factor\b/i,
+  /\bsecond[-\s]?factor\b/i,
+  /\botp\b/i,
+  /\btotp\b/i,
+  /\bwebauthn\b/i,
+  /\bauthenticator\b/i,
+  /\bpasskey\b/i,
+  /\bsecurity\s*key\b/i
 ];
 const LOCKOUT_NEGATION_PATTERNS = [
   /\bno\s+lockout\b/i,
@@ -870,12 +933,14 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   webhook_signature_missing: 110,
   missing_webhook_config_integrity: 112,
   webhook_code_execution: 105,
+  weak_webhook_secret: 100,
   jwt_validation_bypass: 105,
   weak_jwt_secret: 100,
   weak_token_generation: 95,
   magic_link_no_expiration: 90,
   idor: 95,
   org_id_trust: 95,
+  tenant_isolation_missing: 90,
   unsafe_query_builder: 90,
   debug_auth_leak: 85,
   anon_key_bearer: 95,
@@ -886,6 +951,7 @@ const CANDIDATE_PRIORITY: Record<string, number> = {
   unbounded_query: 70,
   missing_timeout: 65,
   frontend_only_authorization: 75,
+  missing_mfa: 80,
   missing_rate_limiting: 45,
   missing_lockout: 44,
   missing_audit_logging: 65,
@@ -938,11 +1004,15 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   },
   missing_audit_logging: {
     allowedScopes: ["backend_endpoint", "backend_shared"],
-    requiresEvidence: { endpointContext: true, sharedContext: true, destructiveAction: true }
+    requiresEvidence: { endpointContext: true, sharedContext: true }
   },
   missing_webhook_signature: {
     allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true }
+  },
+  weak_webhook_secret: {
+    allowedScopes: ["backend_endpoint", "backend_shared"],
+    requiresEvidence: { endpointContext: true, sharedContext: true }
   },
   missing_webhook_config_integrity: {
     allowedScopes: ["backend_endpoint"],
@@ -999,6 +1069,19 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
   frontend_only_authorization: {
     allowedScopes: ["frontend_ui", "frontend_util"]
   },
+  tenant_isolation_missing: {
+    allowedScopes: [
+      "frontend_ui",
+      "frontend_util",
+      "server_component",
+      "backend_endpoint",
+      "backend_shared"
+    ]
+  },
+  missing_mfa: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
+  },
   anon_key_bearer: {
     allowedScopes: ["frontend_ui", "frontend_util", "backend_shared"]
   },
@@ -1015,7 +1098,7 @@ const CANDIDATE_RULE_GATES: Record<string, RuleScopeGate> = {
     allowedScopes: ["frontend_ui", "frontend_util", "backend_shared", "config_metadata"]
   },
   missing_least_privilege: {
-    allowedScopes: ["backend_shared", "config_metadata"]
+    allowedScopes: ["backend_shared", "frontend_util", "config_metadata"]
   }
 };
 
@@ -1034,6 +1117,10 @@ const CONTROL_RULE_GATES: Record<string, RuleScopeGate> = {
   rate_limiting: {
     allowedScopes: ["backend_endpoint"],
     requiresEvidence: { endpointContext: true, sensitiveAction: true }
+  },
+  mfa: {
+    allowedScopes: ["backend_endpoint"],
+    requiresEvidence: { endpointContext: true }
   },
   audit_logging: {
     allowedScopes: ["backend_endpoint", "backend_shared"],
@@ -1427,6 +1514,20 @@ export function buildCandidateFindings(
       }
     }
 
+    if (
+      canRunRule("tenant_isolation_missing") &&
+      (scopeValue === "frontend_ui" ||
+        scopeValue === "frontend_util" ||
+        scopeValue === "server_component" ||
+        scopeValue === "backend_endpoint" ||
+        scopeValue === "backend_shared")
+    ) {
+      const tenantIsolation = detectTenantIsolationCandidate(file, roles);
+      if (tenantIsolation) {
+        candidates.push(tenantIsolation);
+      }
+    }
+
     if (canRunRule("permissive_cors") && hasPermissiveCors(content)) {
       const line = findFirstLineMatch(content, CORS_WILDCARD_PATTERNS, startLine);
       candidates.push({
@@ -1728,6 +1829,33 @@ export function buildCandidateFindings(
             endLine: line?.line ?? startLine,
             excerpt: line?.text,
             note: "Webhook handler without signature verification"
+          }
+        ],
+        relatedFileRoles: roles
+      });
+    }
+
+    if (
+      canRunRule("weak_webhook_secret") &&
+      roles.includes("WEBHOOK_ENDPOINT") &&
+      hasWebhookSignatureCheck(content) &&
+      hasWeakWebhookSecret(content)
+    ) {
+      const line = findFirstLineMatch(content, WEBHOOK_SECRET_FALLBACK_PATTERNS, startLine);
+      candidates.push({
+        id: `webhook-weak-secret:${file.path}:${line?.line ?? startLine}`,
+        type: "weak_webhook_secret",
+        summary: "Webhook signature verification uses a weak or fallback secret",
+        rationale:
+          "Webhook secrets should never fall back to hardcoded defaults; weak secrets allow forged webhook payloads.",
+        filepath: file.path,
+        evidence: [
+          {
+            filepath: file.path,
+            startLine: line?.line ?? startLine,
+            endLine: line?.line ?? startLine,
+            excerpt: line?.text,
+            note: "Webhook secret fallback or hardcoded value detected"
           }
         ],
         relatedFileRoles: roles
@@ -2081,6 +2209,39 @@ export function buildCandidateFindings(
       }
     }
 
+    if (
+      canRunRule("missing_mfa") &&
+      roles.includes("ADMIN_ENDPOINT") &&
+      isEndpointRole(roles)
+    ) {
+      const sensitive = roles.includes("ADMIN_ENDPOINT") ||
+        isSensitiveAction(content, roles, file.path, scopeEvidence) ||
+        isDestructiveAction(content, file.path);
+      if (sensitive && !hasMfaControls(content)) {
+        const line =
+          findFirstLineMatch(content, ROUTER_HANDLER_PATTERNS, startLine) ??
+          findFirstLineMatch(content, ADMIN_PATH_PATTERNS, startLine);
+        candidates.push({
+          id: `missing-mfa:${file.path}:${line?.line ?? startLine}`,
+          type: "missing_mfa",
+          summary: "Admin endpoint lacks MFA enforcement",
+          rationale:
+            "Admin actions should enforce MFA to mitigate credential theft and session compromise.",
+          filepath: file.path,
+          evidence: [
+            {
+              filepath: file.path,
+              startLine: line?.line ?? startLine,
+              endLine: line?.line ?? startLine,
+              excerpt: line?.text,
+              note: "Admin endpoint without MFA enforcement"
+            }
+          ],
+          relatedFileRoles: roles
+        });
+      }
+    }
+
     if (canRunRule("missing_lockout") && isEndpointRole(roles)) {
       const lowerPath = file.path ? file.path.toLowerCase() : "";
       const scopeAuthHint = scopeEvidence?.sensitiveActionHints.includes("auth") ?? false;
@@ -2252,6 +2413,53 @@ export function buildCandidateFindings(
         const orgTrust = detectOrgIdTrustCandidateAcrossChunks(group, roles, scopeEvidence);
         if (orgTrust) {
           candidates.push(orgTrust);
+        }
+      }
+      if (canRunRule("missing_audit_logging")) {
+        const auditDisabled = matchesAnyAcrossSamples(group, AUDIT_DISABLE_PATTERNS);
+        const destructiveAdmin =
+          roles.includes("ADMIN_ENDPOINT") && matchesAnyAcrossSamples(group, DESTRUCTIVE_PATTERNS);
+        const hasAudit = matchesAnyAcrossSamples(group, AUDIT_PATTERNS);
+        if (auditDisabled || (destructiveAdmin && !hasAudit)) {
+          const line = auditDisabled
+            ? findFirstLineMatchAcrossSamples(group, AUDIT_DISABLE_PATTERNS)
+            : findFirstLineMatchAcrossSamples(group, DESTRUCTIVE_PATTERNS);
+          candidates.push({
+            id: `missing-audit-log:${path}:${line?.line ?? group[0]?.startLine ?? 1}`,
+            type: "missing_audit_logging",
+            summary: auditDisabled
+              ? "Audit logging can be disabled or skipped for sensitive actions"
+              : "No audit log recorded for destructive admin action",
+            rationale: auditDisabled
+              ? "Audit logging appears to be bypassable, which can leave sensitive actions without a trail."
+              : "Admin endpoint appears to perform destructive actions without emitting audit logs that capture actor + target.",
+            filepath: path,
+            evidence: [
+              {
+                filepath: line?.filepath ?? path,
+                startLine: line?.line ?? group[0]?.startLine ?? 1,
+                endLine: line?.line ?? group[0]?.startLine ?? 1,
+                excerpt: line?.text,
+                note: auditDisabled
+                  ? "Audit logging can be bypassed"
+                  : "Destructive action without audit logging"
+              }
+            ],
+            relatedFileRoles: roles
+          });
+        }
+      }
+      if (
+        canRunRule("tenant_isolation_missing") &&
+        (scopeValue === "frontend_ui" ||
+          scopeValue === "frontend_util" ||
+          scopeValue === "server_component" ||
+          scopeValue === "backend_endpoint" ||
+          scopeValue === "backend_shared")
+      ) {
+        const tenantIsolation = detectTenantIsolationCandidateAcrossChunks(group, roles);
+        if (tenantIsolation) {
+          candidates.push(tenantIsolation);
         }
       }
       if (
@@ -2892,13 +3100,36 @@ function hasRateLimit(content: string): boolean {
   if (!content) return false;
   const lines = content.split("\n");
   for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (
+      trimmed.startsWith("//") ||
+      trimmed.startsWith("/*") ||
+      trimmed.startsWith("*") ||
+      trimmed.startsWith("#")
+    ) {
+      continue;
+    }
+    if (/^\s*import\b/i.test(trimmed)) {
+      continue;
+    }
+    if (/^\s*export\b/i.test(trimmed) && /\bfrom\b/i.test(trimmed)) {
+      continue;
+    }
+    if (/^\s*const\b/i.test(trimmed) && /\brequire\s*\(/i.test(trimmed)) {
+      continue;
+    }
     if (!RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(line))) {
       continue;
     }
     if (RATE_LIMIT_NEGATION_PATTERNS.some((pattern) => pattern.test(line))) {
       continue;
     }
-    return true;
+    if (RATE_LIMIT_USAGE_PATTERNS.some((pattern) => pattern.test(line))) {
+      return true;
+    }
   }
   return false;
 }
@@ -2916,6 +3147,11 @@ function hasLockout(content: string): boolean {
     return true;
   }
   return false;
+}
+
+function hasMfaControls(content: string): boolean {
+  if (!content) return false;
+  return MFA_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function hasMagicLinkExpirationCheck(content: string): boolean {
@@ -3002,7 +3238,32 @@ function isAdminOrDestructive(roles: FileRole[], content: string, filepath?: str
 }
 
 function hasAuditLogging(content: string): boolean {
-  return AUDIT_PATTERNS.some((pattern) => pattern.test(content));
+  if (!content) return false;
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (
+      trimmed.startsWith("//") ||
+      trimmed.startsWith("/*") ||
+      trimmed.startsWith("*") ||
+      trimmed.startsWith("#")
+    ) {
+      continue;
+    }
+    if (/^\s*import\b/i.test(trimmed)) {
+      continue;
+    }
+    if (/^\s*export\b/i.test(trimmed) && /\bfrom\b/i.test(trimmed)) {
+      continue;
+    }
+    if (AUDIT_PATTERNS.some((pattern) => pattern.test(line))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function collectSelectQueryVariables(content: string): string[] {
@@ -3128,6 +3389,10 @@ function hasUseClientDirective(content: string): boolean {
 
 function hasWebhookSignatureCheck(content: string): boolean {
   return WEBHOOK_SIGNATURE_PATTERNS.some((pattern) => pattern.test(content));
+}
+
+function hasWeakWebhookSecret(content: string): boolean {
+  return WEBHOOK_SECRET_FALLBACK_PATTERNS.some((pattern) => pattern.test(content));
 }
 
 function hasWebhookConfigFetch(content: string): boolean {
@@ -3275,10 +3540,20 @@ function findPublicBucketLine(
   content: string,
   startLine: number
 ): { line: number; text: string } | null {
-  if (!matchesAny(content, STORAGE_CONTEXT_PATTERNS)) {
+  const line = findFirstLineMatch(content, PUBLIC_BUCKET_PATTERNS, startLine);
+  if (!line) {
     return null;
   }
-  return findFirstLineMatch(content, PUBLIC_BUCKET_PATTERNS, startLine);
+  if (matchesAny(content, STORAGE_CONTEXT_PATTERNS)) {
+    return line;
+  }
+  if (/\b(bucket|storage|s3|blob)\b/i.test(line.text)) {
+    return line;
+  }
+  if (hasPatternNearLine(content, line.line, startLine, STORAGE_CONTEXT_PATTERNS, 8)) {
+    return line;
+  }
+  return null;
 }
 
 function isLoginPage(path: string, content: string): boolean {
@@ -3501,6 +3776,80 @@ function detectFrontendOrgIdTrustCandidate(
       "Server-rendered code uses orgId from URL/search params to fetch tenant data without deriving it from server-side auth.",
     filepath: file.path,
     evidence: trimEvidence(evidence),
+    relatedFileRoles: roles
+  };
+}
+
+function detectTenantIsolationCandidateAcrossChunks(
+  samples: RepositoryFileSample[],
+  roles: FileRole[]
+): CandidateFinding | null {
+  const sorted = [...samples].sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+  const queryLine = findFirstLineMatchAcrossSamples(sorted, TENANT_COLLECTION_PATTERNS);
+  if (!queryLine) {
+    return null;
+  }
+  const hasFilter = matchesAnyAcrossSamples(sorted, OWNERSHIP_FILTER_PATTERNS);
+  if (hasFilter) {
+    return null;
+  }
+  return {
+    id: `tenant-isolation:${queryLine.filepath}:${queryLine.line}`,
+    type: "tenant_isolation_missing",
+    summary: "Tenant isolation missing for org/tenant data queries",
+    rationale:
+      "Queries against org/tenant collections appear unscoped, which can expose data across tenants.",
+    filepath: queryLine.filepath,
+    evidence: [
+      {
+        filepath: queryLine.filepath,
+        startLine: queryLine.line,
+        endLine: queryLine.line,
+        excerpt: queryLine.text,
+        note: "Tenant collection queried without scoping filter"
+      }
+    ],
+    relatedFileRoles: roles
+  };
+}
+
+function detectTenantIsolationCandidate(
+  file: RepositoryFileSample,
+  roles: FileRole[]
+): CandidateFinding | null {
+  const content = file.content ?? "";
+  const startLine = file.startLine ?? 1;
+  const queryLine = findFirstLineMatch(content, TENANT_COLLECTION_PATTERNS, startLine);
+  if (!queryLine) {
+    return null;
+  }
+  const hasFilterNearby = hasPatternNearLine(
+    content,
+    queryLine.line,
+    startLine,
+    OWNERSHIP_FILTER_PATTERNS,
+    8
+  );
+  if (hasFilterNearby) {
+    return null;
+  }
+
+  return {
+    id: `tenant-isolation:${file.path}:${queryLine.line}`,
+    type: "tenant_isolation_missing",
+    summary: "Tenant isolation missing for org/tenant data queries",
+    rationale:
+      "Queries against org/tenant collections appear unscoped, which can expose data across tenants.",
+    filepath: file.path,
+    evidence: [
+      {
+        filepath: file.path,
+        startLine: queryLine.line,
+        endLine: queryLine.line,
+        excerpt: queryLine.text,
+        note: "Tenant collection queried without scoping filter"
+      }
+    ],
     relatedFileRoles: roles
   };
 }

@@ -281,9 +281,13 @@ program
       }
     } else if (process.stdin.isTTY && !isJsonOutput) {
       const dbPrompt = [
-        "Would you like to also scan your database for misconfigured RLS, column privileges, public storage, and more?",
-        "This is strongly recommended as most security issues for vibe coders are in database misconfigurations.",
-        "All data is stored locally on your device. See https://cli.hadrix.ai for more information and see our OSS code https://github.com/hadrix-ai/hadrix.",
+        "Would you like to also scan your database for misconfigured RLS,",
+        "column privileges, public storage, and more?",
+        "This is strongly recommended; most security issues for vibe coders are in",
+        "database misconfigurations.",
+        "All data is stored locally on your device.",
+        "More info: https://cli.hadrix.ai",
+        "OSS code: https://github.com/hadrix-ai/hadrix.",
         "",
         "If so, select a database provider below. If not, then skip."
       ].join("\n");

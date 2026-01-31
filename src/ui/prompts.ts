@@ -30,6 +30,14 @@ function displayLineCount(value: string, columns: number): number {
   return Math.max(1, Math.ceil(plain.length / width));
 }
 
+function fitToWidth(value: string, columns: number): string {
+  const width = Math.max(4, columns);
+  const plain = stripAnsi(value);
+  if (plain.length <= width) return value;
+  const trimmed = plain.slice(0, Math.max(1, width - 3));
+  return `${trimmed}...`;
+}
+
 export async function promptSelect(
   question: string,
   choices: string[],
@@ -48,16 +56,16 @@ export async function promptSelect(
     if (rendered && renderedLines > 0) {
       process.stdout.write(`\x1b[${renderedLines}A`);
     }
+    const columns = Math.max(process.stdout.columns ?? 80, 20);
     const lines = [
       ...questionLines,
       ...choices.map((choice, index) => {
         const active = index === selected;
-        const marker = active ? "●" : "○";
-        const line = `${marker} ${choice}`;
+        const marker = active ? "[x]" : "[ ]";
+        const line = fitToWidth(`${marker} ${choice}`, columns);
         return active ? pc.green(line) : line;
       })
     ];
-    const columns = Math.max(process.stdout.columns ?? 80, 20);
     renderedLines = 0;
     for (const line of lines) {
       process.stdout.write("\x1b[2K\r");
