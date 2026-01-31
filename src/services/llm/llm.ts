@@ -2,6 +2,7 @@ import { LLMProviderId } from "../../config/loadConfig.js";
 import type { HadrixConfig, LLMProvider } from "../../config/loadConfig.js";
 import {
   LlmMissingApiKeyError,
+  LlmResponseIncompleteError,
   ProviderApiResponseError,
   ProviderRequestFailedError
 } from "../../errors/provider.errors.js";
@@ -40,6 +41,8 @@ export interface LlmAdapterResult {
 }
 
 const MAX_ATTEMPTS = 3;
+const RETRY_MAX_TOKENS_FLOOR = 8192;
+const RETRY_MAX_TOKENS_CAP = 16384;
 const concurrencyLimiters = new Map<string, Semaphore>();
 const rateLimitManagers = new Map<string, RateLimitManager>();
 const SDK_ENDPOINT_SUFFIX = /\/v1\/(chat\/completions|responses|messages)\/?$/;
@@ -166,6 +169,22 @@ const isLikelyNetworkError = (err: unknown): boolean => {
   return false;
 };
 
+const resolveRetryMaxTokens = (current: number): number => {
+  const bumped = current + 4096;
+  const doubled = current * 2;
+  const candidate = Math.max(bumped, doubled, RETRY_MAX_TOKENS_FLOOR);
+  return Math.min(candidate, RETRY_MAX_TOKENS_CAP);
+};
+
+const isRetryableOutputLimitError = (err: unknown): err is LlmResponseIncompleteError => {
+  if (!(err instanceof LlmResponseIncompleteError)) return false;
+  if (err.reason === "max_output_tokens") return true;
+  if (err.outputTokens !== undefined && err.maxOutputTokens !== undefined) {
+    return err.outputTokens >= err.maxOutputTokens;
+  }
+  return false;
+};
+
 const throwAdapterError = (
   err: unknown,
   provider: LLMProvider,
@@ -173,6 +192,13 @@ const throwAdapterError = (
 ): never => {
   if (err instanceof ProviderApiResponseError || err instanceof ProviderRequestFailedError) {
     throw err;
+  }
+  if (err instanceof LlmResponseIncompleteError) {
+    const message =
+      err.reason === "max_output_tokens"
+        ? "LLM response exceeded the output token limit. Increase max tokens or reduce prompt size."
+        : "LLM response incomplete. Increase max tokens or retry the request.";
+    throw new ProviderApiResponseError(message);
   }
   const status = extractErrorStatus(err);
   const message = err instanceof Error ? err.message : String(err);
@@ -206,40 +232,58 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
           }
         };
   const isGpt5 = provider === LLMProviderId.OpenAI && model.toLowerCase().startsWith("gpt-5");
-  const maxTokens = isGpt5 ? Math.max(config.llm.maxTokens, 4096) : config.llm.maxTokens;
-  const estimatedTokens = estimateTokensFromMessages(messages, maxTokens);
+  const baseMaxTokens = isGpt5 ? Math.max(config.llm.maxTokens, 4096) : config.llm.maxTokens;
   const baseUrl = resolveSdkBaseUrl(config);
   const defaultHeaders = resolveAdapterHeaders(config);
   const rateLimitManager = resolveRateLimitManager(effectiveConfig, apiKey, baseUrl);
-  await rateLimitManager.beforeRequest(estimatedTokens);
   const limiter = resolveConcurrencyLimiter(effectiveConfig, apiKey, baseUrl);
   const release = limiter ? await limiter.acquire() : null;
-  const adapterInput: LlmAdapterInput = {
-    provider,
-    model,
-    messages,
-    temperature: config.llm.temperature,
-    maxTokens,
-    reasoning: config.llm.reasoning
+
+  const runAdapter = async (maxTokens: number, reasoning?: boolean): Promise<LlmAdapterResult> => {
+    const estimatedTokens = estimateTokensFromMessages(messages, maxTokens);
+    await rateLimitManager.beforeRequest(estimatedTokens);
+    try {
+      const adapterInput: LlmAdapterInput = {
+        provider,
+        model,
+        messages,
+        temperature: config.llm.temperature,
+        maxTokens,
+        reasoning
+      };
+      const adapterOptions = {
+        apiKey,
+        baseUrl,
+        maxRetries: Math.max(0, MAX_ATTEMPTS - 1),
+        defaultHeaders
+      };
+      const result =
+        provider === LLMProviderId.Anthropic
+          ? await runAnthropicAdapter(adapterInput, adapterOptions)
+          : await runOpenAiAdapter(adapterInput, adapterOptions);
+      rateLimitManager.updateFromResponse(result.response);
+      return result;
+    } catch (err) {
+      rateLimitManager.updateFromResponse(
+        (err as { response?: Response }).response ?? (err as { rawResponse?: Response }).rawResponse
+      );
+      throw err;
+    }
   };
 
   try {
-    const adapterOptions = {
-      apiKey,
-      baseUrl,
-      maxRetries: Math.max(0, MAX_ATTEMPTS - 1),
-      defaultHeaders
-    };
-    const result =
-      provider === LLMProviderId.Anthropic
-        ? await runAnthropicAdapter(adapterInput, adapterOptions)
-        : await runOpenAiAdapter(adapterInput, adapterOptions);
-    rateLimitManager.updateFromResponse(result.response);
+    const result = await runAdapter(baseMaxTokens, config.llm.reasoning);
     return result.text;
   } catch (err) {
-    rateLimitManager.updateFromResponse(
-      (err as { response?: Response }).response ?? (err as { rawResponse?: Response }).rawResponse
-    );
+    if (isRetryableOutputLimitError(err)) {
+      const retryMaxTokens = resolveRetryMaxTokens(baseMaxTokens);
+      try {
+        const retryResult = await runAdapter(retryMaxTokens, config.llm.reasoning);
+        return retryResult.text;
+      } catch (retryErr) {
+        return throwAdapterError(retryErr, provider, baseUrl ?? config.llm.endpoint);
+      }
+    }
     return throwAdapterError(err, provider, baseUrl ?? config.llm.endpoint);
   } finally {
     release?.();

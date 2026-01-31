@@ -39,3 +39,28 @@ export class LlmResponseMissingContentError extends Error {
     this.name = "LlmResponseMissingContentError";
   }
 }
+
+export class LlmResponseIncompleteError extends Error {
+  reason?: string | null;
+  responseId?: string;
+  outputTokens?: number;
+  maxOutputTokens?: number;
+  response?: Response;
+
+  constructor(params: {
+    reason?: string | null;
+    responseId?: string;
+    outputTokens?: number;
+    maxOutputTokens?: number;
+    response?: Response;
+  }) {
+    const reasonLabel = params.reason ? ` (${params.reason})` : "";
+    super(`LLM response incomplete${reasonLabel}.`);
+    this.name = "LlmResponseIncompleteError";
+    this.reason = params.reason ?? null;
+    this.responseId = params.responseId;
+    this.outputTokens = params.outputTokens;
+    this.maxOutputTokens = params.maxOutputTokens;
+    this.response = params.response;
+  }
+}

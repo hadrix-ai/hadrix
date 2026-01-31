@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 
+import { LlmResponseIncompleteError } from "../../errors/provider.errors.js";
 import type { ChatMessage, LlmAdapterInput, LlmAdapterResult, LlmAdapterUsage } from "./llm.js";
 
 export interface OpenAiAdapterOptions {
@@ -11,7 +12,13 @@ export interface OpenAiAdapterOptions {
 }
 
 type OpenAiResponseShape = {
+  id?: string;
+  status?: string;
+  incomplete_details?: {
+    reason?: string | null;
+  };
   output_text?: string | null;
+  max_output_tokens?: number;
   output?: Array<{
     content?: Array<{
       type?: string;
@@ -57,6 +64,24 @@ const buildReasoning = (
 const normalizeUsageCount = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return Math.max(0, Math.trunc(value));
+};
+
+const normalizeReason = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
+
+const detectIncompleteReason = (response: OpenAiResponseShape): string | null => {
+  const direct = normalizeReason(response.incomplete_details?.reason);
+  if (direct) return direct;
+  if (response.status === "incomplete") return "incomplete";
+  const outputTokens = normalizeUsageCount(response.usage?.output_tokens);
+  const maxOutputTokens = normalizeUsageCount(response.max_output_tokens);
+  if (outputTokens !== undefined && maxOutputTokens !== undefined && outputTokens >= maxOutputTokens) {
+    return "max_output_tokens";
+  }
+  return null;
 };
 
 const extractUsage = (response: OpenAiResponseShape): LlmAdapterUsage | undefined => {
@@ -133,6 +158,16 @@ export async function runOpenAiAdapter(
   const responseShape = data as OpenAiResponseShape;
   const text = extractOutputText(responseShape);
   if (!text) {
+    const incompleteReason = detectIncompleteReason(responseShape);
+    if (incompleteReason) {
+      throw new LlmResponseIncompleteError({
+        reason: incompleteReason,
+        responseId: responseShape.id,
+        outputTokens: normalizeUsageCount(responseShape.usage?.output_tokens),
+        maxOutputTokens: normalizeUsageCount(responseShape.max_output_tokens),
+        response: rawResponse
+      });
+    }
     const preview = JSON.stringify(responseShape).slice(0, 2000);
     throw new Error(`OpenAI response missing output text. Response preview: ${preview}`);
   }
