@@ -1761,6 +1761,17 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     } finally {
       db.close();
     }
+  } catch (err) {
+    if (debugWriter) {
+      const message = err instanceof Error ? err.message : String(err);
+      debugWriter.log({
+        event: "scan_error",
+        name: err instanceof Error ? err.name : "Error",
+        message,
+        stack: err instanceof Error ? err.stack : undefined
+      });
+    }
+    throw err;
   } finally {
     if (debugWriter) {
       await debugWriter.close();

@@ -96,6 +96,8 @@ function shouldSuppressCliError(message: string): boolean {
   const lowered = message.toLowerCase();
   if (lowered.includes("claude.com/en/api/rate-limits")) return true;
   if (lowered.includes("anthropic.com/contact-sales")) return true;
+  if (lowered.includes("output token limit")) return true;
+  if (lowered.includes("llm response incomplete")) return true;
   return lowered.includes("organization's rate limit") && lowered.includes("input tokens per minute");
 }
 
