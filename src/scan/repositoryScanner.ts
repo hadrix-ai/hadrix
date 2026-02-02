@@ -17,8 +17,7 @@ import {
   buildRepositoryRuleBatchSystemPrompt
 } from "./prompts/repositoryPrompts.js";
 import {
-  buildChunkUnderstandingSystemPrompt,
-  buildFamilyMappingSystemPrompt
+  buildUnderstandingAndFamilyMappingSystemPrompt
 } from "./prompts/llmUnderstandingPrompts.js";
 import { buildOpenScanSystemPrompt } from "./prompts/openScanPrompts.js";
 import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./catalog/repositoryRuleCatalog.js";
@@ -73,6 +72,7 @@ type LlmChunkUnderstanding = {
 type LlmFamilyMapping = {
   chunk_id: string;
   families: LlmFamilyCandidate[];
+  suggested_rule_ids?: string[];
   needs_more_context: string[];
   [key: string]: unknown;
 };
@@ -132,6 +132,7 @@ const OPEN_SCAN_FAMILIES = new Set([
 
 const BASELINE_RULE_IDS = [
   "missing_authentication",
+  "missing_admin_mfa",
   "idor",
   "sql_injection",
   "command_injection",
@@ -183,6 +184,7 @@ const FAMILY_RULES: Record<string, string[]> = {
   ],
   authentication: [
     "missing_authentication",
+    "missing_admin_mfa",
     "missing_server_action_auth",
     "missing_lockout",
     "missing_secure_token_handling",
@@ -367,12 +369,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     undefined,
     buildKnowledgeContext() || undefined
   );
-  const understandingSystemPrompt = [
-    buildChunkUnderstandingSystemPrompt(),
-    systemContext
-  ].filter(Boolean).join("\n\n");
-  const familyMappingSystemPrompt = [
-    buildFamilyMappingSystemPrompt(),
+  const understandingAndFamilyMappingSystemPrompt = [
+    buildUnderstandingAndFamilyMappingSystemPrompt(),
     systemContext
   ].filter(Boolean).join("\n\n");
   const openScanSystemPrompt = [
@@ -393,41 +391,45 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   const resumedOpenFindings: RepositoryScanFinding[] = [];
   let resumedTaskCount = 0;
 
-  log("LLM scan (chunk understanding + family mapping)...");
+  log("LLM scan (understanding + family mapping, single-pass)...");
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
   const fileInsights = await runWithConcurrency(
     input.files,
     mapConcurrency,
     async (file): Promise<LlmFileInsight> => {
       const chunkId = buildChunkKey(file);
-      const understandingPayload = {
+      const mappingPayload = {
         chunk_id: chunkId,
         file_path: file.path,
         language: inferLanguage(file.path),
         chunk_text: file.content
       };
-      const understandingResponse = await runChatCompletion(input.config, [
-        { role: "system", content: understandingSystemPrompt },
-        { role: "user", content: JSON.stringify(understandingPayload, null, 2) }
+      const mappingResponse = await runChatCompletion(input.config, [
+        { role: "system", content: understandingAndFamilyMappingSystemPrompt },
+        { role: "user", content: JSON.stringify(mappingPayload, null, 2) }
       ]);
+
       let understanding: LlmChunkUnderstanding | null = null;
+      let familyMapping: LlmFamilyMapping | null = null;
       try {
-        understanding = parseChunkUnderstanding(understandingResponse, {
+        const parsed = parseUnderstandingAndFamilyMapping(mappingResponse, {
           chunkId,
           filePath: file.path
         });
+        understanding = parsed.understanding;
+        familyMapping = parsed.familyMapping;
       } catch (err) {
         const savedPath = await writeLlmDebugArtifact(
           input.config,
-          "llm-understanding",
-          understandingResponse
+          "llm-understanding-family-mapping",
+          mappingResponse
         );
         const message = err instanceof Error ? err.message : String(err);
         log(
-          `LLM understanding parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+          `LLM understanding/family mapping parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
         );
         logDebug(input.debug, {
-          event: "llm_understanding_parse_error",
+          event: "llm_understanding_family_mapping_parse_error",
           file: {
             path: file.path,
             chunkIndex: file.chunkIndex,
@@ -437,43 +439,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           message,
           savedPath
         });
-      }
-
-      let familyMapping: LlmFamilyMapping | null = null;
-      if (understanding) {
-        const mappingPayload = {
-          chunk_id: chunkId,
-          file_path: file.path,
-          chunk_understanding: understanding
-        };
-        const mappingResponse = await runChatCompletion(input.config, [
-          { role: "system", content: familyMappingSystemPrompt },
-          { role: "user", content: JSON.stringify(mappingPayload, null, 2) }
-        ]);
-        try {
-          familyMapping = parseFamilyMapping(mappingResponse, { chunkId });
-        } catch (err) {
-          const savedPath = await writeLlmDebugArtifact(
-            input.config,
-            "llm-family-mapping",
-            mappingResponse
-          );
-          const message = err instanceof Error ? err.message : String(err);
-          log(
-            `LLM family mapping parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
-          );
-          logDebug(input.debug, {
-            event: "llm_family_mapping_parse_error",
-            file: {
-              path: file.path,
-              chunkIndex: file.chunkIndex,
-              startLine: file.startLine,
-              endLine: file.endLine
-            },
-            message,
-            savedPath
-          });
-        }
       }
 
       const selection = resolveCandidateRuleIds({
@@ -494,7 +459,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           },
           understandingConfidence: understanding?.confidence ?? 0,
           candidateRuleIds,
-          families: familyMapping?.families ?? []
+          families: familyMapping?.families ?? [],
+          suggestedRuleIds: familyMapping?.suggested_rule_ids ?? []
         });
       }
       log(
@@ -503,6 +469,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           `${file.path}:${file.startLine}-${file.endLine}`,
           `families=${selection.families.length ? selection.families.join(",") : "none"}`,
           `familyCandidates=${familyMapping?.families?.length ?? 0}`,
+          `suggestedRules=${familyMapping?.suggested_rule_ids?.length ?? 0}`,
           `rules=${candidateRuleIds.length}`,
           `strategy=${selection.strategy}`
         ].join(" | ")
@@ -1292,15 +1259,10 @@ function coerceStringArray(value: unknown): string[] {
   return next;
 }
 
-function parseChunkUnderstanding(
-  raw: string,
+function parseChunkUnderstandingRecord(
+  record: Record<string, unknown>,
   fallback: { chunkId: string; filePath: string }
 ): LlmChunkUnderstanding {
-  const parsed = extractJson(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("LLM returned invalid JSON for chunk understanding.");
-  }
-  const record = parsed as Record<string, unknown>;
   const chunkId =
     typeof record.chunk_id === "string" && record.chunk_id.trim()
       ? record.chunk_id.trim()
@@ -1318,15 +1280,10 @@ function parseChunkUnderstanding(
   };
 }
 
-function parseFamilyMapping(
-  raw: string,
+function parseFamilyMappingRecord(
+  record: Record<string, unknown>,
   fallback: { chunkId: string }
 ): LlmFamilyMapping {
-  const parsed = extractJson(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("LLM returned invalid JSON for family mapping.");
-  }
-  const record = parsed as Record<string, unknown>;
   const chunkId =
     typeof record.chunk_id === "string" && record.chunk_id.trim()
       ? record.chunk_id.trim()
@@ -1345,12 +1302,77 @@ function parseFamilyMapping(
     });
   }
   const needsMoreContext = coerceStringArray(record.needs_more_context);
+  const suggestedRuleIdsRaw =
+    Array.isArray(record.suggested_rule_ids) ? record.suggested_rule_ids :
+    Array.isArray(record.suggestedRuleIds) ? record.suggestedRuleIds :
+    Array.isArray(record.suggested_rules) ? record.suggested_rules :
+    Array.isArray(record.suggestedRules) ? record.suggestedRules :
+    [];
+  const suggestedRuleIds = coerceStringArray(suggestedRuleIdsRaw).slice(0, 5);
   return {
     ...record,
     chunk_id: chunkId,
     families,
+    suggested_rule_ids: suggestedRuleIds.length ? suggestedRuleIds : undefined,
     needs_more_context: needsMoreContext
   };
+}
+
+function parseChunkUnderstanding(
+  raw: string,
+  fallback: { chunkId: string; filePath: string }
+): LlmChunkUnderstanding {
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM returned invalid JSON for chunk understanding.");
+  }
+  return parseChunkUnderstandingRecord(parsed as Record<string, unknown>, fallback);
+}
+
+function parseFamilyMapping(
+  raw: string,
+  fallback: { chunkId: string }
+): LlmFamilyMapping {
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM returned invalid JSON for family mapping.");
+  }
+  return parseFamilyMappingRecord(parsed as Record<string, unknown>, fallback);
+}
+
+function parseUnderstandingAndFamilyMapping(
+  raw: string,
+  fallback: { chunkId: string; filePath: string }
+): { understanding: LlmChunkUnderstanding | null; familyMapping: LlmFamilyMapping | null } {
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM returned invalid JSON for understanding+family mapping.");
+  }
+  const record = parsed as Record<string, unknown>;
+
+  const understandingRaw = record.chunk_understanding;
+  const familyRaw = record.family_mapping;
+
+  if (!understandingRaw || typeof understandingRaw !== "object" || Array.isArray(understandingRaw)) {
+    throw new Error("Missing chunk_understanding object.");
+  }
+  if (!familyRaw || typeof familyRaw !== "object" || Array.isArray(familyRaw)) {
+    throw new Error("Missing family_mapping object.");
+  }
+
+  const understanding = parseChunkUnderstandingRecord(
+    understandingRaw as Record<string, unknown>,
+    fallback
+  );
+  const familyMapping = parseFamilyMappingRecord(
+    familyRaw as Record<string, unknown>,
+    { chunkId: understanding.chunk_id || fallback.chunkId }
+  );
+
+  // Ensure identifiers are consistent.
+  familyMapping.chunk_id = understanding.chunk_id;
+
+  return { understanding, familyMapping };
 }
 
 function resolveCandidateRuleIds(params: {
@@ -1400,6 +1422,18 @@ function resolveCandidateRuleIds(params: {
 
   const selected: string[] = [];
   const seen = new Set<string>();
+
+  // LLM-driven narrowing: if the mapping suggests specific rule ids, prioritize them.
+  const suggestedRuleIds = (familyMapping?.suggested_rule_ids ?? []).filter(Boolean);
+  for (const ruleId of suggestedRuleIds) {
+    if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
+    seen.add(ruleId);
+    selected.push(ruleId);
+    if (selected.length >= MAX_RULES_PER_CHUNK) {
+      return { ruleIds: selected, families, strategy };
+    }
+  }
+
   for (const family of families) {
     const ruleIds = FAMILY_RULES[family] ?? [];
     for (const ruleId of ruleIds) {

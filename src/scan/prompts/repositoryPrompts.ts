@@ -49,8 +49,9 @@ const BASE_SCAN_PROMPT = [
     "- If a SECURITY HEADER is present, copy entry point/sink context into details.entryPoint and details.sinks; include details.primarySymbol when clear",
     "",
     "Guardrails:",
-    "- Only report rate limiting, audit logging, or lockout gaps on server-side handlers/middleware (API routes, server functions).",
-    "- Do not flag UI components or client SDK initialization for backend-only controls.",
+    "- Only report rate limiting or audit logging gaps on server-side handlers/middleware (API routes, server functions).",
+    "- Lockout/anti-bruteforce gaps may be reported from login flows even when the evidence is in UI/server actions (e.g., a login page that triggers password sign-in) as long as the flow clearly performs authentication attempts and there is no backoff/CAPTCHA/lockout shown.",
+    "- Do not flag unrelated UI components or generic client SDK initialization for backend-only controls.",
     "- Do not cite package.json, lockfiles, or other non-executable config files as evidence for runtime vulnerabilities.",
     "",
     "Family mapping candidates are prioritization hints; if evidence supports them, prefer emitting them.",
@@ -73,6 +74,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Frontend-only authorization enforcement",
     "- Missing role checks on admin endpoints",
     "- Admin endpoints missing MFA/2FA enforcement",
+    "- Login flows missing lockout/backoff/CAPTCHA (unlimited attempts)",
     "- Trusting client-provided orgId or userId",
     "- Tenant isolation missing for org/tenant list queries (unscoped access)",
     "- Missing rate limiting on sensitive actions",
@@ -112,12 +114,43 @@ export function buildRepositoryScanSystemPrompt(): string {
 
 export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): string {
   const ruleCard = formatRuleCard(rule);
+  const extraGuidance: string[] = [];
+  if (rule.id === "sql_injection") {
+    extraGuidance.push(
+      "SQL injection helper guidance:",
+      "- Also report raw-SQL helper wrappers that accept a SQL string parameter (e.g., function runQuery(sql: string), unsafeSql(sql: string)).",
+      "- Even if the snippet is a stub/placeholder (e.g., only logs the SQL), treat it as a dangerous raw-SQL execution pattern and report it.",
+      "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
+      "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
+    );
+  }
+  if (rule.id === "missing_lockout") {
+    extraGuidance.push(
+      "Lockout/bruteforce guidance:",
+      "- If the chunk shows a login attempt (password sign-in) and there is no backoff/lockout/CAPTCHA logic, report missing_lockout.",
+      "- It is valid to report based on the login UI/server action code when that code triggers password sign-in (e.g., signInWithPassword).",
+      "- Evidence can be absence-of-control: there is no delay counters, no attempt tracking, no CAPTCHA, no lockout messaging or state.",
+      "- Do not confuse missing credential validation bugs with lockout bugs; focus on brute-force defenses."
+    );
+  }
+  if (rule.id === "missing_bearer_token") {
+    extraGuidance.push(
+      "Bearer token guidance:",
+      "- Report when code sends Authorization: Bearer using a token that can be empty (token ?? \"\") or unvalidated client state.",
+      "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
+      "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
+    );
+  }
+
   return [
     BASE_SCAN_PROMPT,
     "",
     "This scan is rule-scoped.",
     "You may ONLY report findings for the rule below.",
     "If evidence is insufficient or the rule does not apply, return an empty findings array.",
+    "Be conservative: do NOT infer missing controls unless the chunk clearly shows the relevant handler/operation and the absence is unambiguous.",
+    "Do not guess based on best practices; only report what the code supports.",
+    ...(extraGuidance.length ? ["", ...extraGuidance] : []),
     "",
     ruleCard,
     "",
@@ -135,12 +168,27 @@ export function buildRepositoryRuleBatchSystemPrompt(
   }
   const ruleCards = rules.map(formatRuleCard).join("\n\n");
   const ruleIds = rules.map((rule) => rule.id).join(", ");
+  const hasSqlInjection = rules.some((rule) => rule.id === "sql_injection");
+  const extraGuidance: string[] = [];
+  if (hasSqlInjection) {
+    extraGuidance.push(
+      "SQL injection helper guidance (applies only when emitting ruleId=sql_injection):",
+      "- Also report raw-SQL helper wrappers that accept a SQL string parameter (e.g., function runQuery(sql: string), unsafeSql(sql: string)).",
+      "- Even if the snippet is a stub/placeholder (e.g., only logs the SQL), treat it as a dangerous raw-SQL execution pattern and report it.",
+      "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
+      "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
+    );
+  }
+
   return [
     BASE_SCAN_PROMPT,
     "",
     "This scan is rule-scoped.",
     "You may ONLY report findings for the rules below.",
     "If evidence is insufficient or the rules do not apply, return an empty findings array.",
+    "Be conservative: do NOT infer missing controls unless the chunk clearly shows the relevant handler/operation and the absence is unambiguous.",
+    "Do not guess based on best practices; only report what the code supports.",
+    ...(extraGuidance.length ? ["", ...extraGuidance] : []),
     "",
     `Allowed rule ids: ${ruleIds}`,
     "",

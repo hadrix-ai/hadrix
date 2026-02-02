@@ -73,7 +73,9 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description: "Login flows lack account lockout or brute-force defenses.",
     candidateTypes: ["missing_lockout"],
     guidance: [
-      "Require account lockout or escalating delays after repeated failed login attempts.",
+      "Report when a login flow performs password sign-in attempts (server route, server action, or client auth call like signInWithPassword) and there is no evidence of lockout/backoff/CAPTCHA after repeated failures.",
+      "Accept lockout, progressive delay, CAPTCHA, or other brute-force defenses when explicitly present in the shown code.",
+      "Do NOT require seeing a database of login attempts; absence of any backoff/lockout logic in the login handler/page is sufficient when the login attempt logic is clearly shown.",
       "CAPTCHA or challenge-based defenses can be valid alternatives."
     ]
   },
@@ -173,6 +175,18 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     ]
   },
   {
+    id: "missing_admin_mfa",
+    title: "Admin endpoints do not require MFA",
+    category: "authentication",
+    description: "Privileged/admin actions can be performed without a second factor (MFA/2FA) or step-up authentication.",
+    candidateTypes: ["missing_admin_mfa"],
+    guidance: [
+      "Report when an admin/privileged endpoint performs sensitive actions based only on a basic session/JWT without step-up auth (2FA/OTP/WebAuthn) and there is no verified global enforcement.",
+      "Accept equivalent step-up controls (re-auth prompt + OTP, WebAuthn, device challenge) when clearly present.",
+      "Do not report on non-admin endpoints; focus on destructive actions or admin data access." 
+    ]
+  },
+  {
     id: "missing_webhook_config_integrity",
     title: "Missing webhook config integrity checks",
     category: "configuration",
@@ -262,15 +276,25 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     id: "sql_injection",
     title: "SQL injection",
     category: "injection",
-    description: "Queries are built using raw SQL with user-controlled input.",
-    candidateTypes: ["sql_injection"]
+    description: "Queries are built using raw SQL with user-controlled input (or raw SQL execution helpers that can be reached by untrusted input).",
+    candidateTypes: ["sql_injection"],
+    guidance: [
+      "Report when raw SQL strings are built with interpolated/concatenated values that can come from request parameters, headers, body, or other untrusted sources.",
+      "Also report raw SQL EXECUTION HELPERS that accept an arbitrary SQL string and execute it without parameterization (e.g., client.query(sql), queryObject(sql), execute(sql)). Such helpers are high-risk because they are easily misused by callers with untrusted input.",
+      "If a helper looks like a raw SQL execution wrapper (function name / signature indicates executing SQL, takes sql: string), report it even if the implementation in the chunk only logs the SQL or is a placeholder/stub. These wrappers are still dangerous patterns and are easily wired to a real driver call.",
+      "Do not require proving a specific exploit; focus on the presence of a raw SQL string execution pathway or execution helper accepting caller-controlled SQL text."
+    ]
   },
   {
     id: "unsafe_query_builder",
     title: "Unsafe query builder usage",
     category: "injection",
     description: "Query builder filters appear to be composed from untrusted input.",
-    candidateTypes: ["unsafe_query_builder"]
+    candidateTypes: ["unsafe_query_builder"],
+    guidance: [
+      "Report when a query builder accepts raw filter expressions from request input (e.g., .or(filterString), .whereRaw(expr), .filter(expr)) without strict validation/allowlisting.",
+      "Be careful not to flag static, developer-authored filters that do not incorporate untrusted input."
+    ]
   },
   {
     id: "command_injection",
@@ -360,8 +384,13 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     id: "missing_bearer_token",
     title: "Missing bearer token on protected requests",
     category: "authentication",
-    description: "Requests are sent without bearer tokens for protected endpoints.",
-    candidateTypes: ["missing_bearer_token"]
+    description: "Requests are sent without bearer tokens (or with empty/placeholder bearer tokens) for protected endpoints.",
+    candidateTypes: ["missing_bearer_token"],
+    guidance: [
+      "Report when code constructs an Authorization: Bearer header from a token value that can be empty (e.g., token ?? \"\") and then proceeds with the request.",
+      "This is an auth failure pattern because callers can send requests with empty or attacker-controlled tokens; servers must treat tokens as untrusted and verify them.",
+      "Evidence can be: defaulting token to empty string and interpolating into `Bearer ${token}`." 
+    ]
   },
   {
     id: "frontend_login_rate_limit",
