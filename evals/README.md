@@ -15,19 +15,28 @@ Evals always use the OpenAI comparator for matching, using the same env as the s
 Optional flags:
 
 - `--spec <id>` / `--group <id>` to run a subset. Available specs:
-  - `evals-sanity-check`
-  - `hadrix-evals-sql-injection`
-  - `hadrix-evals-idor`
-  - `hadrix-evals-command-injection`
-  - `hadrix-evals-xss`
-  - `hadrix-evals-admin-authz`
-  - `hadrix-evals-tenant-isolation`
-  - `hadrix-evals-frontend-authz`
-  - `hadrix-evals-rls-exposure`
-  - `hadrix-evals-auth-failures`
-  - `hadrix-evals-security-misconfiguration`
-  - `hadrix-evals-react-supabase`
-  - `hadrix-evals-nextjs`
+  - Utility:
+    - `evals-sanity-check`
+  - Category specs (vulnerability-focused):
+    - `hadrix-evals-sql-injection`
+    - `hadrix-evals-idor`
+    - `hadrix-evals-command-injection`
+    - `hadrix-evals-xss`
+    - `hadrix-evals-admin-authz`
+    - `hadrix-evals-tenant-isolation`
+    - `hadrix-evals-frontend-authz`
+    - `hadrix-evals-rls-exposure`
+    - `hadrix-evals-auth-failures`
+    - `hadrix-evals-security-misconfiguration`
+    - `hadrix-evals-crypto-failures`
+    - `hadrix-evals-software-integrity`
+    - `hadrix-evals-logging-monitoring`
+    - `hadrix-evals-dos-resilience`
+    - `hadrix-evals-vulnerable-deps`
+    - `hadrix-evals-frontend-direct-db-write`
+  - App-based suites (kept for parity runs):
+    - `hadrix-evals-react-supabase`
+    - `hadrix-evals-nextjs`
 - Variant suites are tracked in `evals/EVAL_VARIANTS_CHECKLIST.md`. When variant fixtures/specs are present, they use a `-variants` suffix (for example `hadrix-evals-react-supabase-variants` or `hadrix-evals-nextjs-variants`). Point `--fixtures` or `HADRIX_EVALS_DIR` at the directory containing those repos when running them.
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
 - `HADRIX_EVALS_DIR=<dir>` to override the default fixtures directory.
@@ -46,3 +55,6 @@ Artifacts are written to `./.hadrix-evals` by default:
 - `summary.md` (human-readable summary)
 
 Note: datastore/RLS eval groups are present in the suite but always skipped by the CLI.
+
+## Category suite run log
+- 2026-02-02: Attempted to run category suites locally (starting with `hadrix evals --spec hadrix-evals-sql-injection`). Run aborted before suite execution because the eval comparator requires an OpenAI API key (`HADRIX_LLM_API_KEY`/`OPENAI_API_KEY`). No category suite results recorded.

@@ -1,0 +1,50 @@
+[
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
+    "description": "Unsigned webhooks accepted and signature verification can be skipped",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
+    "description": "User-supplied transform logic executed with new Function",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
+    "description": "External config fetched without integrity checks",
+    "severity": "medium"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-fakeout-1/app/api/webhook/route.ts",
+    "description": "Unsigned webhooks accepted when signature enforcement can be skipped",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-fakeout-1/app/api/webhook/route.ts",
+    "description": "User-supplied transform executed via Function constructor in webhook handler",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nextjs-fakeout-1/app/api/webhook/route.ts",
+    "description": "External config fetched without integrity verification",
+    "severity": "medium"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/supabase-baseline/backend/supabase/functions/webhook.ts",
+    "description": "Unsigned webhooks accepted when signature validation is disabled by toggle",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/supabase-baseline/backend/supabase/functions/webhook.ts",
+    "description": "User-supplied transform executed via new Function (code execution / integrity failure) when toggle enabled",
+    "severity": "critical"
+  }
+]

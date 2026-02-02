@@ -1,0 +1,12 @@
+{
+  "appName": "hadrix-evals-logging-monitoring",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A08_logging_monitoring_failures": {
+      "no_audit_logs": true,
+      "sensitive_data_in_logs": true,
+      "no_alerts_for_privilege_escalation": true,
+      "logs_retention_too_short": true
+    }
+  }
+}

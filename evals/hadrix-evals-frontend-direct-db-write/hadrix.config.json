@@ -1,0 +1,9 @@
+{
+  "appName": "hadrix-evals-frontend-direct-db-write",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A05_insecure_design": {
+      "frontend_direct_db_write": true
+    }
+  }
+}

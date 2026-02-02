@@ -25,6 +25,12 @@
   },
   {
     "category": "A04_Cryptographic_Failures",
+    "file": "cases/nextjs-fakeout-1/app/api/password-reset/route.ts",
+    "description": "Predictable password reset token derived from user data and stored in plaintext",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/create-api-token.ts",
     "description": "Insecure token generation using Math.random + timestamp",
     "severity": "high"

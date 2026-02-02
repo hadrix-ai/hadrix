@@ -1,0 +1,12 @@
+{
+  "appName": "hadrix-evals-dos-resilience",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A09_dos_and_resilience": {
+      "no_timeouts_external_calls": true,
+      "retry_storms": true,
+      "unbounded_db_queries": true,
+      "resource_exhaustion_large_payloads": true
+    }
+  }
+}
