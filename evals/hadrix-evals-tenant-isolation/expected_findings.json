@@ -34,5 +34,11 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/create-project.ts",
     "description": "Server function trusts client orgId for project creation",
     "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/brokencrystals-baseline/server/routes/tenants.ts",
+    "description": "Tenant isolation failure: orgId from request scopes queries without membership checks",
+    "severity": "high"
   }
 ]

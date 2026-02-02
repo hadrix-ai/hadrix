@@ -16,5 +16,11 @@
     "file": "cases/supabase-baseline/frontend/app/projects/[id]/page.tsx",
     "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
     "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/brokencrystals-baseline/client/TestimonialCard.tsx",
+    "description": "Stored XSS: dangerouslySetInnerHTML renders testimonial body without sanitization",
+    "severity": "high"
   }
 ]

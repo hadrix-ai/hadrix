@@ -16,5 +16,23 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
     "description": "IDOR: project fetched by ID without verifying org membership/ownership",
     "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/brokencrystals-baseline/server/routes/users.ts",
+    "description": "IDOR: user record fetched by email without verifying ownership",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/dvws-baseline/server/routes/accounts.ts",
+    "description": "IDOR: account fetched by ID without verifying ownership",
+    "severity": "medium"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nodegoat-baseline/server/routes/transactions.ts",
+    "description": "IDOR: transaction fetched by ID without verifying ownership",
+    "severity": "medium"
   }
 ]

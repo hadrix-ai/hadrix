@@ -16,5 +16,11 @@
     "file": "cases/supabase-baseline/frontend/admin/AdminUsers.tsx",
     "description": "Frontend-only admin gating: hides admin UI based on client metadata rather than server authorization",
     "severity": "medium"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/brokencrystals-baseline/client/AdminPanel.tsx",
+    "description": "Frontend-only admin gating based on client state",
+    "severity": "medium"
   }
 ]

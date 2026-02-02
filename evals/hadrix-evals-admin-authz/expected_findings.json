@@ -28,5 +28,11 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/admin-list-users.ts",
     "description": "Admin data exposure: lists all profiles without server-side role check",
     "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/brokencrystals-baseline/server/routes/adminUsers.ts",
+    "description": "Admin endpoint updates user roles without verifying admin privileges",
+    "severity": "high"
   }
 ]

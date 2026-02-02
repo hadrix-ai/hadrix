@@ -46,5 +46,23 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/list-projects.ts",
     "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed directly to PostgREST query builder",
     "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/brokencrystals-baseline/server/routes/testimonials.ts",
+    "description": "SQL injection: raw SQL built by concatenating the search term into the WHERE clause",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nodevulnerable-baseline/server/routes/orders.ts",
+    "description": "SQL injection: raw SQL built by concatenating the user id into the WHERE clause",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nodevulnerable-baseline/server/db/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by NodeVulnerable routes (no parameterization)",
+    "severity": "high"
   }
 ]

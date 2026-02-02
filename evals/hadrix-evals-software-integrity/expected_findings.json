@@ -46,5 +46,17 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/webhook.ts",
     "description": "User-supplied transform executed via new Function (code execution / integrity failure) when toggle enabled",
     "severity": "critical"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/brokencrystals-baseline/server/routes/webhook.ts",
+    "description": "Unsigned webhooks accepted without signature verification",
+    "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/brokencrystals-baseline/server/routes/webhook.ts",
+    "description": "User-supplied transform executed via Function constructor in webhook handler",
+    "severity": "high"
   }
 ]

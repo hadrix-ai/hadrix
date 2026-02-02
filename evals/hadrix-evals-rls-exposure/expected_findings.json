@@ -22,5 +22,11 @@
     "file": "cases/supabase-baseline/datastores/supabase/mock/schema.json",
     "description": "RLS enabled but no policies defined for public.test_rls_no_policy",
     "severity": "low"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/brokencrystals-baseline/db/rls.sql",
+    "description": "Permissive RLS policy allows unrestricted access",
+    "severity": "high"
   }
 ]

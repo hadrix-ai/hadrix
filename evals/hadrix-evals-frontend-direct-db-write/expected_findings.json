@@ -16,5 +16,11 @@
     "file": "cases/supabase-baseline/frontend/components/CreateProjectForm.tsx",
     "description": "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
     "severity": "medium"
+  },
+  {
+    "category": "A05_Insecure_Design",
+    "file": "cases/brokencrystals-baseline/components/ClientCreateOrder.tsx",
+    "description": "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+    "severity": "medium"
   }
 ]

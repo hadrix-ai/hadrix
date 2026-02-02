@@ -52,5 +52,11 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/scan-repo.ts",
     "description": "Sensitive data in logs: logs full command and output (may include credentials in repo URLs)",
     "severity": "medium"
+  },
+  {
+    "category": "A08_Logging_Monitoring_Failures",
+    "file": "cases/brokencrystals-baseline/server/routes/tokens.ts",
+    "description": "Sensitive data in logs: plaintext API tokens logged",
+    "severity": "high"
   }
 ]

@@ -46,5 +46,11 @@
     "file": "cases/supabase-baseline/frontend/app/login/page.tsx",
     "description": "Unlimited login attempts: no lockout or rate limiting UX for password login",
     "severity": "medium"
+  },
+  {
+    "category": "A06_Authentication_Failures",
+    "file": "cases/brokencrystals-baseline/server/auth/jwt.ts",
+    "description": "JWT decoded without signature verification; auth context built from untrusted claims",
+    "severity": "high"
   }
 ]

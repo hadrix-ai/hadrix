@@ -46,5 +46,11 @@
     "file": "cases/supabase-baseline/backend/supabase/functions/list-projects.ts",
     "description": "Unbounded DB query risk when toggle enabled (no limit applied)",
     "severity": "medium"
+  },
+  {
+    "category": "A09_Denial_Of_Service_And_Resilience",
+    "file": "cases/brokencrystals-baseline/server/routes/export.ts",
+    "description": "Unbounded export query without limits or pagination",
+    "severity": "medium"
   }
 ]
