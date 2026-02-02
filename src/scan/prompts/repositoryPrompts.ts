@@ -127,6 +127,31 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
   ].join("\n");
 }
 
+export function buildRepositoryRuleBatchSystemPrompt(
+  rules: RuleScanDefinition[]
+): string {
+  if (rules.length === 1) {
+    return buildRepositoryRuleSystemPrompt(rules[0]);
+  }
+  const ruleCards = rules.map(formatRuleCard).join("\n\n");
+  const ruleIds = rules.map((rule) => rule.id).join(", ");
+  return [
+    BASE_SCAN_PROMPT,
+    "",
+    "This scan is rule-scoped.",
+    "You may ONLY report findings for the rules below.",
+    "If evidence is insufficient or the rules do not apply, return an empty findings array.",
+    "",
+    `Allowed rule ids: ${ruleIds}`,
+    "",
+    ruleCards,
+    "",
+    "Output requirements:",
+    "- Set finding.type to one of the rule ids above.",
+    "- Set details.ruleId to one of the rule ids above."
+  ].join("\n");
+}
+
 export function buildRepositoryCompositeSystemPrompt(): string {
   return [
     "You are a senior application security engineer performing a second-pass analysis over findings.",

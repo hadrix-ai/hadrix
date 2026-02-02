@@ -14,7 +14,7 @@ import {
   buildRepositoryCompositeSystemPrompt,
   buildRepositoryContextPrompt,
   buildRepositoryScanOutputSchema,
-  buildRepositoryRuleSystemPrompt
+  buildRepositoryRuleBatchSystemPrompt
 } from "./prompts/repositoryPrompts.js";
 import {
   buildChunkUnderstandingSystemPrompt,
@@ -95,7 +95,7 @@ type RuleCatalogEntry = {
 };
 
 type RuleScanTask = {
-  rule: RuleScanDefinition;
+  ruleIds: string[];
   file: RepositoryFileSample;
   systemPrompt: string;
   existingFindings: ExistingScanFinding[];
@@ -118,6 +118,7 @@ const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
 const UNDERSTANDING_CONFIDENCE_FLOOR = 0.45;
 const FAMILY_CONFIDENCE_FLOOR = 0.35;
 const MAX_RULES_PER_CHUNK = 10;
+const RULE_BATCH_SIZE = 5;
 
 const OPEN_SCAN_FAMILIES = new Set([
   "injection",
@@ -239,6 +240,19 @@ function buildRuleTaskKey(ruleId: string, file: RepositoryFileSample): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+function buildRuleBatchTaskKey(ruleIds: string[], file: RepositoryFileSample): string {
+  const contentHash = crypto.createHash("sha256").update(file.content ?? "").digest("hex");
+  const raw = [
+    ruleIds.join(","),
+    file.path,
+    String(file.chunkIndex),
+    String(file.startLine),
+    String(file.endLine),
+    contentHash
+  ].join("|");
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
 function buildOpenScanTaskKey(file: RepositoryFileSample): string {
   return buildRuleTaskKey("open_scan", file);
 }
@@ -255,6 +269,16 @@ function buildChunkKey(file: RepositoryFileSample): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+function chunkRuleIds(ruleIds: string[], size: number): string[][] {
+  if (ruleIds.length === 0) return [];
+  const batchSize = Math.max(1, Math.trunc(size));
+  const batches: string[][] = [];
+  for (let i = 0; i < ruleIds.length; i += batchSize) {
+    batches.push(ruleIds.slice(i, i + batchSize));
+  }
+  return batches;
+}
+
 function buildRuleCatalogSummary(rules: RuleScanDefinition[]): RuleCatalogEntry[] {
   return rules.map((rule) => ({
     id: rule.id,
@@ -262,6 +286,21 @@ function buildRuleCatalogSummary(rules: RuleScanDefinition[]): RuleCatalogEntry[
     description: rule.description,
     category: rule.category
   }));
+}
+
+function buildRuleBatchFocus(
+  ruleIds: string[],
+  rulesById: Map<string, RuleScanDefinition>
+): string {
+  if (ruleIds.length === 1) {
+    const rule = rulesById.get(ruleIds[0]);
+    return `Rule scan: ${rule?.id ?? ruleIds[0]} (${rule?.title ?? "unknown"})`;
+  }
+  const parts = ruleIds.map((ruleId) => {
+    const rule = rulesById.get(ruleId);
+    return rule ? `${rule.id} (${rule.title})` : ruleId;
+  });
+  return `Rule scan (batched): ${parts.join("; ")}`;
 }
 
 function inferLanguage(filepath: string): string {
@@ -347,12 +386,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO
   );
 
-  const rulePrompts = new Map<string, string>();
-  for (const rule of REPOSITORY_SCAN_RULES) {
-    const systemPrompt = buildRepositoryRuleSystemPrompt(rule);
-    const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
-    rulePrompts.set(rule.id, combinedSystemPrompt);
-  }
   const rulesById = new Map(REPOSITORY_SCAN_RULES.map((rule) => [rule.id, rule]));
 
   const resumeResults = input.resume?.getRuleResults() ?? new Map<string, RepositoryScanFinding[]>();
@@ -489,12 +522,15 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   const tasks: RuleScanTask[] = [];
   log("LLM scan (rule diagnosis)...");
   for (const insight of fileInsights) {
-    for (const ruleId of insight.candidateRuleIds) {
-      const rule = rulesById.get(ruleId);
-      if (!rule) continue;
-      const systemPrompt = rulePrompts.get(rule.id);
-      if (!systemPrompt) continue;
-      const taskKey = buildRuleTaskKey(rule.id, insight.file);
+    const ruleIdBatches = chunkRuleIds(insight.candidateRuleIds, RULE_BATCH_SIZE);
+    for (const ruleIds of ruleIdBatches) {
+      const rules = ruleIds
+        .map((ruleId) => rulesById.get(ruleId))
+        .filter(Boolean) as RuleScanDefinition[];
+      if (rules.length === 0) continue;
+      const systemPrompt = buildRepositoryRuleBatchSystemPrompt(rules);
+      const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
+      const taskKey = buildRuleBatchTaskKey(ruleIds, insight.file);
       if (resumeResults.has(taskKey)) {
         const stored = resumeResults.get(taskKey);
         if (stored && stored.length > 0) {
@@ -504,9 +540,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         continue;
       }
       tasks.push({
-        rule,
+        ruleIds,
         file: insight.file,
-        systemPrompt,
+        systemPrompt: combinedSystemPrompt,
         existingFindings,
         taskKey,
         llmUnderstanding: insight.understanding,
@@ -539,13 +575,20 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       (sum, insight) => sum + insight.candidateRuleIds.length,
       0
     );
+    const totalRuleBatches = fileInsights.reduce(
+      (sum, insight) => sum + chunkRuleIds(insight.candidateRuleIds, RULE_BATCH_SIZE).length,
+      0
+    );
     const avgRules = totalRuleScans / fileInsights.length;
+    const avgBatches = totalRuleBatches / fileInsights.length;
     const maxRules = fileInsights.reduce(
       (max, insight) => Math.max(max, insight.candidateRuleIds.length),
       0
     );
     log(
-      `LLM fanout: chunks=${fileInsights.length}, totalRuleScans=${totalRuleScans}, avgRulesPerChunk=${avgRules.toFixed(
+      `LLM fanout: chunks=${fileInsights.length}, ruleBatches=${totalRuleBatches}, avgBatchesPerChunk=${avgBatches.toFixed(
+        2
+      )}, totalRules=${totalRuleScans}, avgRulesPerChunk=${avgRules.toFixed(
         2
       )}, maxRulesPerChunk=${maxRules}, openScans=${openScanTasks.length}`
     );
@@ -556,7 +599,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   );
 
   const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
-    const { rule, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping, candidateRuleIds } = task;
+    const { ruleIds, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping, candidateRuleIds } = task;
 
     const filePayload = {
       path: file.path,
@@ -583,7 +626,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           files: [filePayload]
         }
       ],
-      focus: `Rule scan: ${rule.id} (${rule.title})`
+      focus: buildRuleBatchFocus(ruleIds, rulesById)
     };
 
     const response = await runChatCompletion(input.config, [
@@ -601,7 +644,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           chunkIndex: file.chunkIndex
         }
       });
-      const scoped = enforceRuleFindings(parsed, rule.id);
+      const scoped = enforceRuleBatchFindings(parsed, ruleIds);
       const overlapGroupId = file.overlapGroupId ?? null;
       if (overlapGroupId) {
         const adjusted = scoped.map((finding) => ({
@@ -616,16 +659,16 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
-        `llm-map-${rule.id}`,
+        `llm-map-${ruleIds.join("-")}`,
         response
       );
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `LLM rule scan parse error (${rule.id}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+        `LLM rule scan parse error (${ruleIds.join(",")}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
       );
       logDebug(input.debug, {
         event: "llm_parse_error",
-        ruleId: rule.id,
+        ruleIds,
         file: {
           path: file.path,
           chunkIndex: file.chunkIndex,
@@ -857,6 +900,41 @@ function enforceRuleFindings(
         ...finding,
         type: finding.type ?? ruleId,
         details: { ...details, ruleId: details.ruleId ?? ruleId }
+      }
+    ];
+  });
+}
+
+function enforceRuleBatchFindings(
+  findings: RepositoryScanFinding[],
+  ruleIds: string[]
+): RepositoryScanFinding[] {
+  if (ruleIds.length === 0) return [];
+  if (ruleIds.length === 1) {
+    return enforceRuleFindings(findings, ruleIds[0]);
+  }
+  const allowedTypes = new Map<string, string>();
+  for (const ruleId of ruleIds) {
+    const normalized = extractFindingIdentityType({ type: ruleId });
+    if (normalized) {
+      allowedTypes.set(normalized, ruleId);
+    }
+  }
+  return findings.flatMap((finding) => {
+    const details = toRecord(finding.details);
+    const actualType = extractFindingIdentityType({ type: finding.type ?? null, details });
+    if (!actualType) {
+      return [];
+    }
+    const canonicalRuleId = allowedTypes.get(actualType);
+    if (!canonicalRuleId) {
+      return [];
+    }
+    return [
+      {
+        ...finding,
+        type: canonicalRuleId,
+        details: { ...details, ruleId: canonicalRuleId }
       }
     ];
   });
