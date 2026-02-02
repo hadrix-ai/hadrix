@@ -43,8 +43,20 @@ jobs:
       fail-fast: false
       matrix:
         spec:
-          - hadrix-evals-react-supabase
-          - hadrix-evals-nextjs
+          - hadrix-evals-admin-authz
+          - hadrix-evals-auth-failures
+          - hadrix-evals-command-injection
+          - hadrix-evals-crypto-failures
+          - hadrix-evals-frontend-authz
+          - hadrix-evals-idor
+          - hadrix-evals-security-misconfiguration
+          - hadrix-evals-sql-injection
+          - hadrix-evals-tenant-isolation
+          - hadrix-evals-xss
+          # Excluded (too large / deferred):
+          # - hadrix-evals-react-supabase
+          # - hadrix-evals-nextjs
+          # - hadrix-evals-rls-exposure
     steps:
       - name: Checkout
         uses: actions/checkout@v4
