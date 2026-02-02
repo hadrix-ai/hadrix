@@ -1,0 +1,10 @@
+{
+  "appName": "hadrix-evals-sql-injection",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A03_injection": {
+      "sql_injection_raw_query": true,
+      "unsafe_query_builder_filter": true
+    }
+  }
+}

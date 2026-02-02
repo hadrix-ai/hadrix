@@ -1,0 +1,26 @@
+[
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-baseline/db/rls.sql",
+    "description": "Permissive RLS policies allow unrestricted access",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-fakeout-1/db/rls.sql",
+    "description": "Permissive audit log RLS policies allow unrestricted reads and inserts",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/datastores/supabase/mock/schema.json",
+    "description": "RLS disabled on public.test_no_rls while client roles have access",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/datastores/supabase/mock/schema.json",
+    "description": "RLS enabled but no policies defined for public.test_rls_no_policy",
+    "severity": "low"
+  }
+]

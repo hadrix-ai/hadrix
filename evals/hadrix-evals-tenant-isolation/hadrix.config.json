@@ -1,0 +1,9 @@
+{
+  "appName": "hadrix-evals-tenant-isolation",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A01_broken_access_control": {
+      "cross_org_leakage_trusting_org_id": true
+    }
+  }
+}

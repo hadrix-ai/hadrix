@@ -1,0 +1,27 @@
+[
+  {
+    "category": "A08_Logging_And_Monitoring_Failures",
+    "file": "backend/supabase/functions/admin-delete-user.ts",
+    "description": "No audit logs for destructive admin action when toggle enabled",
+    "severity": "high"
+  },
+  {
+    "category": "A08_Logging_And_Monitoring_Failures",
+    "file": "backend/supabase/functions/create-api-token.ts",
+    "description": "Sensitive data in logs: plaintext API token logged when toggle enabled",
+    "severity": "high"
+  },
+  {
+    "category": "A08_Logging_And_Monitoring_Failures",
+    "file": "backend/supabase/functions/scan-repo.ts",
+    "description": "Sensitive data in logs: logs full command and output (may include credentials in repo URLs)",
+    "severity": "medium"
+  },
+  {
+    "category": "A08_Logging_And_Monitoring_Failures",
+    "file": "backend/supabase/functions/create-project.ts",
+    "description": "Sensitive request body logged (orgId, content) when toggle enabled",
+    "severity": "medium"
+  }
+]
+

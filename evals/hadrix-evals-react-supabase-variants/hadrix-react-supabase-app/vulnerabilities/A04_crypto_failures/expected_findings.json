@@ -1,0 +1,26 @@
+[
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "backend/supabase/functions/create-api-token.ts",
+    "description": "Insecure token generation using Math.random + timestamp",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "backend/supabase/migrations/001_schema.sql",
+    "description": "Plaintext secret storage: api_tokens.secret_payload.material stores key material unencrypted",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "backend/supabase/migrations/003_seeds.sql",
+    "description": "Plaintext secrets seeded into database via api_tokens.secret_payload",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "backend/supabase/functions/webhook.ts",
+    "description": "Weak/fallback secret value ('dev-secret') used for webhook signature flow",
+    "severity": "medium"
+  }
+]

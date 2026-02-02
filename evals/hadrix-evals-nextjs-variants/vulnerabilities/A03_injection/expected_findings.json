@@ -1,0 +1,32 @@
+[
+  {
+    "category": "A03_Injection",
+    "file": "app/api/projects/[id]/route.ts",
+    "description": "SQL injection: raw SQL built by concatenating the project id into a query string",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "lib/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Next.js route handlers",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "app/api/projects/route.ts",
+    "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed to Supabase query builder",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "app/api/scan/route.ts",
+    "description": "Command injection: repoUrl concatenated into shell command when toggle enabled",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "app/projects/[id]/page.tsx",
+    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html from DB",
+    "severity": "high"
+  }
+]

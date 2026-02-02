@@ -1,0 +1,32 @@
+[
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-baseline/app/api/admin/users/route.ts",
+    "description": "Admin list endpoint missing role checks",
+    "severity": "critical"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-baseline/app/api/admin/users/[id]/route.ts",
+    "description": "Admin delete endpoint missing role checks",
+    "severity": "critical"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-fakeout-1/app/api/admin/users/route.ts",
+    "description": "Admin list endpoint trusts client-supplied role header instead of enforcing server-side admin checks",
+    "severity": "critical"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/backend/supabase/functions/admin-delete-user.ts",
+    "description": "Admin action without role check: deletes arbitrary users",
+    "severity": "critical"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/backend/supabase/functions/admin-list-users.ts",
+    "description": "Admin data exposure: lists all profiles without server-side role check",
+    "severity": "high"
+  }
+]

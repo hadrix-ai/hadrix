@@ -1,0 +1,9 @@
+{
+  "appName": "hadrix-evals-command-injection",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A03_injection": {
+      "command_injection_scan_repo": true
+    }
+  }
+}

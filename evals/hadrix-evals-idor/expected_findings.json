@@ -1,0 +1,20 @@
+[
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-baseline/app/api/projects/[id]/route.ts",
+    "description": "IDOR: project fetched by ID without verifying org membership/ownership",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-fakeout-1/app/api/projects/[id]/route.ts",
+    "description": "IDOR: membership lookup performed but not enforced before returning project data",
+    "severity": "high"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
+    "description": "IDOR: project fetched by ID without verifying org membership/ownership",
+    "severity": "high"
+  }
+]

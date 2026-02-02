@@ -1,0 +1,20 @@
+[
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-baseline/app/projects/[id]/page.tsx",
+    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-fakeout-1/app/projects/[id]/page.tsx",
+    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html after only stripping script tags",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/supabase-baseline/frontend/app/projects/[id]/page.tsx",
+    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
+    "severity": "high"
+  }
+]

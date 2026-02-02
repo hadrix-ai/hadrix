@@ -1,0 +1,20 @@
+[
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-baseline/components/AdminUsers.tsx",
+    "description": "Frontend-only role enforcement based on client-side state",
+    "severity": "medium"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/nextjs-fakeout-1/components/AdminUsers.tsx",
+    "description": "Frontend-only admin gating based on unverified client token claims",
+    "severity": "medium"
+  },
+  {
+    "category": "A01_Broken_Access_Control",
+    "file": "cases/supabase-baseline/frontend/admin/AdminUsers.tsx",
+    "description": "Frontend-only admin gating: hides admin UI based on client metadata rather than server authorization",
+    "severity": "medium"
+  }
+]

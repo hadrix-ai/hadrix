@@ -1,0 +1,50 @@
+[
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-baseline/app/api/projects/[id]/route.ts",
+    "description": "SQL injection: raw SQL built by concatenating the project id into a query string",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-baseline/lib/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Next.js route handlers",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-baseline/app/api/projects/route.ts",
+    "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed to Supabase query builder",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-fakeout-1/app/api/projects/[id]/route.ts",
+    "description": "SQL injection: raw SQL built by interpolating the project id into a WHERE clause",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nextjs-fakeout-1/lib/queryExecutor.ts",
+    "description": "Raw SQL execution helper runs unparameterized SQL statements",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
+    "description": "SQL injection: raw SQL built by concatenating the project id into a query string",
+    "severity": "critical"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Edge Functions (no parameterization)",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/supabase-baseline/backend/supabase/functions/list-projects.ts",
+    "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed directly to PostgREST query builder",
+    "severity": "high"
+  }
+]

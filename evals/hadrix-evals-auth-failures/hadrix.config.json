@@ -1,0 +1,12 @@
+{
+  "appName": "hadrix-evals-auth-failures",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A06_authentication_failures": {
+      "trust_frontend_auth_state": true,
+      "jwt_not_validated_in_edge": true,
+      "no_mfa_for_admin": true,
+      "unlimited_login_attempts": true
+    }
+  }
+}

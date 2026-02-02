@@ -1,0 +1,9 @@
+{
+  "appName": "hadrix-evals-admin-authz",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A01_broken_access_control": {
+      "admin_endpoint_missing_role_check": true
+    }
+  }
+}

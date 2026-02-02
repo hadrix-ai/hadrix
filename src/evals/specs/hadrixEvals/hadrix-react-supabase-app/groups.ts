@@ -255,3 +255,20 @@ export const ORBIT_PROJECTS_GROUPS: EvalGroupSpec[] = [
     ],
   },
 ];
+
+const AUDIT_LOG_RLS_VARIANT_FINDING = {
+  filepath: `${P}/backend/supabase/migrations/002_rls.sql`,
+  expectation:
+    "Audit logs RLS policy allows any authenticated user to read operational logs (auth.uid() is not null).",
+};
+
+const addAuditLogRlsVariantFinding = (group: EvalGroupSpec): EvalGroupSpec => {
+  if (group.id !== "Orbit-Projects-A02") return group;
+  return {
+    ...group,
+    expectedFindings: [...group.expectedFindings, AUDIT_LOG_RLS_VARIANT_FINDING],
+  };
+};
+
+export const ORBIT_PROJECTS_VARIANT_GROUPS: EvalGroupSpec[] =
+  ORBIT_PROJECTS_GROUPS.map(addAuditLogRlsVariantFinding);
