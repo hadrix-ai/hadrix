@@ -58,5 +58,11 @@
     "file": "cases/brokencrystals-baseline/server/routes/webhook.ts",
     "description": "User-supplied transform executed via Function constructor in webhook handler",
     "severity": "high"
+  },
+  {
+    "category": "A07_Software_Data_Integrity_Failures",
+    "file": "cases/nodegoat-baseline/server/routes/deserialize.ts",
+    "description": "User-supplied serialized profile is deserialized with node-serialize (insecure deserialization)",
+    "severity": "high"
   }
 ]

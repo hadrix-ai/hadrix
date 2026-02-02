@@ -58,5 +58,11 @@
     "file": "cases/brokencrystals-baseline/server/routes/tokens.ts",
     "description": "Sensitive data in logs: plaintext API tokens logged",
     "severity": "high"
+  },
+  {
+    "category": "A08_Logging_Monitoring_Failures",
+    "file": "cases/nodegoat-baseline/server/routes/login.ts",
+    "description": "Sensitive data in logs: plaintext credentials logged during login",
+    "severity": "high"
   }
 ]

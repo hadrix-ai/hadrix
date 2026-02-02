@@ -58,5 +58,23 @@
     "file": "cases/brokencrystals-baseline/server/auth/tokens.ts",
     "description": "Predictable API tokens generated with Math.random and stored in plaintext",
     "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nodegoat-baseline/server/auth/jwt.ts",
+    "description": "Weak JWT secret fallback used for signing session tokens",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nodevulnerable-baseline/server/routes/password-reset.ts",
+    "description": "Predictable password reset tokens generated with Math.random and timestamp",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nodevulnerable-baseline/server/routes/password-reset.ts",
+    "description": "Plaintext password reset tokens stored in database column token_plaintext",
+    "severity": "medium"
   }
 ]

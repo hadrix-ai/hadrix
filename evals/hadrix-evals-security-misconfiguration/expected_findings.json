@@ -58,5 +58,17 @@
     "file": "cases/brokencrystals-baseline/server/middleware/cors.ts",
     "description": "CORS configuration allows any origin with credentials",
     "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nodegoat-baseline/server/routes/debug.ts",
+    "description": "Debug endpoint exposes request headers and environment secrets",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nodevulnerable-baseline/server/middleware/cors.ts",
+    "description": "CORS configuration allows any origin with credentials",
+    "severity": "medium"
   }
 ]

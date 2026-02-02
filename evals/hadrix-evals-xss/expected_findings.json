@@ -22,5 +22,17 @@
     "file": "cases/brokencrystals-baseline/client/TestimonialCard.tsx",
     "description": "Stored XSS: dangerouslySetInnerHTML renders testimonial body without sanitization",
     "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nodegoat-baseline/server/routes/search.ts",
+    "description": "Reflected XSS: query string is rendered into an HTML response without sanitization",
+    "severity": "high"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/nodevulnerable-baseline/server/routes/preview.ts",
+    "description": "Reflected XSS: untrusted message content is injected into an HTML response",
+    "severity": "high"
   }
 ]

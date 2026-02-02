@@ -1,0 +1,28 @@
+import type { Request, Response } from "express";
+
+type Db = {
+  query: (sql: string, params: unknown[]) => Promise<unknown>;
+};
+
+function weakResetToken(userId: string) {
+  const seed = `${userId}:${Date.now()}:${Math.random()}`;
+  return Buffer.from(seed).toString("base64url");
+}
+
+export async function requestPasswordReset(req: Request, res: Response) {
+  const userId = String(req.body?.userId ?? "");
+
+  if (!userId) {
+    res.status(400).json({ error: "missing userId" });
+    return;
+  }
+
+  const token = weakResetToken(userId);
+  const db = req.app.get("db") as Db;
+  await db.query(
+    "insert into password_resets (user_id, token_plaintext) values ($1, $2)",
+    [userId, token]
+  );
+
+  res.json({ token });
+}
