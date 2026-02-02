@@ -16,24 +16,12 @@ import {
   buildRepositoryScanOutputSchema,
   buildRepositoryRuleSystemPrompt
 } from "./prompts/repositoryPrompts.js";
-import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./catalog/repositoryRuleCatalog.js";
 import {
-  buildCandidateFindings,
-  deriveFileRoleAssignments,
-  deriveFileScopeAssignments,
-  evaluateCandidateGate,
-  evaluateControlGate,
-  filterRequiredControls,
-  summarizeFileRoles,
-  type CandidateFinding,
-  type FileRole,
-  type FileRoleAssignment,
-  type FileScope,
-  type FileScopeEvidence,
-  type RuleGateCheck,
-  type RuleGateMismatch,
-  REQUIRED_CONTROLS
-} from "./heuristics/repositoryHeuristics.js";
+  buildChunkUnderstandingSystemPrompt,
+  buildFamilyMappingSystemPrompt
+} from "./prompts/llmUnderstandingPrompts.js";
+import { buildOpenScanSystemPrompt } from "./prompts/openScanPrompts.js";
+import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./catalog/repositoryRuleCatalog.js";
 import {
   buildFindingIdentityKey,
   extractFindingIdentityType
@@ -56,6 +44,7 @@ export interface RepositoryScanInput {
   mapConcurrency?: number;
   debug?: DedupeDebug;
   resume?: ScanResumeStore;
+  logger?: (message: string) => void;
 }
 
 export interface CompositeScanInput {
@@ -67,170 +56,174 @@ export interface CompositeScanInput {
   debug?: DedupeDebug;
 }
 
-type FileInsight = {
-  roles: FileRole[];
-  requiredControls: string[];
-  candidateFindings: CandidateFinding[];
-  scope?: FileScope;
-  scopeEvidence?: FileScopeEvidence;
+type LlmFamilyCandidate = {
+  family: string;
+  confidence: number;
+  rationale?: string;
 };
 
-type RepoInsights = {
-  fileInsights: Map<string, FileInsight>;
-  roleSummary: Record<string, number>;
-  candidates: CandidateFinding[];
+type LlmChunkUnderstanding = {
+  chunk_id: string;
+  file_path: string;
+  confidence: number;
+  summary?: string;
+  [key: string]: unknown;
 };
 
-type ResolvedFileContext = {
-  roles: FileRole[];
-  requiredControls: string[];
-  candidateFindings: CandidateFinding[];
-  scope?: FileScope;
-  scopeEvidence?: FileScopeEvidence;
+type LlmFamilyMapping = {
+  chunk_id: string;
+  families: LlmFamilyCandidate[];
+  needs_more_context: string[];
+  [key: string]: unknown;
+};
+
+type LlmFileInsight = {
+  file: RepositoryFileSample;
+  chunkId: string;
+  understanding: LlmChunkUnderstanding | null;
+  familyMapping: LlmFamilyMapping | null;
+  candidateRuleIds: string[];
+  selectionFamilies: string[];
+  selectionStrategy: "family_mapping" | "role_fallback" | "baseline_fallback";
+};
+
+type RuleCatalogEntry = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
 };
 
 type RuleScanTask = {
   rule: RuleScanDefinition;
   file: RepositoryFileSample;
-  fileContext: ResolvedFileContext;
   systemPrompt: string;
-  roleSummary: Record<string, number>;
   existingFindings: ExistingScanFinding[];
   taskKey: string;
+  llmUnderstanding: LlmChunkUnderstanding | null;
+  familyMapping: LlmFamilyMapping | null;
+  candidateRuleIds: string[];
 };
 
-type ScopeGateAction = "allow" | "suppress" | "downgrade";
-
-type ScopeGateDecision = {
-  action: ScopeGateAction;
-  reasons: RuleGateMismatch[];
-};
-
-type RuleGateDebugCheck = {
-  kind: "control" | "candidate";
-  id: string;
-  allowed: boolean;
-  scope: FileScope;
-  mismatches: RuleGateMismatch[];
+type OpenScanTask = {
+  fileInsight: LlmFileInsight;
+  existingFindings: ExistingScanFinding[];
+  taskKey: string;
 };
 
 const DEFAULT_MAP_CONCURRENCY = 4;
 const DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO = 80;
 const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
 
-const ENDPOINT_ROLES = new Set<FileRole>([
-  "USER_READ_ENDPOINT",
-  "USER_WRITE_ENDPOINT",
-  "ADMIN_ENDPOINT",
-  "AUTH_ENDPOINT",
-  "WEBHOOK_ENDPOINT"
+const UNDERSTANDING_CONFIDENCE_FLOOR = 0.45;
+const FAMILY_CONFIDENCE_FLOOR = 0.35;
+const MAX_RULES_PER_CHUNK = 10;
+
+const OPEN_SCAN_FAMILIES = new Set([
+  "injection",
+  "access_control",
+  "authentication",
+  "secrets",
+  "data_exposure",
+  "logic_issues",
+  "misconfiguration"
 ]);
 
-const CANDIDATE_PROMOTION_TYPES = new Set<string>([
+const BASELINE_RULE_IDS = [
+  "missing_authentication",
+  "idor",
   "sql_injection",
   "command_injection",
   "dangerous_html_render",
-  "permissive_cors",
-  "debug_auth_leak",
-  "missing_webhook_signature",
-  "weak_webhook_secret",
-  "missing_webhook_config_integrity",
-  "webhook_code_execution",
-  "jwt_validation_bypass",
-  "weak_jwt_secret",
-  "weak_token_generation",
-  "idor",
-  "org_id_trust",
-  "unsafe_query_builder",
-  "anon_key_bearer",
-  "missing_bearer_token",
-  "frontend_direct_db_write",
-  "tenant_isolation_missing",
-  "sensitive_logging",
-  "command_output_logging",
-  "unbounded_query",
-  "missing_timeout",
   "frontend_only_authorization",
-  "frontend_login_rate_limit",
-  "missing_mfa",
   "missing_rate_limiting",
-  "missing_lockout",
-  "missing_audit_logging",
-  "missing_upload_size_limit",
-  "frontend_secret_exposure",
-  "missing_least_privilege"
-]);
+  "permissive_cors"
+];
 
-const CANDIDATE_PROMOTION_SUMMARY_THRESHOLD = 0.45;
-
-const CANDIDATE_SEVERITY: Record<string, Severity> = {
-  sql_injection: "high",
-  command_injection: "high",
-  dangerous_html_render: "high",
-  permissive_cors: "medium",
-  debug_auth_leak: "medium",
-  missing_webhook_signature: "high",
-  weak_webhook_secret: "high",
-  missing_webhook_config_integrity: "medium",
-  webhook_code_execution: "high",
-  jwt_validation_bypass: "high",
-  weak_jwt_secret: "high",
-  weak_token_generation: "medium",
-  idor: "high",
-  org_id_trust: "high",
-  unsafe_query_builder: "high",
-  anon_key_bearer: "medium",
-  missing_bearer_token: "high",
-  frontend_direct_db_write: "medium",
-  tenant_isolation_missing: "high",
-  sensitive_logging: "medium",
-  command_output_logging: "medium",
-  unbounded_query: "medium",
-  missing_timeout: "medium",
-  frontend_only_authorization: "medium",
-  frontend_login_rate_limit: "medium",
-  missing_mfa: "medium",
-  missing_rate_limiting: "medium",
-  missing_lockout: "medium",
-  missing_audit_logging: "medium",
-  missing_upload_size_limit: "medium",
-  frontend_secret_exposure: "high",
-  missing_least_privilege: "medium"
+const ROLE_FAMILY_FALLBACKS: Record<string, string[]> = {
+  api_handler: ["authentication", "access_control", "injection", "logic_issues"],
+  db_access: ["injection", "access_control", "logic_issues"],
+  auth: ["authentication", "access_control", "logic_issues"],
+  frontend_ui: ["access_control", "secrets", "injection", "misconfiguration"],
+  job_worker: ["logic_issues", "secrets", "injection"],
+  config: ["misconfiguration", "secrets"],
+  utility: ["injection", "misconfiguration"],
+  test: ["misconfiguration"],
+  infra: ["misconfiguration", "secrets"],
+  unknown: ["access_control", "injection"]
 };
 
-const CANDIDATE_CATEGORY: Record<string, string> = {
-  sql_injection: "injection",
-  command_injection: "injection",
-  dangerous_html_render: "injection",
-  permissive_cors: "configuration",
-  debug_auth_leak: "authentication",
-  missing_webhook_signature: "authentication",
-  weak_webhook_secret: "authentication",
-  missing_webhook_config_integrity: "configuration",
-  webhook_code_execution: "authentication",
-  jwt_validation_bypass: "authentication",
-  weak_jwt_secret: "authentication",
-  weak_token_generation: "authentication",
-  idor: "access_control",
-  org_id_trust: "access_control",
-  unsafe_query_builder: "injection",
-  anon_key_bearer: "authentication",
-  missing_bearer_token: "authentication",
-  frontend_direct_db_write: "access_control",
-  tenant_isolation_missing: "access_control",
-  sensitive_logging: "secrets",
-  command_output_logging: "secrets",
-  unbounded_query: "configuration",
-  missing_timeout: "configuration",
-  frontend_only_authorization: "access_control",
-  frontend_login_rate_limit: "authentication",
-  missing_mfa: "authentication",
-  missing_rate_limiting: "configuration",
-  missing_lockout: "authentication",
-  missing_audit_logging: "configuration",
-  missing_upload_size_limit: "configuration",
-  frontend_secret_exposure: "secrets",
-  missing_least_privilege: "configuration"
+const FAMILY_RULES: Record<string, string[]> = {
+  injection: [
+    "sql_injection",
+    "unsafe_query_builder",
+    "command_injection",
+    "dangerous_html_render",
+    "missing_input_validation",
+    "missing_output_sanitization",
+    "path_traversal",
+    "unrestricted_file_upload",
+    "nosql_injection",
+    "ldap_injection",
+    "xpath_injection",
+    "template_injection",
+    "log_injection",
+    "webhook_code_execution"
+  ],
+  access_control: [
+    "idor",
+    "missing_role_check",
+    "org_id_trust",
+    "frontend_only_authorization",
+    "frontend_direct_db_write",
+    "mass_assignment",
+    "missing_least_privilege",
+    "weak_rls_policies"
+  ],
+  authentication: [
+    "missing_authentication",
+    "missing_server_action_auth",
+    "missing_lockout",
+    "missing_secure_token_handling",
+    "missing_replay_protection",
+    "missing_webhook_signature",
+    "jwt_validation_bypass",
+    "weak_jwt_secret",
+    "weak_token_generation",
+    "missing_bearer_token",
+    "anon_key_bearer",
+    "session_fixation",
+    "weak_password_hashing"
+  ],
+  secrets: [
+    "frontend_secret_exposure",
+    "sensitive_client_storage",
+    "plaintext_secrets",
+    "sensitive_logging",
+    "command_output_logging",
+    "weak_encryption"
+  ],
+  data_exposure: [
+    "excessive_data_exposure",
+    "verbose_error_messages",
+    "debug_auth_leak"
+  ],
+  logic_issues: [
+    "missing_rate_limiting",
+    "missing_audit_logging",
+    "unbounded_query",
+    "missing_timeout",
+    "missing_upload_size_limit",
+    "frontend_login_rate_limit"
+  ],
+  misconfiguration: [
+    "permissive_cors",
+    "missing_security_headers",
+    "debug_mode_in_production",
+    "missing_webhook_config_integrity",
+    "insecure_temp_files"
+  ],
+  dependency_risks: []
 };
 
 function buildRuleTaskKey(ruleId: string, file: RepositoryFileSample): string {
@@ -246,11 +239,88 @@ function buildRuleTaskKey(ruleId: string, file: RepositoryFileSample): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+function buildOpenScanTaskKey(file: RepositoryFileSample): string {
+  return buildRuleTaskKey("open_scan", file);
+}
+
+function buildChunkKey(file: RepositoryFileSample): string {
+  const contentHash = crypto.createHash("sha256").update(file.content ?? "").digest("hex");
+  const raw = [
+    file.path,
+    String(file.chunkIndex),
+    String(file.startLine),
+    String(file.endLine),
+    contentHash
+  ].join("|");
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+function buildRuleCatalogSummary(rules: RuleScanDefinition[]): RuleCatalogEntry[] {
+  return rules.map((rule) => ({
+    id: rule.id,
+    title: rule.title,
+    description: rule.description,
+    category: rule.category
+  }));
+}
+
+function inferLanguage(filepath: string): string {
+  const ext = path.extname(filepath || "").toLowerCase();
+  switch (ext) {
+    case ".ts":
+    case ".mts":
+    case ".cts":
+      return "typescript";
+    case ".tsx":
+      return "typescriptreact";
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "javascript";
+    case ".jsx":
+      return "javascriptreact";
+    case ".py":
+      return "python";
+    case ".rb":
+      return "ruby";
+    case ".go":
+      return "go";
+    case ".java":
+      return "java";
+    case ".cs":
+      return "csharp";
+    case ".php":
+      return "php";
+    case ".rs":
+      return "rust";
+    case ".kt":
+    case ".kts":
+      return "kotlin";
+    case ".swift":
+      return "swift";
+    case ".sql":
+      return "sql";
+    case ".yaml":
+    case ".yml":
+      return "yaml";
+    case ".json":
+      return "json";
+    case ".toml":
+      return "toml";
+    case ".md":
+    case ".mdx":
+      return "markdown";
+    default:
+      return "unknown";
+  }
+}
+
 export async function scanRepository(input: RepositoryScanInput): Promise<RepositoryScanFinding[]> {
   if (input.files.length === 0) {
     return [];
   }
 
+  const log = input.logger ?? (() => {});
   const outputSchema = buildRepositoryScanOutputSchema();
   const { buildKnowledgeContext } = await import("./knowledgeContext.js");
   const systemContext = buildRepositoryContextPrompt(
@@ -258,7 +328,20 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     undefined,
     buildKnowledgeContext() || undefined
   );
-  const insights = buildFileInsights(input.files);
+  const understandingSystemPrompt = [
+    buildChunkUnderstandingSystemPrompt(),
+    systemContext
+  ].filter(Boolean).join("\n\n");
+  const familyMappingSystemPrompt = [
+    buildFamilyMappingSystemPrompt(),
+    systemContext
+  ].filter(Boolean).join("\n\n");
+  const openScanSystemPrompt = [
+    buildOpenScanSystemPrompt(),
+    systemContext
+  ].filter(Boolean).join("\n\n");
+  const ruleCatalogSummary = buildRuleCatalogSummary(REPOSITORY_SCAN_RULES);
+  const ruleIdSet = new Set(REPOSITORY_SCAN_RULES.map((rule) => rule.id));
   const existingFindings = pickExistingFindings(
     input.existingFindings,
     DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO
@@ -270,69 +353,148 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
     rulePrompts.set(rule.id, combinedSystemPrompt);
   }
+  const rulesById = new Map(REPOSITORY_SCAN_RULES.map((rule) => [rule.id, rule]));
 
   const resumeResults = input.resume?.getRuleResults() ?? new Map<string, RepositoryScanFinding[]>();
   const resumedFindings: RepositoryScanFinding[] = [];
+  const resumedOpenFindings: RepositoryScanFinding[] = [];
   let resumedTaskCount = 0;
 
-  const tasks: RuleScanTask[] = [];
-  for (const file of input.files) {
-    const fileInsight = insights.fileInsights.get(file.path);
-    const fileContext = resolveFileContext(file, fileInsight);
-    for (const rule of REPOSITORY_SCAN_RULES) {
-      if (!ruleAppliesToFile(rule, fileContext)) {
-        if (input.debug) {
-          const gateChecks = collectRuleGateDebugChecks(
-            rule,
-            fileContext.scope,
-            fileContext.scopeEvidence
+  log("LLM scan (chunk understanding + family mapping)...");
+  const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
+  const fileInsights = await runWithConcurrency(
+    input.files,
+    mapConcurrency,
+    async (file): Promise<LlmFileInsight> => {
+      const chunkId = buildChunkKey(file);
+      const understandingPayload = {
+        chunk_id: chunkId,
+        file_path: file.path,
+        language: inferLanguage(file.path),
+        chunk_text: file.content
+      };
+      const understandingResponse = await runChatCompletion(input.config, [
+        { role: "system", content: understandingSystemPrompt },
+        { role: "user", content: JSON.stringify(understandingPayload, null, 2) }
+      ]);
+      let understanding: LlmChunkUnderstanding | null = null;
+      try {
+        understanding = parseChunkUnderstanding(understandingResponse, {
+          chunkId,
+          filePath: file.path
+        });
+      } catch (err) {
+        const savedPath = await writeLlmDebugArtifact(
+          input.config,
+          "llm-understanding",
+          understandingResponse
+        );
+        const message = err instanceof Error ? err.message : String(err);
+        log(
+          `LLM understanding parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+        );
+        logDebug(input.debug, {
+          event: "llm_understanding_parse_error",
+          file: {
+            path: file.path,
+            chunkIndex: file.chunkIndex,
+            startLine: file.startLine,
+            endLine: file.endLine
+          },
+          message,
+          savedPath
+        });
+      }
+
+      let familyMapping: LlmFamilyMapping | null = null;
+      if (understanding) {
+        const mappingPayload = {
+          chunk_id: chunkId,
+          file_path: file.path,
+          chunk_understanding: understanding
+        };
+        const mappingResponse = await runChatCompletion(input.config, [
+          { role: "system", content: familyMappingSystemPrompt },
+          { role: "user", content: JSON.stringify(mappingPayload, null, 2) }
+        ]);
+        try {
+          familyMapping = parseFamilyMapping(mappingResponse, { chunkId });
+        } catch (err) {
+          const savedPath = await writeLlmDebugArtifact(
+            input.config,
+            "llm-family-mapping",
+            mappingResponse
           );
-          const blockedChecks = gateChecks.filter((check) => !check.allowed);
-          const mismatchSet = new Set<RuleGateMismatch>();
-          for (const check of blockedChecks) {
-            for (const mismatch of check.mismatches) {
-              mismatchSet.add(mismatch);
-            }
-          }
-          const mismatches = Array.from(mismatchSet);
-          const hasNonScopeMismatch = mismatches.some((mismatch) => mismatch !== "scope");
-          if (blockedChecks.length > 0 && hasNonScopeMismatch) {
-            logDebug(input.debug, {
-              event: "rule_pass_gate_mismatch",
-              rule: {
-                id: rule.id,
-                title: rule.title,
-                category: rule.category,
-                requiredControls: rule.requiredControls ?? [],
-                candidateTypes: rule.candidateTypes ?? []
-              },
-              file: {
-                path: file.path,
-                chunkIndex: file.chunkIndex,
-                startLine: file.startLine,
-                endLine: file.endLine,
-                overlapGroupId: file.overlapGroupId ?? null,
-                truncated: file.truncated ?? false
-              },
-              scope: fileContext.scope ?? null,
-              scopeEvidence: fileContext.scopeEvidence ?? null,
-              mismatches,
-              checks: blockedChecks,
-              roles: fileContext.roles
-            });
-          }
+          const message = err instanceof Error ? err.message : String(err);
+          log(
+            `LLM family mapping parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+          );
+          logDebug(input.debug, {
+            event: "llm_family_mapping_parse_error",
+            file: {
+              path: file.path,
+              chunkIndex: file.chunkIndex,
+              startLine: file.startLine,
+              endLine: file.endLine
+            },
+            message,
+            savedPath
+          });
         }
-        continue;
       }
-      const systemPrompt = rulePrompts.get(rule.id);
-      if (!systemPrompt) {
-        continue;
+
+      const selection = resolveCandidateRuleIds({
+        understanding,
+        familyMapping,
+        rulesById,
+        fallbackRuleIds: BASELINE_RULE_IDS
+      });
+      const candidateRuleIds = selection.ruleIds;
+      if (input.debug) {
+        logDebug(input.debug, {
+          event: "llm_threat_mapping",
+          file: {
+            path: file.path,
+            chunkIndex: file.chunkIndex,
+            startLine: file.startLine,
+            endLine: file.endLine
+          },
+          understandingConfidence: understanding?.confidence ?? 0,
+          candidateRuleIds,
+          families: familyMapping?.families ?? []
+        });
       }
-      const matchedControls = filterControlsForRule(rule, fileContext);
-      const matchedCandidates = filterCandidateFindingsForRule(rule, fileContext).map(
-        (candidate) => candidate.type
+      log(
+        [
+          "LLM map",
+          `${file.path}:${file.startLine}-${file.endLine}`,
+          `families=${selection.families.length ? selection.families.join(",") : "none"}`,
+          `familyCandidates=${familyMapping?.families?.length ?? 0}`,
+          `rules=${candidateRuleIds.length}`,
+          `strategy=${selection.strategy}`
+        ].join(" | ")
       );
-      const taskKey = buildRuleTaskKey(rule.id, file);
+      return {
+        file,
+        chunkId,
+        understanding,
+        familyMapping,
+        candidateRuleIds,
+        selectionFamilies: selection.families,
+        selectionStrategy: selection.strategy
+      };
+    }
+  );
+
+  const tasks: RuleScanTask[] = [];
+  log("LLM scan (rule diagnosis)...");
+  for (const insight of fileInsights) {
+    for (const ruleId of insight.candidateRuleIds) {
+      const rule = rulesById.get(ruleId);
+      if (!rule) continue;
+      const systemPrompt = rulePrompts.get(rule.id);
+      if (!systemPrompt) continue;
+      const taskKey = buildRuleTaskKey(rule.id, insight.file);
       if (resumeResults.has(taskKey)) {
         const stored = resumeResults.get(taskKey);
         if (stored && stored.length > 0) {
@@ -343,47 +505,58 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       }
       tasks.push({
         rule,
-        file,
-        fileContext,
+        file: insight.file,
         systemPrompt,
-        roleSummary: insights.roleSummary,
         existingFindings,
-        taskKey
+        taskKey,
+        llmUnderstanding: insight.understanding,
+        familyMapping: insight.familyMapping,
+        candidateRuleIds: insight.candidateRuleIds
       });
-      if (input.debug) {
-        logDebug(input.debug, {
-          event: "rule_pass_task",
-          taskIndex: tasks.length - 1,
-          rule: {
-            id: rule.id,
-            title: rule.title,
-            category: rule.category,
-            requiredControls: rule.requiredControls ?? [],
-            candidateTypes: rule.candidateTypes ?? []
-          },
-          file: {
-            path: file.path,
-            chunkIndex: file.chunkIndex,
-            startLine: file.startLine,
-            endLine: file.endLine,
-            overlapGroupId: file.overlapGroupId ?? null,
-            truncated: file.truncated ?? false
-          },
-          matchedControls,
-          matchedCandidateTypes: matchedCandidates,
-          roles: fileContext.roles
-        });
-      }
     }
   }
 
-  await input.resume?.setRuleTaskCount(tasks.length + resumedTaskCount);
+  const openScanTasks: OpenScanTask[] = [];
+  for (const insight of fileInsights) {
+    const taskKey = buildOpenScanTaskKey(insight.file);
+    if (resumeResults.has(taskKey)) {
+      const stored = resumeResults.get(taskKey);
+      if (stored && stored.length > 0) {
+        resumedOpenFindings.push(...stored);
+      }
+      resumedTaskCount += 1;
+      continue;
+    }
+    openScanTasks.push({
+      fileInsight: insight,
+      existingFindings,
+      taskKey
+    });
+  }
 
-  const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
+  if (fileInsights.length > 0) {
+    const totalRuleScans = fileInsights.reduce(
+      (sum, insight) => sum + insight.candidateRuleIds.length,
+      0
+    );
+    const avgRules = totalRuleScans / fileInsights.length;
+    const maxRules = fileInsights.reduce(
+      (max, insight) => Math.max(max, insight.candidateRuleIds.length),
+      0
+    );
+    log(
+      `LLM fanout: chunks=${fileInsights.length}, totalRuleScans=${totalRuleScans}, avgRulesPerChunk=${avgRules.toFixed(
+        2
+      )}, maxRulesPerChunk=${maxRules}, openScans=${openScanTasks.length}`
+    );
+  }
+
+  await input.resume?.setRuleTaskCount(
+    tasks.length + openScanTasks.length + resumedTaskCount
+  );
+
   const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
-    const { rule, file, fileContext, roleSummary, existingFindings: existing, taskKey } = task;
-    const ruleRequiredControls = filterControlsForRule(rule, fileContext);
-    const ruleCandidateFindings = filterCandidateFindingsForRule(rule, fileContext);
+    const { rule, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping, candidateRuleIds } = task;
 
     const filePayload = {
       path: file.path,
@@ -392,15 +565,13 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       chunkIndex: file.chunkIndex,
       truncated: file.truncated ?? false,
       content: file.content,
-      roles: fileContext.roles.length ? fileContext.roles : undefined,
-      requiredControls: ruleRequiredControls.length ? ruleRequiredControls : undefined,
-      scope: fileContext.scope ?? undefined,
-      scopeEvidence: fileContext.scopeEvidence ?? undefined
+      llmUnderstanding: llmUnderstanding ?? undefined,
+      familyMapping: familyMapping ?? undefined,
+      candidateRuleIds: candidateRuleIds.length ? candidateRuleIds : undefined
     };
 
     const payload = {
       outputSchema,
-      requiredControlsByRole: REQUIRED_CONTROLS,
       repositories: [
         {
           fullName: input.repository.fullName,
@@ -409,8 +580,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           repoPaths: input.repository.repoPaths,
           repoRoles: input.repository.repoRoles,
           existingFindings: existing.length ? existing : undefined,
-          fileRoleSummary: Object.keys(roleSummary).length ? roleSummary : undefined,
-          candidateFindings: ruleCandidateFindings.length ? ruleCandidateFindings : undefined,
           files: [filePayload]
         }
       ],
@@ -433,23 +602,17 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         }
       });
       const scoped = enforceRuleFindings(parsed, rule.id);
-      const gateDecision = evaluateRuleScopeGateDecision(
-        rule,
-        fileContext.scope,
-        fileContext.scopeEvidence
-      );
-      const gated = applyScopeGateToFindings(scoped, gateDecision);
       const overlapGroupId = file.overlapGroupId ?? null;
       if (overlapGroupId) {
-        const adjusted = gated.map((finding) => ({
+        const adjusted = scoped.map((finding) => ({
           ...finding,
           details: { ...toRecord(finding.details), overlapGroupId }
         }));
         await input.resume?.recordRuleResult(taskKey, adjusted);
         return adjusted;
       }
-      await input.resume?.recordRuleResult(taskKey, gated);
-      return gated;
+      await input.resume?.recordRuleResult(taskKey, scoped);
+      return scoped;
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
@@ -457,6 +620,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         response
       );
       const message = err instanceof Error ? err.message : String(err);
+      log(
+        `LLM rule scan parse error (${rule.id}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+      );
       logDebug(input.debug, {
         event: "llm_parse_error",
         ruleId: rule.id,
@@ -473,15 +639,113 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     }
   });
 
-  const llmFindings = [...resumedFindings, ...results.flatMap((result) => result)];
-  const promoted = promoteCandidateFindings({
-    repository: input.repository,
-    insights,
-    llmFindings,
-    existingFindings
-  });
+  log("LLM scan (open scan)...");
+  const openScanResults = await runWithConcurrency(
+    openScanTasks,
+    mapConcurrency,
+    async (task) => {
+      const { fileInsight, existingFindings: existing, taskKey } = task;
+      const file = fileInsight.file;
+      const fallbackFamily = pickPrimaryFamily(fileInsight.familyMapping);
+
+      const filePayload = {
+        path: file.path,
+        startLine: file.startLine,
+        endLine: file.endLine,
+        chunkIndex: file.chunkIndex,
+        truncated: file.truncated ?? false,
+        content: file.content,
+        llmUnderstanding: fileInsight.understanding ?? undefined,
+        familyMapping: fileInsight.familyMapping ?? undefined,
+        candidateRuleIds: fileInsight.candidateRuleIds.length
+          ? fileInsight.candidateRuleIds
+          : undefined
+      };
+
+      const payload = {
+        outputSchema,
+        ruleCatalog: ruleCatalogSummary,
+        repositories: [
+          {
+            fullName: input.repository.fullName,
+            defaultBranch: input.repository.defaultBranch ?? undefined,
+            metadata: input.repository.providerMetadata ?? undefined,
+            repoPaths: input.repository.repoPaths,
+            repoRoles: input.repository.repoRoles,
+            existingFindings: existing.length ? existing : undefined,
+            files: [filePayload]
+          }
+        ],
+        focus: "Open scan: issues not covered by rule catalog"
+      };
+
+      const response = await runChatCompletion(input.config, [
+        { role: "system", content: openScanSystemPrompt },
+        { role: "user", content: JSON.stringify(payload, null, 2) }
+      ]);
+
+      try {
+        const parsed = parseFindings(response, input.repository, {
+          requireFilepath: true,
+          defaultLocation: {
+            filepath: file.path,
+            startLine: file.startLine,
+            endLine: file.endLine,
+            chunkIndex: file.chunkIndex
+          }
+        });
+        const scoped = enforceOpenScanFindings(parsed, {
+          ruleIds: ruleIdSet,
+          fallbackFamily
+        });
+        const overlapGroupId = file.overlapGroupId ?? null;
+        if (overlapGroupId) {
+          const adjusted = scoped.map((finding) => ({
+            ...finding,
+            details: { ...toRecord(finding.details), overlapGroupId }
+          }));
+          await input.resume?.recordRuleResult(taskKey, adjusted);
+          return adjusted;
+        }
+        await input.resume?.recordRuleResult(taskKey, scoped);
+        return scoped;
+      } catch (err) {
+        const savedPath = await writeLlmDebugArtifact(
+          input.config,
+          "llm-open-scan",
+          response
+        );
+        const message = err instanceof Error ? err.message : String(err);
+        log(
+          `LLM open scan parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+        );
+        logDebug(input.debug, {
+          event: "llm_open_scan_parse_error",
+          file: {
+            path: file.path,
+            chunkIndex: file.chunkIndex,
+            startLine: file.startLine,
+            endLine: file.endLine,
+          },
+          message,
+          savedPath,
+        });
+        return [];
+      }
+    }
+  );
+
+  const openScanFindings = [
+    ...resumedOpenFindings,
+    ...openScanResults.flatMap((result) => result)
+  ];
+  const llmFindings = [
+    ...resumedFindings,
+    ...results.flatMap((result) => result),
+    ...openScanFindings
+  ];
   const reduceDebug = input.debug ? { stage: "llm_rule_reduce", log: input.debug.log } : undefined;
-  const reduced = reduceRepositoryFindings([...llmFindings, ...promoted], reduceDebug);
+  const reduced = reduceRepositoryFindings(llmFindings, reduceDebug);
   return reduced;
 }
 
@@ -511,17 +775,8 @@ export async function scanRepositoryComposites(
     DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO
   );
 
-  const roleAssignments = deriveFileRoleAssignments(input.files);
-  const roleSummary = summarizeFileRoles(roleAssignments);
-  const fileRoles = roleAssignments.map((assignment) => ({
-    path: assignment.path,
-    roles: assignment.roles,
-    requiredControls: assignment.requiredControls
-  }));
-
   const payload = {
     outputSchema,
-    requiredControlsByRole: REQUIRED_CONTROLS,
     repositories: [
       {
         fullName: input.repository.fullName,
@@ -530,9 +785,7 @@ export async function scanRepositoryComposites(
         repoPaths: input.repository.repoPaths,
         repoRoles: input.repository.repoRoles,
         existingFindings: existingFindings.length ? existingFindings : undefined,
-        priorFindings: priorFindings.length ? priorFindings : undefined,
-        fileRoleSummary: Object.keys(roleSummary).length ? roleSummary : undefined,
-        fileRoles: fileRoles.length ? fileRoles : undefined
+        priorFindings: priorFindings.length ? priorFindings : undefined
       }
     ]
   };
@@ -544,7 +797,7 @@ export async function scanRepositoryComposites(
 
   try {
     const parsed = parseFindings(response, input.repository, { requireFilepath: false });
-    return applyCompositeScopeGates(parsed, input.files);
+    return parsed;
   } catch (err) {
     const savedPath = await writeLlmDebugArtifact(
       input.config,
@@ -588,95 +841,6 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-function resolveFileContext(
-  file: RepositoryFileSample,
-  fileInsight: FileInsight | undefined
-): ResolvedFileContext {
-  const fallbackAssignments = fileInsight ? null : deriveFileRoleAssignments([file]);
-  const fallbackAssignment = fallbackAssignments?.[0];
-  const fallbackScopeAssignments = fileInsight ? null : deriveFileScopeAssignments([file]);
-  const fallbackScope = fallbackScopeAssignments?.[0];
-  const roles = fileInsight?.roles ?? fallbackAssignment?.roles ?? [];
-  const requiredControls =
-    fileInsight?.requiredControls ??
-    filterRequiredControls(
-      fallbackAssignment?.requiredControls ?? [],
-      fallbackScope?.scope,
-      fallbackScope?.evidence,
-      roles
-    );
-  const candidateFindings =
-    fileInsight?.candidateFindings ??
-    (fallbackAssignments
-      ? buildCandidateFindings([file], fallbackAssignments, fallbackScopeAssignments ?? undefined)
-      : []);
-
-  return {
-    roles,
-    requiredControls,
-    candidateFindings,
-    scope: fileInsight?.scope ?? fallbackScope?.scope,
-    scopeEvidence: fileInsight?.scopeEvidence ?? fallbackScope?.evidence
-  };
-}
-
-function ruleAppliesToFile(rule: RuleScanDefinition, fileContext: ResolvedFileContext): boolean {
-  const requiredControls = rule.requiredControls ?? [];
-  const candidateTypes = rule.candidateTypes ?? [];
-  const matchesRequired =
-    requiredControls.length > 0 &&
-    requiredControls.some((control) => fileContext.requiredControls.includes(control));
-  const matchesCandidate =
-    candidateTypes.length > 0 &&
-    fileContext.candidateFindings.some((candidate) => candidateTypes.includes(candidate.type));
-  return matchesRequired || matchesCandidate;
-}
-
-function collectRuleGateDebugChecks(
-  rule: RuleScanDefinition,
-  scope: FileScope | undefined,
-  evidence: FileScopeEvidence | undefined
-): RuleGateDebugCheck[] {
-  const checks: RuleGateDebugCheck[] = [];
-  for (const control of rule.requiredControls ?? []) {
-    const check = evaluateControlGate(control, scope, evidence);
-    if (check) {
-      checks.push({ kind: "control", id: control, ...check });
-    }
-  }
-  for (const candidateType of rule.candidateTypes ?? []) {
-    const check = evaluateCandidateGate(candidateType, scope, evidence);
-    if (check) {
-      checks.push({ kind: "candidate", id: candidateType, ...check });
-    }
-  }
-  return checks;
-}
-
-function filterControlsForRule(
-  rule: RuleScanDefinition,
-  fileContext: ResolvedFileContext
-): string[] {
-  const requiredControls = rule.requiredControls ?? [];
-  if (requiredControls.length === 0) {
-    return [];
-  }
-  return fileContext.requiredControls.filter((control) => requiredControls.includes(control));
-}
-
-function filterCandidateFindingsForRule(
-  rule: RuleScanDefinition,
-  fileContext: ResolvedFileContext
-): CandidateFinding[] {
-  const candidateTypes = rule.candidateTypes ?? [];
-  if (candidateTypes.length === 0) {
-    return [];
-  }
-  return fileContext.candidateFindings.filter((candidate) =>
-    candidateTypes.includes(candidate.type)
-  );
-}
-
 function enforceRuleFindings(
   findings: RepositoryScanFinding[],
   ruleId: string
@@ -696,583 +860,6 @@ function enforceRuleFindings(
       }
     ];
   });
-}
-
-function evaluateRuleScopeGateDecision(
-  rule: RuleScanDefinition,
-  scope: FileScope | undefined,
-  evidence: FileScopeEvidence | undefined
-): ScopeGateDecision {
-  const gateChecks: RuleGateCheck[] = [];
-
-  for (const control of rule.requiredControls ?? []) {
-    const check = evaluateControlGate(control, scope, evidence);
-    if (check) {
-      gateChecks.push(check);
-    }
-  }
-
-  for (const candidateType of rule.candidateTypes ?? []) {
-    const check = evaluateCandidateGate(candidateType, scope, evidence);
-    if (check) {
-      gateChecks.push(check);
-    }
-  }
-
-  if (gateChecks.length === 0 || gateChecks.some((check) => check.allowed)) {
-    return { action: "allow", reasons: [] };
-  }
-
-  const mismatches = new Set<RuleGateMismatch>();
-  for (const check of gateChecks) {
-    for (const mismatch of check.mismatches) {
-      mismatches.add(mismatch);
-    }
-  }
-  if (mismatches.size === 0) {
-    return { action: "allow", reasons: [] };
-  }
-
-  const scopeValue = scope ?? "unknown";
-  const scopeUnknown = scopeValue === "unknown";
-  const hasScopeMismatch = mismatches.has("scope");
-  const hasEndpointMismatch = mismatches.has("endpoint") || mismatches.has("shared");
-  const reasons = Array.from(mismatches);
-
-  if (hasEndpointMismatch || (hasScopeMismatch && !scopeUnknown)) {
-    return { action: "suppress", reasons };
-  }
-  return { action: "downgrade", reasons };
-}
-
-function applyScopeGateToFinding(
-  finding: RepositoryScanFinding,
-  decision: ScopeGateDecision
-): RepositoryScanFinding | null {
-  if (decision.action === "allow") {
-    return finding;
-  }
-  if (decision.action === "suppress") {
-    return null;
-  }
-
-  const details = { ...toRecord(finding.details) };
-  details.lowConfidence = true;
-  details.scopeGate = {
-    action: "downgraded",
-    reasons: decision.reasons
-  };
-
-  return {
-    ...finding,
-    severity: "info",
-    details
-  };
-}
-
-function applyScopeGateToFindings(
-  findings: RepositoryScanFinding[],
-  decision: ScopeGateDecision
-): RepositoryScanFinding[] {
-  if (decision.action === "allow") {
-    return findings;
-  }
-  const gated: RepositoryScanFinding[] = [];
-  for (const finding of findings) {
-    const next = applyScopeGateToFinding(finding, decision);
-    if (next) {
-      gated.push(next);
-    }
-  }
-  return gated;
-}
-
-function extractRuleIdForGate(finding: RepositoryScanFinding): string {
-  const details = toRecord(finding.details);
-  const candidates = [
-    finding.type,
-    details.ruleId,
-    details.rule_id,
-    details.ruleID,
-    details.findingType,
-    details.finding_type,
-    details.type
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate !== "string") continue;
-    const trimmed = candidate.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  return "";
-}
-
-function applyCompositeScopeGates(
-  findings: RepositoryScanFinding[],
-  files: RepositoryFileSample[]
-): RepositoryScanFinding[] {
-  if (findings.length === 0 || files.length === 0) {
-    return findings;
-  }
-
-  const scopeAssignments = deriveFileScopeAssignments(files);
-  if (scopeAssignments.length === 0) {
-    return findings;
-  }
-
-  const scopeByPath = new Map(
-    scopeAssignments.map((assignment) => [normalizePath(assignment.path), assignment])
-  );
-  const rulesById = new Map(REPOSITORY_SCAN_RULES.map((rule) => [rule.id, rule]));
-  const gated: RepositoryScanFinding[] = [];
-
-  for (const finding of findings) {
-    const ruleId = extractRuleIdForGate(finding);
-    const rule = ruleId ? rulesById.get(ruleId) : null;
-    if (!rule) {
-      gated.push(finding);
-      continue;
-    }
-
-    const filepath = extractFindingPath(finding);
-    if (!filepath) {
-      gated.push(finding);
-      continue;
-    }
-
-    const assignment = scopeByPath.get(normalizePath(filepath));
-    if (!assignment) {
-      gated.push(finding);
-      continue;
-    }
-
-    const decision = evaluateRuleScopeGateDecision(rule, assignment.scope, assignment.evidence);
-    const next = applyScopeGateToFinding(finding, decision);
-    if (next) {
-      gated.push(next);
-    }
-  }
-
-  return gated;
-}
-
-function buildFileInsights(files: RepositoryFileSample[]): RepoInsights {
-  const fileInsights = new Map<string, FileInsight>();
-  if (!files || files.length === 0) {
-    return { fileInsights, roleSummary: {}, candidates: [] };
-  }
-
-  const assignments = deriveFileRoleAssignments(files);
-  const scopeAssignments = deriveFileScopeAssignments(files);
-  const scopeByPath = new Map(
-    scopeAssignments.map((assignment) => [normalizePath(assignment.path), assignment])
-  );
-  const rolesByPath = new Map<string, Set<FileRole>>();
-  const controlsByPath = new Map<string, Set<string>>();
-
-  for (const assignment of assignments) {
-    const path = normalizePath(assignment.path);
-    if (!path) {
-      continue;
-    }
-    if (!rolesByPath.has(path)) {
-      rolesByPath.set(path, new Set<FileRole>());
-    }
-    const roleSet = rolesByPath.get(path)!;
-    for (const role of assignment.roles) {
-      roleSet.add(role);
-    }
-    if (!controlsByPath.has(path)) {
-      controlsByPath.set(path, new Set<string>());
-    }
-    const controlSet = controlsByPath.get(path)!;
-    for (const control of assignment.requiredControls) {
-      controlSet.add(control);
-    }
-  }
-
-  const unionAssignments: FileRoleAssignment[] = [];
-  for (const [path, roleSet] of rolesByPath) {
-    const roles = Array.from(roleSet);
-    const requiredControls = Array.from(controlsByPath.get(path) ?? new Set<string>());
-    const scopeAssignment = scopeByPath.get(path);
-    const scopedControls = filterRequiredControls(
-      requiredControls,
-      scopeAssignment?.scope,
-      scopeAssignment?.evidence,
-      roles
-    );
-    unionAssignments.push({ path, roles, requiredControls: scopedControls });
-    fileInsights.set(path, {
-      roles,
-      requiredControls: scopedControls,
-      candidateFindings: [],
-      scope: scopeAssignment?.scope,
-      scopeEvidence: scopeAssignment?.evidence
-    });
-  }
-
-  const candidates = buildCandidateFindings(files, unionAssignments, scopeAssignments);
-  const candidatesByPath = new Map<string, CandidateFinding[]>();
-  for (const candidate of candidates) {
-    const candidatePath =
-      typeof candidate.filepath === "string"
-        ? normalizePath(candidate.filepath)
-        : "";
-    if (!candidatePath) {
-      continue;
-    }
-    if (!candidatesByPath.has(candidatePath)) {
-      candidatesByPath.set(candidatePath, []);
-    }
-    candidatesByPath.get(candidatePath)!.push(candidate);
-  }
-
-  for (const [path, candidatesForPath] of candidatesByPath) {
-    const insight = fileInsights.get(path) ?? {
-      roles: [],
-      requiredControls: [],
-      candidateFindings: []
-    };
-    insight.candidateFindings = candidatesForPath;
-    fileInsights.set(path, insight);
-  }
-
-  const roleSummary = summarizeFileRoles(unionAssignments);
-  return { fileInsights, roleSummary, candidates };
-}
-
-function promoteCandidateFindings(args: {
-  repository: RepositoryDescriptor;
-  insights: RepoInsights;
-  llmFindings: RepositoryScanFinding[];
-  existingFindings: ExistingScanFinding[];
-}): RepositoryScanFinding[] {
-  const { repository, insights, llmFindings, existingFindings } = args;
-  const candidateIndex = new Map<string, CandidateFinding>();
-
-  for (const insight of insights.fileInsights.values()) {
-    for (const candidate of insight.candidateFindings) {
-      const filepath =
-        typeof candidate.filepath === "string"
-          ? normalizePath(candidate.filepath)
-          : "";
-      if (!filepath) continue;
-      const typeKey = typeof candidate.type === "string" ? candidate.type.trim() : "";
-      const key = `${typeKey}|${filepath}|${candidate.summary}`;
-      if (!candidateIndex.has(key)) {
-        candidateIndex.set(key, { ...candidate, filepath });
-      }
-    }
-  }
-
-  if (candidateIndex.size === 0) {
-    return [];
-  }
-
-  const promoted: RepositoryScanFinding[] = [];
-  for (const candidate of candidateIndex.values()) {
-    if (!shouldPromoteCandidate(candidate)) {
-      continue;
-    }
-    if (isCandidateCovered(candidate, llmFindings, existingFindings)) {
-      continue;
-    }
-    const scopeEvidence = candidate.filepath
-      ? insights.fileInsights.get(candidate.filepath)?.scopeEvidence
-      : undefined;
-    const entryPoint = deriveCandidateEntryPoint(candidate, scopeEvidence);
-    const finding = buildFindingFromCandidate(candidate, repository, entryPoint);
-    if (finding) {
-      promoted.push(finding);
-    }
-  }
-
-  return promoted;
-}
-
-function shouldPromoteCandidate(candidate: CandidateFinding): boolean {
-  const typeKey = typeof candidate.type === "string" ? candidate.type.trim().toLowerCase() : "";
-  if (!typeKey || !CANDIDATE_PROMOTION_TYPES.has(typeKey)) {
-    return false;
-  }
-  if (typeKey === "missing_rate_limiting") {
-    return shouldPromoteRateLimitCandidate(candidate);
-  }
-  if (typeKey === "missing_lockout") {
-    return shouldPromoteLockoutCandidate(candidate);
-  }
-  if (typeKey === "missing_audit_logging") {
-    return shouldPromoteAuditCandidate(candidate);
-  }
-  return true;
-}
-
-function shouldPromoteRateLimitCandidate(candidate: CandidateFinding): boolean {
-  const roles = candidate.relatedFileRoles ?? [];
-  if (roles.includes("AUTH_ENDPOINT") || roles.includes("ADMIN_ENDPOINT")) {
-    return true;
-  }
-  const filepath =
-    typeof candidate.filepath === "string" ? candidate.filepath.toLowerCase() : "";
-  const text = `${candidate.summary ?? ""} ${filepath} ${collectEvidenceText(candidate)}`.toLowerCase();
-  return /(token|login|signin|signup|auth|password|reset|invite|delete|admin|create|project|write|update|insert|upsert|revoke|issue|generate|api[_-]?token|access[_-]?token|refresh[_-]?token)/i.test(text);
-}
-
-function shouldPromoteLockoutCandidate(candidate: CandidateFinding): boolean {
-  const roles = candidate.relatedFileRoles ?? [];
-  if (roles.includes("AUTH_ENDPOINT")) {
-    return true;
-  }
-  const filepath =
-    typeof candidate.filepath === "string" ? candidate.filepath.toLowerCase() : "";
-  const text = `${candidate.summary ?? ""} ${filepath} ${collectEvidenceText(candidate)}`.toLowerCase();
-  return /(login|signin|signup|auth|password|credential|token|attempt|brute|lockout)/i.test(text);
-}
-
-function shouldPromoteAuditCandidate(candidate: CandidateFinding): boolean {
-  const roles = candidate.relatedFileRoles ?? [];
-  if (roles.includes("ADMIN_ENDPOINT")) {
-    return true;
-  }
-  const text = `${candidate.summary ?? ""} ${collectEvidenceText(candidate)}`.toLowerCase();
-  return /(delete|destroy|revoke|admin)/i.test(text);
-}
-
-function collectEvidenceText(candidate: CandidateFinding): string {
-  const parts: string[] = [];
-  for (const item of candidate.evidence ?? []) {
-    if (typeof item.excerpt === "string") {
-      parts.push(item.excerpt);
-    }
-    if (typeof item.note === "string") {
-      parts.push(item.note);
-    }
-  }
-  return parts.join(" ");
-}
-
-function stripExtension(value: string): string {
-  if (!value) return "";
-  const index = value.lastIndexOf(".");
-  if (index <= 0) return value;
-  return value.slice(0, index);
-}
-
-function deriveServerActionSymbol(filepath: string): string {
-  const normalized = normalizePath(filepath);
-  if (!normalized) return "";
-  const match = normalized.match(/(?:^|\/)app\/(?:[^/]+\/)*_?actions\/(.+)$/i);
-  if (match?.[1]) {
-    return stripExtension(match[1]);
-  }
-  const base = normalized.split("/").pop() ?? "";
-  return stripExtension(base);
-}
-
-function deriveCandidateEntryPoint(
-  candidate: CandidateFinding,
-  scopeEvidence?: FileScopeEvidence
-): { entryPoint?: string; primarySymbol?: string } {
-  const hints = scopeEvidence?.entryPointHints ?? [];
-  const idHint = hints.find((hint) => hint.toLowerCase().startsWith("id:"));
-  if (idHint) {
-    const identifier = idHint.slice("id:".length).trim();
-    if (identifier) {
-      return { entryPoint: identifier, primarySymbol: identifier };
-    }
-  }
-  const isServerAction = Boolean(scopeEvidence?.isServerAction) ||
-    hints.some((hint) => hint.toLowerCase() === "server.action");
-  if (isServerAction) {
-    const symbol = deriveServerActionSymbol(candidate.filepath ?? "");
-    if (symbol) {
-      return { entryPoint: `server.action:${symbol}`, primarySymbol: symbol };
-    }
-    return { entryPoint: "server.action" };
-  }
-  return {};
-}
-
-function isCandidateCovered(
-  candidate: CandidateFinding,
-  llmFindings: RepositoryScanFinding[],
-  existingFindings: ExistingScanFinding[]
-): boolean {
-  const candidatePath =
-    typeof candidate.filepath === "string" ? normalizePath(candidate.filepath) : "";
-  if (!candidatePath) {
-    return false;
-  }
-  const candidateType = typeof candidate.type === "string" ? candidate.type.trim().toLowerCase() : "";
-  const candidateTypeToken = normalizeMergeIdentityToken(candidateType);
-  const candidateTokens = summaryTokenSet(candidate.summary ?? "");
-  const candidateText = `${candidate.summary ?? ""} ${collectEvidenceText(candidate)}`.toLowerCase();
-
-  for (const finding of llmFindings) {
-    const filepath = extractFindingPath(finding);
-    if (!filepath || filepath !== candidatePath) {
-      continue;
-    }
-    const findingType = normalizeMergeIdentityToken(normalizeFindingTypeKey(finding));
-    const findingRuleId = extractRuleIdForMerge(finding);
-    const findingCandidateType = extractCandidateTypeForMerge(finding);
-    if (
-      candidateTypeToken &&
-      (candidateTypeToken === findingType ||
-        candidateTypeToken === findingRuleId ||
-        candidateTypeToken === findingCandidateType)
-    ) {
-      return true;
-    }
-    const entryPoint = extractEntryPointForMerge(finding);
-    const hasAlignment =
-      Boolean(candidateTypeToken &&
-        (candidateTypeToken === findingType ||
-          candidateTypeToken === findingRuleId ||
-          candidateTypeToken === findingCandidateType)) ||
-      Boolean(entryPoint && candidateText.includes(entryPoint));
-    if (!hasAlignment) {
-      continue;
-    }
-    if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
-      return true;
-    }
-  }
-
-  for (const finding of existingFindings ?? []) {
-    const filepath = extractExistingFindingPath(finding);
-    if (!filepath || filepath !== candidatePath) {
-      continue;
-    }
-    const details = toRecord(finding.details);
-    const findingType = normalizeMergeIdentityToken(normalizeFindingTypeKeyFromValues(finding.type, details));
-    const findingRuleId = normalizeMergeIdentityToken(
-      details.ruleId ?? details.rule_id ?? details.ruleID ?? details.findingType ?? details.finding_type ?? ""
-    );
-    const findingCandidateType = normalizeMergeIdentityToken(
-      details.candidateType ?? details.candidate_type ?? ""
-    );
-    if (
-      candidateTypeToken &&
-      (candidateTypeToken === findingType ||
-        candidateTypeToken === findingRuleId ||
-        candidateTypeToken === findingCandidateType)
-    ) {
-      return true;
-    }
-    const entryPoint = extractEntryPointFromDetails(details);
-    const hasAlignment =
-      Boolean(candidateTypeToken &&
-        (candidateTypeToken === findingType ||
-          candidateTypeToken === findingRuleId ||
-          candidateTypeToken === findingCandidateType)) ||
-      Boolean(entryPoint && candidateText.includes(entryPoint));
-    if (!hasAlignment) {
-      continue;
-    }
-    if (isSummarySimilar(candidateTokens, finding.summary ?? "", candidateTypeToken)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function buildFindingFromCandidate(
-  candidate: CandidateFinding,
-  repository: RepositoryDescriptor,
-  entryPoint?: { entryPoint?: string; primarySymbol?: string }
-): RepositoryScanFinding | null {
-  const filepath =
-    typeof candidate.filepath === "string" ? normalizePath(candidate.filepath) : "";
-  if (!filepath) {
-    return null;
-  }
-  const typeKey = typeof candidate.type === "string" ? candidate.type.trim() : "";
-  const severity = CANDIDATE_SEVERITY[typeKey] ?? "medium";
-  const evidence = buildCandidateEvidence(candidate);
-  const details: Record<string, unknown> = {
-    rationale: candidate.rationale,
-    category: CANDIDATE_CATEGORY[typeKey] ?? "other",
-    heuristic: true,
-    candidateType: candidate.type,
-    candidateId: candidate.id
-  };
-  if (typeof candidate.recommendation === "string" && candidate.recommendation.trim()) {
-    details.recommendation = candidate.recommendation.trim();
-  }
-  if (entryPoint?.entryPoint) {
-    details.entryPoint = entryPoint.entryPoint;
-  }
-  if (entryPoint?.primarySymbol) {
-    details.primarySymbol = entryPoint.primarySymbol;
-  }
-  if (evidence.length > 0) {
-    details.evidence = evidence;
-  }
-
-  const location = buildCandidateLocation(candidate, repository);
-  return {
-    repositoryFullName: repository.fullName,
-    type: typeKey || undefined,
-    severity,
-    summary: candidate.summary,
-    evidence: evidence.length > 0 ? evidence : undefined,
-    details,
-    location
-  };
-}
-
-function buildCandidateEvidence(candidate: CandidateFinding): string[] {
-  const evidence: string[] = [];
-  for (const item of candidate.evidence ?? []) {
-    if (!item) continue;
-    const note = typeof item.note === "string" ? item.note.trim() : "";
-    const excerpt = typeof item.excerpt === "string" ? item.excerpt.trim() : "";
-    const parts = [note, excerpt].filter(Boolean);
-    if (parts.length > 0) {
-      evidence.push(parts.join(" - "));
-    }
-  }
-  return evidence;
-}
-
-function buildCandidateLocation(
-  candidate: CandidateFinding,
-  repository: RepositoryDescriptor
-): Record<string, unknown> | null {
-  const filepath =
-    typeof candidate.filepath === "string" ? normalizePath(candidate.filepath) : "";
-  if (!filepath) {
-    return null;
-  }
-
-  const evidenceLine = (candidate.evidence ?? []).find(
-    (item) => typeof item.startLine === "number" && Number.isFinite(item.startLine)
-  );
-  const startLine =
-    typeof evidenceLine?.startLine === "number" ? Math.trunc(evidenceLine.startLine) : null;
-  const endLine =
-    typeof evidenceLine?.endLine === "number" && Number.isFinite(evidenceLine.endLine)
-      ? Math.trunc(evidenceLine.endLine)
-      : startLine;
-
-  const location: Record<string, unknown> = { filepath };
-  const repoPaths = repository.repoPaths ?? [];
-  const repoPath = selectRepoPathForFile(filepath, repoPaths);
-  if (repoPath) {
-    location.repoPath = repoPath;
-  }
-  if (startLine !== null) {
-    location.startLine = startLine;
-  }
-  if (endLine !== null) {
-    location.endLine = endLine;
-  }
-
-  return location;
 }
 
 function selectRepoPathForFile(filepath: string, repoPaths: string[]): string {
@@ -1601,6 +1188,259 @@ function stripJsonComments(input: string): string {
     }
   }
   return output;
+}
+
+function normalizeConfidence(value: unknown): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, numeric));
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const next: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (trimmed) next.push(trimmed);
+  }
+  return next;
+}
+
+function parseChunkUnderstanding(
+  raw: string,
+  fallback: { chunkId: string; filePath: string }
+): LlmChunkUnderstanding {
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM returned invalid JSON for chunk understanding.");
+  }
+  const record = parsed as Record<string, unknown>;
+  const chunkId =
+    typeof record.chunk_id === "string" && record.chunk_id.trim()
+      ? record.chunk_id.trim()
+      : fallback.chunkId;
+  const filePath =
+    typeof record.file_path === "string" && record.file_path.trim()
+      ? record.file_path.trim()
+      : fallback.filePath;
+  const confidence = normalizeConfidence(record.confidence);
+  return {
+    ...record,
+    chunk_id: chunkId,
+    file_path: filePath,
+    confidence
+  };
+}
+
+function parseFamilyMapping(
+  raw: string,
+  fallback: { chunkId: string }
+): LlmFamilyMapping {
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM returned invalid JSON for family mapping.");
+  }
+  const record = parsed as Record<string, unknown>;
+  const chunkId =
+    typeof record.chunk_id === "string" && record.chunk_id.trim()
+      ? record.chunk_id.trim()
+      : fallback.chunkId;
+  const candidateRaw = Array.isArray(record.families) ? record.families : [];
+  const families: LlmFamilyCandidate[] = [];
+  for (const item of candidateRaw) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const family = typeof entry.family === "string" ? entry.family.trim().toLowerCase() : "";
+    if (!family) continue;
+    families.push({
+      family,
+      confidence: normalizeConfidence(entry.confidence),
+      rationale: typeof entry.rationale === "string" ? entry.rationale.trim() : undefined
+    });
+  }
+  const needsMoreContext = coerceStringArray(record.needs_more_context);
+  return {
+    ...record,
+    chunk_id: chunkId,
+    families,
+    needs_more_context: needsMoreContext
+  };
+}
+
+function resolveCandidateRuleIds(params: {
+  understanding: LlmChunkUnderstanding | null;
+  familyMapping: LlmFamilyMapping | null;
+  rulesById: Map<string, RuleScanDefinition>;
+  fallbackRuleIds: string[];
+}): {
+  ruleIds: string[];
+  families: string[];
+  strategy: "family_mapping" | "role_fallback" | "baseline_fallback";
+} {
+  const { understanding, familyMapping, rulesById, fallbackRuleIds } = params;
+  const filteredFallback = fallbackRuleIds.filter((ruleId) => rulesById.has(ruleId));
+  if (!understanding) {
+    return {
+      ruleIds: filteredFallback.slice(0, MAX_RULES_PER_CHUNK),
+      families: [],
+      strategy: "baseline_fallback"
+    };
+  }
+  const understandingConfidence = normalizeConfidence(understanding.confidence);
+  const mappingFamilies = (familyMapping?.families ?? [])
+    .map((entry) => ({
+      family: typeof entry.family === "string" ? entry.family.trim().toLowerCase() : "",
+      confidence: normalizeConfidence(entry.confidence)
+    }))
+    .filter((entry) => entry.family);
+  mappingFamilies.sort((a, b) => b.confidence - a.confidence);
+  const maxCandidateConfidence = mappingFamilies[0]?.confidence ?? 0;
+
+  let families: string[] = [];
+  let strategy: "family_mapping" | "role_fallback" | "baseline_fallback" = "role_fallback";
+  if (understandingConfidence >= UNDERSTANDING_CONFIDENCE_FLOOR &&
+      mappingFamilies.length > 0 &&
+      maxCandidateConfidence >= FAMILY_CONFIDENCE_FLOOR) {
+    families = mappingFamilies.map((entry) => entry.family);
+    strategy = "family_mapping";
+  } else {
+    const role =
+      typeof understanding.role === "string"
+        ? understanding.role.trim()
+        : "unknown";
+    families = ROLE_FAMILY_FALLBACKS[role] ?? ROLE_FAMILY_FALLBACKS.unknown;
+    strategy = "role_fallback";
+  }
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const family of families) {
+    const ruleIds = FAMILY_RULES[family] ?? [];
+    for (const ruleId of ruleIds) {
+      if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
+      seen.add(ruleId);
+      selected.push(ruleId);
+      if (selected.length >= MAX_RULES_PER_CHUNK) {
+        return { ruleIds: selected, families, strategy };
+      }
+    }
+  }
+
+  if (selected.length === 0) {
+    return {
+      ruleIds: filteredFallback.slice(0, MAX_RULES_PER_CHUNK),
+      families,
+      strategy: "baseline_fallback"
+    };
+  }
+  return { ruleIds: selected, families, strategy };
+}
+
+function normalizeFamilyToken(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
+function pickPrimaryFamily(mapping: LlmFamilyMapping | null): string | null {
+  if (!mapping?.families?.length) return null;
+  let best = mapping.families[0];
+  for (const entry of mapping.families) {
+    if (normalizeConfidence(entry.confidence) > normalizeConfidence(best.confidence)) {
+      best = entry;
+    }
+  }
+  const family = normalizeFamilyToken(best.family);
+  return OPEN_SCAN_FAMILIES.has(family) ? family : null;
+}
+
+function resolveOpenScanFamily(
+  details: Record<string, unknown>,
+  fallbackFamily: string | null
+): string | null {
+  const candidates = [
+    details.family,
+    details.findingFamily,
+    details.finding_family,
+    details.category
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeFamilyToken(candidate);
+    if (normalized && OPEN_SCAN_FAMILIES.has(normalized)) {
+      return normalized;
+    }
+  }
+  if (fallbackFamily && OPEN_SCAN_FAMILIES.has(fallbackFamily)) {
+    return fallbackFamily;
+  }
+  return null;
+}
+
+function extractRuleIdToken(details: Record<string, unknown>): string {
+  const candidates = [
+    details.ruleId,
+    details.rule_id,
+    details.ruleID,
+    details.findingType,
+    details.finding_type
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function enforceOpenScanFindings(
+  findings: RepositoryScanFinding[],
+  params: { ruleIds: Set<string>; fallbackFamily: string | null }
+): RepositoryScanFinding[] {
+  const { ruleIds, fallbackFamily } = params;
+  return findings.flatMap((finding) => {
+    const details = toRecord(finding.details);
+    const ruleId = extractRuleIdToken(details);
+    if (ruleId && ruleIds.has(ruleId)) {
+      return [];
+    }
+    const typeValue = typeof finding.type === "string" ? finding.type.trim() : "";
+    if (typeValue && ruleIds.has(typeValue)) {
+      return [];
+    }
+    const family = resolveOpenScanFamily(details, fallbackFamily);
+    const whyRaw =
+      typeof details.whyNotCoveredByRules === "string"
+        ? details.whyNotCoveredByRules.trim()
+        : "";
+    const whyAlt =
+      typeof details.why_not_covered_by_rules === "string"
+        ? details.why_not_covered_by_rules.trim()
+        : "";
+    const whyNotCoveredByRules = whyRaw || whyAlt;
+    const nextDetails: Record<string, unknown> = {
+      ...details,
+      openScan: true,
+      family: family ?? undefined
+    };
+    if (whyNotCoveredByRules) {
+      nextDetails.whyNotCoveredByRules = whyNotCoveredByRules;
+      delete nextDetails.why_not_covered_by_rules;
+    }
+    return [
+      {
+        ...finding,
+        type: family ? `open_scan_${family}` : "open_scan",
+        details: nextDetails
+      }
+    ];
+  });
 }
 
 function applyLocationFallback(
@@ -2029,179 +1869,6 @@ function normalizeFindingTypeKeyFromValues(typeValue: unknown, details: Record<s
     type: typeof typeValue === "string" ? typeValue : null,
     details
   });
-}
-
-const SUMMARY_GENERIC_TOKENS = new Set([
-  "a",
-  "an",
-  "the",
-  "of",
-  "for",
-  "to",
-  "on",
-  "in",
-  "with",
-  "without",
-  "and",
-  "or",
-  "no",
-  "not",
-  "missing",
-  "lack",
-  "lacking",
-  "is",
-  "are",
-  "be",
-  "as",
-  "by",
-  "via",
-  "from",
-  "into",
-  "this",
-  "that",
-  "these",
-  "those",
-  "should",
-  "must",
-  "needs",
-  "need",
-  "required",
-  "require",
-  "requires",
-  "ensure",
-  "ensures",
-  "ensured",
-  "using",
-  "use",
-  "uses",
-  "used",
-  "allow",
-  "allows",
-  "allowed",
-  "endpoint",
-  "endpoints",
-  "route",
-  "routes",
-  "handler",
-  "handlers",
-  "api",
-  "apis",
-  "server",
-  "servers",
-  "client",
-  "clients",
-  "backend",
-  "frontend",
-  "request",
-  "requests",
-  "user",
-  "users",
-  "data",
-  "input",
-  "function",
-  "functions",
-  "file",
-  "files",
-  "code",
-  "check",
-  "checks",
-  "validation",
-  "validate",
-  "validated",
-  "enforce",
-  "enforced",
-  "enforcement"
-]);
-
-const SUMMARY_TYPE_TOKENS_TO_IGNORE = new Set([
-  "missing",
-  "weak",
-  "frontend",
-  "backend",
-  "only",
-  "no"
-]);
-
-function summaryTokenSet(value: string): Set<string> {
-  if (!value) return new Set<string>();
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return new Set<string>();
-  const tokens = normalized.split(" ").filter(Boolean);
-  const filtered = tokens.filter((token) => !SUMMARY_GENERIC_TOKENS.has(token));
-  return new Set(filtered.length > 0 ? filtered : tokens);
-}
-
-function typeTokenSet(value: string): Set<string> {
-  if (!value) return new Set<string>();
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return new Set<string>();
-  const tokens = normalized
-    .split(" ")
-    .filter(Boolean)
-    .filter((token) => !SUMMARY_TYPE_TOKENS_TO_IGNORE.has(token));
-  return new Set(tokens);
-}
-
-function isSummarySimilar(
-  candidateTokens: Set<string>,
-  summary: string,
-  candidateType?: string
-): boolean {
-  const summaryTokens = summaryTokenSet(summary);
-  if (candidateTokens.size === 0 || summaryTokens.size === 0) {
-    return false;
-  }
-  let overlap = 0;
-  for (const token of candidateTokens) {
-    if (summaryTokens.has(token)) {
-      overlap += 1;
-      break;
-    }
-  }
-  if (overlap === 0) {
-    return false;
-  }
-  const score = jaccard(candidateTokens, summaryTokens);
-  if (score < CANDIDATE_PROMOTION_SUMMARY_THRESHOLD) {
-    return false;
-  }
-  if (candidateType) {
-    const typeTokens = typeTokenSet(candidateType);
-    if (typeTokens.size > 0) {
-      let typeOverlap = 0;
-      for (const token of typeTokens) {
-        if (summaryTokens.has(token)) {
-          typeOverlap += 1;
-          break;
-        }
-      }
-      if (typeOverlap === 0 && score < CANDIDATE_PROMOTION_SUMMARY_THRESHOLD + 0.15) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  for (const token of a) {
-    if (b.has(token)) intersection += 1;
-  }
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
 }
 
 function normalizeSeverity(value: unknown): Severity {

@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
+import { SUPABASE_SCHEMA_SCAN_FLAG, isSupabaseSchemaScanEnabled } from "./config/featureFlags.js";
 import {
   CHEAP_LLM_MODEL_ANTHROPIC,
   CHEAP_LLM_MODEL_OPENAI,
@@ -258,6 +259,7 @@ program
     const envSupabaseUrl = readEnvRaw("HADRIX_SUPABASE_URL");
     const envSupabasePassword = readEnvRaw("HADRIX_SUPABASE_PASSWORD");
     const envSupabaseSchema = readEnvRaw("HADRIX_SUPABASE_SCHEMA_PATH");
+    const supabaseSchemaScanEnabled = isSupabaseSchemaScanEnabled();
     let supabaseConnectionString: string | null = null;
     let supabaseSchemaPath: string | null = null;
     let useSupabaseCli = false;
@@ -270,7 +272,15 @@ program
         envSupabasePassword ||
         envSupabaseSchema
     );
-    if (wantsSupabase) {
+    if (!supabaseSchemaScanEnabled) {
+      if (wantsSupabase && !isJsonOutput) {
+        console.error(
+          pc.yellow(
+            `Supabase schema scan is disabled. Set ${SUPABASE_SCHEMA_SCAN_FLAG}=1 to enable it.`
+          )
+        );
+      }
+    } else if (wantsSupabase) {
       supabaseSchemaPath = options.supabaseSchema ?? envSupabaseSchema ?? null;
       if (!supabaseSchemaPath) {
         const conn = options.supabaseUrl ?? envSupabaseUrl ?? "";
@@ -491,7 +501,11 @@ program
     debugLog?: string;
   }) => {
     const output = options.json ? "json" : "text";
-    const useSpinner = output !== "json" && process.stderr.isTTY;
+    const useSpinner =
+      output !== "json" &&
+      process.stderr.isTTY &&
+      !options.debug &&
+      !options.debugLog;
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     const evalStart = Date.now();
     let statusMessage = "Running evals...";

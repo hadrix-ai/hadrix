@@ -54,6 +54,7 @@ HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix scan /path/to/repo
 ## Supabase database scan (optional)
 
 Hadrix can connect to Supabase to check RLS, privileges, functions, and storage buckets.
+This scan is behind a feature flag; set `HADRIX_ENABLE_SUPABASE_SCHEMA_SCAN=1` to enable it.
 
 **Important**: You need the database password (not the API keys). Find it in your Supabase Dashboard under:
 **Database > Settings > Database password > Reset database password**

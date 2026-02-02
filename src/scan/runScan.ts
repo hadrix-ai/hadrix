@@ -11,7 +11,6 @@ import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
 // embeddings removed
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
-import { splitSecurityHeader } from "./securityHeader.js";
 import { reduceRepositoryFindings, scanRepository, scanRepositoryComposites } from "./repositoryScanner.js";
 import { runStaticScanners } from "./staticScanners.js";
 import { inferRepoPathFromDisk, normalizeRepoPath } from "./repoPath.js";
@@ -772,58 +771,6 @@ function toStaticFindingsFromExisting(findings: ExistingScanFinding[]): StaticFi
     .filter((finding): finding is StaticFinding => Boolean(finding));
 }
 
-function detectHeuristicSinkFindings(chunks: ChunkRow[]): StaticFinding[] {
-  const findings: StaticFinding[] = [];
-  const rules: Array<{ ruleId: string; message: string; severity: StaticFinding["severity"]; pattern: RegExp }> = [
-    { ruleId: "heuristic:eval", message: "Use of eval with user input.", severity: "high", pattern: /\beval\s*\(/i },
-    {
-      ruleId: "heuristic:new_function",
-      message: "Use of new Function with user input.",
-      severity: "high",
-      pattern: /\bnew Function\s*\(/i
-    },
-    {
-      ruleId: "heuristic:child_process_exec",
-      message: "Command execution via child_process/exec.",
-      severity: "high",
-      pattern: /\bchild_process\b|\bexecSync\s*\(|\bexec\s*\(|\bspawn\s*\(/i
-    }
-  ];
-
-  for (const chunk of chunks) {
-    const filepath = normalizePath(chunk.filepath);
-    if (!filepath) continue;
-    const raw = chunk.content ?? "";
-    const body = splitSecurityHeader(raw).body;
-    if (!body) continue;
-    const lines = body.split(/\r?\n/);
-
-    for (const rule of rules) {
-      for (let i = 0; i < lines.length; i += 1) {
-        const line = lines[i] ?? "";
-        if (!rule.pattern.test(line)) continue;
-        const startLine = (chunk.start_line ?? 1) + i;
-        findings.push({
-          tool: "eslint",
-          ruleId: rule.ruleId,
-          message: rule.message,
-          severity: rule.severity,
-          filepath,
-          startLine,
-          endLine: startLine,
-          snippet: line.trim() || undefined,
-          details: {
-            note: "Heuristic sink detection"
-          }
-        });
-        break;
-      }
-    }
-  }
-
-  return findings;
-}
-
 function toCoreStaticFindings(params: {
   findings: StaticFinding[];
   repoFullName?: string | null;
@@ -1383,7 +1330,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       }
   
       if (scopedChunks.length > 0) {
-        log("Heuristic analysis and chunk sampling...");
+        log("Chunk sampling...");
 
         const localChunks = scopedChunks.map((chunk) =>
           toLocalChunk({
@@ -1503,6 +1450,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
               repository: repositoryDescriptor,
               files: fileSamples,
               existingFindings,
+              logger: log,
               debug: debugContext("llm_rule_pass"),
               resume: resumeStore ?? undefined
             });
@@ -1651,9 +1599,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       const llmOutput = combinedFindings.map((finding) =>
         toRepositoryFinding(finding, fallbackPath, repoPath)
       );
-      const heuristicSinkFindings = detectHeuristicSinkFindings(scopedChunks);
       const coreStaticFindings = toCoreStaticFindings({
-        findings: [...staticFindings, ...heuristicSinkFindings],
+        findings: staticFindings,
         repoFullName,
         repositoryId,
         repoPath,
@@ -1689,7 +1636,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
       const reportRawFindings = [
         ...toCoreStaticFindings({
-          findings: [...reportStaticFindings, ...heuristicSinkFindings],
+          findings: reportStaticFindings,
           repoFullName,
           repositoryId,
           repoPath,
