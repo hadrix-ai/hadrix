@@ -35,6 +35,16 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npm run dev -- evals --cheap --spec evals-sanity-check
 
+      - name: Upload eval artifacts (sanity)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadrix-evals-sanity-${{ github.sha }}
+          path: |
+            .hadrix-evals/summary.md
+            .hadrix-evals/results.json
+          if-no-files-found: warn
+
   evals:
     needs: sanity
     runs-on: ubuntu-latest
@@ -84,3 +94,13 @@ jobs:
           HADRIX_API_KEY: ${{ secrets.HADRIX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npm run dev -- evals --cheap --spec ${{ matrix.spec }}
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadrix-evals-${{ matrix.spec }}-${{ github.sha }}
+          path: |
+            .hadrix-evals/summary.md
+            .hadrix-evals/results.json
+          if-no-files-found: warn
