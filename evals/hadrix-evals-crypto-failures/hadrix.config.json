@@ -1,0 +1,11 @@
+{
+  "appName": "hadrix-evals-crypto-failures",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A04_cryptographic_failures": {
+      "weak_jwt_secret_fallback": true,
+      "insecure_random_tokens": true,
+      "plaintext_tokens_in_db": true
+    }
+  }
+}

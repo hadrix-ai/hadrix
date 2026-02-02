@@ -1,0 +1,56 @@
+[
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/lib/cors.ts",
+    "description": "CORS configuration allows any origin",
+    "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/app/api/debug/route.ts",
+    "description": "Debug endpoint exposes request headers and environment secrets",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/lib/supabase.ts",
+    "description": "Service client falls back to an overprivileged anon key",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/lib/storage.ts",
+    "description": "Storage bucket configured for public access",
+    "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-fakeout-1/app/api/status/route.ts",
+    "description": "Status endpoint sets permissive CORS headers for any origin",
+    "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/cors.ts",
+    "description": "Edge function CORS headers allow all origins",
+    "severity": "medium"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
+    "description": "Debug endpoint enabled with verbose request and auth details",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
+    "description": "Admin data access can use an overprivileged anon key",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/supabase-baseline/frontend/utils/api.ts",
+    "description": "Client requests use an overprivileged anon key as the bearer token",
+    "severity": "high"
+  }
+]

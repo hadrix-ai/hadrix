@@ -1,0 +1,44 @@
+[
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nextjs-baseline/lib/auth.ts",
+    "description": "Weak/fallback JWT secret and decoding without verification",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nextjs-baseline/app/api/tokens/route.ts",
+    "description": "Insecure random token generation and plaintext token storage",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nextjs-baseline/app/actions/createApiToken.ts",
+    "description": "Insecure random token generation in server action",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/nextjs-baseline/db/schema.sql",
+    "description": "Plaintext token column in database schema",
+    "severity": "medium"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/supabase-baseline/backend/supabase/functions/create-api-token.ts",
+    "description": "Insecure token generation using Math.random + timestamp",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/auth.ts",
+    "description": "JWT decoded without signature verification using a weak fallback secret",
+    "severity": "high"
+  },
+  {
+    "category": "A04_Cryptographic_Failures",
+    "file": "cases/supabase-baseline/backend/supabase/migrations/001_schema.sql",
+    "description": "Plaintext secret storage: api_tokens.token_plaintext column stores tokens unencrypted/unsalted",
+    "severity": "high"
+  }
+]
