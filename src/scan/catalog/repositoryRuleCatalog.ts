@@ -17,7 +17,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     requiredControls: ["authentication"],
     guidance: [
       "Look for auth/session validation or middleware guards.",
-      "Report only when the handler performs sensitive actions without auth."
+      "Report only when the handler performs sensitive actions without auth.",
+      "Do NOT report on login/signup/token issuance endpoints; those are public by design."
     ]
   },
   {
@@ -63,7 +64,10 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     candidateTypes: ["missing_rate_limiting"],
     guidance: [
       "Focus on login, token issuance, destructive actions, or high-volume listings.",
-      "Accept middleware or shared guard implementations."
+      "Accept middleware or shared guard implementations.",
+      "Do not report on client-only helpers or UI components.",
+      "Login endpoints are expected to be public; do not confuse missing_authentication with missing_rate_limiting.",
+      "Comments/feature flags indicating a missing or disabled limiter count as missing."
     ]
   },
   {
@@ -100,7 +104,9 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     candidateTypes: ["missing_timeout"],
     guidance: [
       "Look for HTTP requests or exec calls without abort/timeout handling.",
-      "Ignore calls that already pass explicit timeout options."
+      "Treat subprocess calls (child_process exec/execFile/spawn, Deno.Command, Bun.spawn) as external calls that should be bounded by a timeout or abort signal.",
+      "If code retries a failing external call in a tight loop without backoff or cap, call out the retry-storm risk alongside the missing timeout.",
+      "Ignore calls that already pass explicit timeout options or abort signals."
     ]
   },
   {
@@ -183,7 +189,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     guidance: [
       "Report when an admin/privileged endpoint performs sensitive actions based only on a basic session/JWT without step-up auth (2FA/OTP/WebAuthn) and there is no verified global enforcement.",
       "Accept equivalent step-up controls (re-auth prompt + OTP, WebAuthn, device challenge) when clearly present.",
-      "Do not report on non-admin endpoints; focus on destructive actions or admin data access." 
+      "Do not report on non-admin endpoints; focus on destructive actions or admin data access.",
+      "Treat paths containing /admin (or symbols named admin*) as privileged endpoints." 
     ]
   },
   {
@@ -371,7 +378,12 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     title: "Unbounded query without pagination",
     category: "configuration",
     description: "List queries fetch all rows without limit or pagination.",
-    candidateTypes: ["unbounded_query"]
+    candidateTypes: ["unbounded_query"],
+    guidance: [
+      "Report list/export handlers that return all rows without limit/range/cursor pagination.",
+      "Signals include `SELECT *` without LIMIT/OFFSET or ORM queries without `.limit`, `.range`, `.page`, or cursor parameters.",
+      "If the handler takes filters but never applies a cap, treat it as unbounded."
+    ]
   },
   {
     id: "anon_key_bearer",
@@ -451,7 +463,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     requiredControls: ["authorization:ownership_or_membership"],
     guidance: [
       "Return DTOs/allowlisted fields instead of full ORM objects.",
-      "Strip secrets and internal metadata from responses."
+      "Strip secrets and internal metadata from responses.",
+      "Only report when data is exposed to untrusted/public callers; admin-only endpoints are not excessive exposure by default unless access control is missing."
     ]
   },
   {
@@ -561,7 +574,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     requiredControls: ["authentication"],
     guidance: [
       "Return generic errors to clients and log details internally.",
-      "Avoid exposing stack traces, file paths, or SQL queries."
+      "Avoid exposing stack traces, file paths, or SQL queries.",
+      "Only report when errors are exposed to untrusted/public callers; admin-only endpoints are not verbose-error exposures by default unless access control is missing."
     ]
   },
   {

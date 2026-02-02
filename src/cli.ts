@@ -519,6 +519,13 @@ program
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+    const showElapsedInLogs =
+      output !== "json" && !spinner && Boolean(options.debug || options.debugLog);
+    const formatLogMessage = (message: string) => {
+      if (!showElapsedInLogs) return message;
+      if (message.includes("(elapsed ")) return message;
+      return `${message} (elapsed ${formatElapsed()})`;
+    };
 
     const logger = (message: string) => {
       if (output === "json") return;
@@ -531,7 +538,7 @@ program
         spinner.update(formatStatus(statusMessage));
         return;
       }
-      console.error(message);
+      console.error(formatLogMessage(message));
     };
     if (cheapMode) {
       logger(

@@ -53,6 +53,8 @@ const BASE_SCAN_PROMPT = [
     "- Lockout/anti-bruteforce gaps may be reported from login flows even when the evidence is in UI/server actions (e.g., a login page that triggers password sign-in) as long as the flow clearly performs authentication attempts and there is no backoff/CAPTCHA/lockout shown.",
     "- Do not flag unrelated UI components or generic client SDK initialization for backend-only controls.",
     "- Do not cite package.json, lockfiles, or other non-executable config files as evidence for runtime vulnerabilities.",
+    "- Do NOT report missing_authentication on login/signup/token issuance endpoints; those are expected to be public.",
+    "- Only report data_exposure or verbose_error_messages when exposure appears public or missing auth/role checks; admin-only endpoints are not data_exposure by default.",
     "",
     "Family mapping candidates are prioritization hints; if evidence supports them, prefer emitting them.",
     "You MAY infer vulnerabilities from the ABSENCE of expected checks.",
@@ -79,6 +81,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Tenant isolation missing for org/tenant list queries (unscoped access)",
     "- Missing rate limiting on sensitive actions",
     "- Missing audit logging on destructive actions",
+    "- Missing bearer tokens or empty/placeholder bearer tokens on protected requests",
     "- Webhooks without signature verification",
     "- Webhook signature verification using weak or fallback secrets",
     "- Webhook config payloads fetched without integrity checks",
@@ -89,6 +92,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Unbounded queries or missing pagination",
     "- Missing timeouts on external calls",
     "- Upload handlers missing payload size limits",
+    "- Retry storms or unbounded retries around external calls or job execution",
     "",
     "Good control references (examples only; accept equivalent variants):",
     "- IDOR: query scoped by owner/tenant from server auth context (e.g., where owner_id = auth.user.id)",
@@ -103,6 +107,7 @@ export function buildRepositoryScanSystemPrompt(): string {
     "- Sensitive logs: secrets/PII redacted or omitted from logs",
     "- Pagination: limit/range/offset or cursor applied to list queries",
     "- Timeouts: explicit timeout/abort controller for external calls or subprocesses",
+    "- Retries: capped retries with backoff/circuit breakers for failing external calls",
     "- Upload size limits: enforce max content-length/body size and file-size limits before processing",
     "",
     "For each file:",
@@ -131,6 +136,46 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
       "- It is valid to report based on the login UI/server action code when that code triggers password sign-in (e.g., signInWithPassword).",
       "- Evidence can be absence-of-control: there is no delay counters, no attempt tracking, no CAPTCHA, no lockout messaging or state.",
       "- Do not confuse missing credential validation bugs with lockout bugs; focus on brute-force defenses."
+    );
+  }
+  if (rule.id === "missing_rate_limiting") {
+    extraGuidance.push(
+      "Rate limiting guidance:",
+      "- Report when a server-side handler performs login, token issuance, password reset, invite, delete, or other sensitive actions and there is no visible rate limiting/backoff/guard in the handler or referenced middleware.",
+      "- Do NOT report on client-only helpers or UI components.",
+      "- Login endpoints are expected to be public; do not confuse missing_authentication with missing_rate_limiting.",
+      "- Comments/feature flags indicating a missing or disabled limiter count as missing."
+    );
+  }
+  if (rule.id === "missing_timeout") {
+    extraGuidance.push(
+      "Timeout guidance:",
+      "- Treat HTTP calls and subprocess executions (fetch/axios, child_process exec/execFile/spawn, Deno.Command) as external calls that should be bounded.",
+      "- Report when no explicit timeout/abort signal is passed and the code can block indefinitely.",
+      "- If the code retries failures in a tight loop without backoff/cap, mention retry-storm risk alongside missing timeouts."
+    );
+  }
+  if (rule.id === "unbounded_query") {
+    extraGuidance.push(
+      "Unbounded query guidance:",
+      "- Report list/export handlers that return all rows without pagination (limit/range/offset/cursor).",
+      "- Raw SQL like `SELECT * ...` without LIMIT/OFFSET or ORM queries without `.limit`/`.range` are strong signals.",
+      "- Do NOT require seeing pagination helpers elsewhere; the handler should enforce a cap in the shown code."
+    );
+  }
+  if (rule.id === "missing_admin_mfa") {
+    extraGuidance.push(
+      "Admin MFA guidance:",
+      "- Treat paths containing /admin (or symbols named admin*) as privileged endpoints.",
+      "- If the handler uses only basic session/JWT auth and there is no step-up check (MFA/OTP/WebAuthn/reauth) in the handler or referenced middleware, report missing_admin_mfa.",
+      "- Evidence can be: auth context read + admin data access/mutation without any MFA check."
+    );
+  }
+  if (rule.id === "missing_authentication") {
+    extraGuidance.push(
+      "Missing authentication guidance:",
+      "- Do NOT report on login/signup/token issuance endpoints; those are public by design.",
+      "- Only report when the handler performs sensitive actions without any auth/session validation."
     );
   }
   if (rule.id === "missing_bearer_token") {
