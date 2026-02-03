@@ -59,6 +59,8 @@ jobs:
           - hadrix-evals-frontend-direct-db-write
           - hadrix-evals-auth-failures
           - hadrix-evals-security-misconfiguration
+          - hadrix-evals-secrets-exposure
+          - hadrix-evals-file-upload
           - hadrix-evals-vulnerable-deps
           # Excluded (in evals-todo or deferred):
           # - hadrix-evals-admin-authz

@@ -1,0 +1,20 @@
+[
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-public-uploads/app/api/uploads/route.ts",
+    "description": "Upload handler stores arbitrary files in a public directory using the original filename",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-csv-import/app/api/import/route.ts",
+    "description": "CSV import accepts uploaded files without enforcing size limits",
+    "severity": "medium"
+  },
+  {
+    "category": "A03_Injection",
+    "file": "cases/express-plugin-upload/server/routes/plugins.ts",
+    "description": "Plugin upload uses a user-controlled filename in the write path, enabling path traversal",
+    "severity": "high"
+  }
+]
