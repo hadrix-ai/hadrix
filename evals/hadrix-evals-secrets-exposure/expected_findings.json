@@ -7,6 +7,12 @@
   },
   {
     "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/config/local.env.json",
+    "description": "Local environment config file is committed with plaintext secret keys",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-fakeout-1/components/AdminDashboard.tsx",
     "description": "Supabase service role key is sourced from NEXT_PUBLIC env and used in client-side code",
     "severity": "high"
