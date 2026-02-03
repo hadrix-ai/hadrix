@@ -61,11 +61,15 @@ export interface HadrixConfig {
     temperature: number;
     baseUrl?: string;
     maxConcurrency?: number;
+    ruleScanConcurrency?: number;
     estimatedTokensPerTask?: number;
     mappingBatchSize?: number;
     understandingMaxPromptTokens?: number;
     understandingMinBatchSize?: number;
     understandingMaxBatchChunks?: number;
+    maxRulesPerChunkDefault?: number;
+    maxRulesPerChunkHighRisk?: number;
+    minRulesPerChunk?: number;
     reasoning?: boolean;
     reasoningModel?: string;
     rateLimit?: {
@@ -222,6 +226,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(readEnv("HADRIX_LLM_MAX_CONCURRENCY")) ??
     parsePositiveNumber(configFile.llm?.maxConcurrency);
 
+  const llmRuleScanConcurrency =
+    parsePositiveNumber(readEnv("HADRIX_RULE_SCAN_CONCURRENCY")) ??
+    parsePositiveNumber(configFile.llm?.ruleScanConcurrency);
+
   const llmRequestsPerMinute =
     parsePositiveNumber(readEnv("HADRIX_LLM_REQUESTS_PER_MINUTE")) ??
     parsePositiveNumber(configFile.llm?.rateLimit?.requestsPerMinute);
@@ -253,6 +261,21 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(configFile.llm?.understandingMaxBatchChunks) ??
     8;
 
+  const maxRulesPerChunkDefault =
+    parsePositiveNumber(readEnv("HADRIX_MAX_RULES_PER_CHUNK_DEFAULT")) ??
+    parsePositiveNumber(configFile.llm?.maxRulesPerChunkDefault) ??
+    5;
+
+  const maxRulesPerChunkHighRisk =
+    parsePositiveNumber(readEnv("HADRIX_MAX_RULES_PER_CHUNK_HIGH_RISK")) ??
+    parsePositiveNumber(configFile.llm?.maxRulesPerChunkHighRisk) ??
+    10;
+
+  const minRulesPerChunk =
+    parsePositiveNumber(readEnv("HADRIX_MIN_RULES_PER_CHUNK")) ??
+    parsePositiveNumber(configFile.llm?.minRulesPerChunk) ??
+    3;
+
   const llmRateLimit = {
     ...(llmRequestsPerMinute ? { requestsPerMinute: llmRequestsPerMinute } : {}),
     ...(llmTokensPerMinute ? { tokensPerMinute: llmTokensPerMinute } : {}),
@@ -277,11 +300,15 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       maxTokens: configFile.llm?.maxTokens ?? 1200,
       temperature: configFile.llm?.temperature ?? 0.1,
       maxConcurrency: llmMaxConcurrency ?? undefined,
+      ruleScanConcurrency: llmRuleScanConcurrency ?? undefined,
       estimatedTokensPerTask: llmEstimatedTokensPerTask ?? undefined,
       mappingBatchSize: llmMappingBatchSize ?? undefined,
       understandingMaxPromptTokens,
       understandingMinBatchSize,
       understandingMaxBatchChunks,
+      maxRulesPerChunkDefault,
+      maxRulesPerChunkHighRisk,
+      minRulesPerChunk,
       reasoning: llmReasoning,
       reasoningModel: llmReasoningModel,
       rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,

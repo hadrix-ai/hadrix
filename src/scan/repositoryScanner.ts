@@ -99,6 +99,8 @@ type LlmFileInsight = {
   candidateRuleIds: string[];
   selectionFamilies: string[];
   selectionStrategy: "signals_primary" | "role_fallback" | "baseline_fallback";
+  selectionHighRisk: boolean;
+  selectionCapUsed: number;
 };
 
 type RuleCatalogEntry = {
@@ -109,6 +111,7 @@ type RuleCatalogEntry = {
 };
 
 type RuleScanTask = {
+  chunkId: string;
   ruleIds: string[];
   file: RepositoryFileSample;
   existingFindings: ExistingScanFinding[];
@@ -127,9 +130,12 @@ type OpenScanTask = {
 const DEFAULT_MAP_CONCURRENCY = 4;
 const DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO = 80;
 const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
-const MAX_RULES_PER_CHUNK = 10;
-const MIN_RULES_PER_CHUNK = 3;
-const RULE_BATCH_SIZE = 5;
+const DEFAULT_RULE_SCAN_CONCURRENCY = 8;
+const DEFAULT_MAX_RULES_PER_CHUNK_DEFAULT = 5;
+const DEFAULT_MAX_RULES_PER_CHUNK_HIGH_RISK = 10;
+const DEFAULT_MIN_RULES_PER_CHUNK = 3;
+const DEFAULT_FALLBACK_RULE_CAP = 5;
+const OPEN_SCAN_MIN_RULES = 4;
 
 const RULE_CLUSTER_BY_ID: Record<string, string> = {
   missing_authentication: "auth_enforcement",
@@ -225,6 +231,15 @@ const BASELINE_RULE_IDS = [
 ];
 
 const SIGNAL_ID_SET = new Set<SignalId>(SIGNAL_IDS);
+const HIGH_RISK_SIGNAL_IDS = new Set<SignalId>([
+  "exec_sink",
+  "raw_sql_sink",
+  "webhook_handler",
+  "ssrf_candidate",
+  "file_write_sink",
+  "frontend_dom_write",
+  "template_render"
+]);
 const IDENTIFIER_KINDS = new Set<LlmChunkUnderstandingIdentifier["kind"]>([
   "org_id",
   "user_id",
@@ -371,6 +386,11 @@ function buildChunkKey(file: RepositoryFileSample): string {
 
 export function resolveRuleCluster(ruleId: string): string {
   return RULE_CLUSTER_BY_ID[ruleId] ?? "misc";
+}
+
+export function buildRuleScanBatches(ruleIds: string[]): string[][] {
+  if (ruleIds.length === 0) return [];
+  return [ruleIds];
 }
 
 export function chunkRuleIds(ruleIds: string[], size: number): string[][] {
@@ -613,9 +633,18 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
 
   log("LLM scan (understanding, batched)...");
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
+  const ruleScanConcurrency = normalizeRuleScanConcurrency(
+    input.config.llm?.ruleScanConcurrency
+  );
   const understandingMaxPromptTokens = input.config.llm?.understandingMaxPromptTokens ?? 6500;
   const understandingMinBatchSize = input.config.llm?.understandingMinBatchSize ?? 1;
   const understandingMaxBatchChunks = input.config.llm?.understandingMaxBatchChunks ?? 8;
+  const maxRulesPerChunkDefault =
+    input.config.llm?.maxRulesPerChunkDefault ?? DEFAULT_MAX_RULES_PER_CHUNK_DEFAULT;
+  const maxRulesPerChunkHighRisk =
+    input.config.llm?.maxRulesPerChunkHighRisk ?? DEFAULT_MAX_RULES_PER_CHUNK_HIGH_RISK;
+  const minRulesPerChunk =
+    input.config.llm?.minRulesPerChunk ?? DEFAULT_MIN_RULES_PER_CHUNK;
   const mappingBasePromptTokens = estimateTokens(understandingSystemPrompt);
   const mappingBatches = buildMappingBatches(input.files, {
     basePromptTokens: mappingBasePromptTokens,
@@ -641,7 +670,10 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       understanding,
       familyMapping,
       rulesById,
-      fallbackRuleIds: BASELINE_RULE_IDS
+      fallbackRuleIds: BASELINE_RULE_IDS,
+      maxRulesPerChunkDefault,
+      maxRulesPerChunkHighRisk,
+      minRulesPerChunk
     });
     const candidateRuleIds = selection.ruleIds;
     const signalIds = extractSignalIds(understanding);
@@ -658,6 +690,11 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         candidateRuleIds,
         signals: signalIds,
         signalCount: signalIds.length,
+        rulesSelectedCount: candidateRuleIds.length,
+        capUsed: selection.capUsed,
+        highRisk: selection.highRisk,
+        strategy: selection.strategy,
+        topSignals: signalIds.slice(0, 6),
         selectionFamilies: selection.families
       });
     }
@@ -668,6 +705,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         `signals=${signalIds.length}`,
         `families=${selection.families.length ? selection.families.join(",") : "none"}`,
         `rules=${candidateRuleIds.length}`,
+        `cap=${selection.capUsed}`,
+        `highRisk=${selection.highRisk ? "yes" : "no"}`,
         `strategy=${selection.strategy}`
       ].join(" | ")
     );
@@ -678,7 +717,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       familyMapping,
       candidateRuleIds,
       selectionFamilies: selection.families,
-      selectionStrategy: selection.strategy
+      selectionStrategy: selection.strategy,
+      selectionHighRisk: selection.highRisk,
+      selectionCapUsed: selection.capUsed
     };
   };
 
@@ -890,24 +931,26 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   )).flat();
 
   const tasks: RuleScanTask[] = [];
+  const ruleFindingsByChunk = new Map<string, RepositoryScanFinding[]>();
   log("LLM scan (rule diagnosis)...");
   for (const insight of fileInsights) {
-    const ruleIdBatches = chunkRuleIds(insight.candidateRuleIds, RULE_BATCH_SIZE);
-    for (const ruleIds of ruleIdBatches) {
-      const rules = ruleIds
-        .map((ruleId) => rulesById.get(ruleId))
-        .filter(Boolean) as RuleScanDefinition[];
-      if (rules.length === 0) continue;
+    const ruleBatches = buildRuleScanBatches(insight.candidateRuleIds);
+    for (const ruleIds of ruleBatches) {
+      if (ruleIds.length === 0) continue;
       const taskKey = buildRuleBatchTaskKey(ruleIds, insight.file);
       if (resumeResults.has(taskKey)) {
         const stored = resumeResults.get(taskKey);
         if (stored && stored.length > 0) {
           resumedFindings.push(...stored);
+          const existing = ruleFindingsByChunk.get(insight.chunkId) ?? [];
+          existing.push(...stored);
+          ruleFindingsByChunk.set(insight.chunkId, existing);
         }
         resumedTaskCount += 1;
         continue;
       }
       tasks.push({
+        chunkId: insight.chunkId,
         ruleIds,
         file: insight.file,
         existingFindings,
@@ -919,31 +962,13 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     }
   }
 
-  const openScanTasks: OpenScanTask[] = [];
-  for (const insight of fileInsights) {
-    const taskKey = buildOpenScanTaskKey(insight.file);
-    if (resumeResults.has(taskKey)) {
-      const stored = resumeResults.get(taskKey);
-      if (stored && stored.length > 0) {
-        resumedOpenFindings.push(...stored);
-      }
-      resumedTaskCount += 1;
-      continue;
-    }
-    openScanTasks.push({
-      fileInsight: insight,
-      existingFindings,
-      taskKey
-    });
-  }
-
   if (fileInsights.length > 0) {
     const totalRuleScans = fileInsights.reduce(
       (sum, insight) => sum + insight.candidateRuleIds.length,
       0
     );
     const totalRuleBatches = fileInsights.reduce(
-      (sum, insight) => sum + chunkRuleIds(insight.candidateRuleIds, RULE_BATCH_SIZE).length,
+      (sum, insight) => sum + (insight.candidateRuleIds.length > 0 ? 1 : 0),
       0
     );
     const avgRules = totalRuleScans / fileInsights.length;
@@ -957,15 +982,11 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         2
       )}, totalRules=${totalRuleScans}, avgRulesPerChunk=${avgRules.toFixed(
         2
-      )}, maxRulesPerChunk=${maxRules}, openScans=${openScanTasks.length}`
+      )}, maxRulesPerChunk=${maxRules}, ruleScanConcurrency=${ruleScanConcurrency}`
     );
   }
 
-  await input.resume?.setRuleTaskCount(
-    tasks.length + openScanTasks.length + resumedTaskCount
-  );
-
-  const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
+  const results = await runWithConcurrency(tasks, ruleScanConcurrency, async (task) => {
     const { ruleIds, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping, candidateRuleIds } = task;
     const scoped = await runRuleBatchWithRetry(
       ruleIds,
@@ -986,10 +1007,83 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     return scoped;
   });
 
+  results.forEach((scoped, index) => {
+    const task = tasks[index];
+    if (!task) return;
+    if (scoped.length === 0) return;
+    const existing = ruleFindingsByChunk.get(task.chunkId) ?? [];
+    existing.push(...scoped);
+    ruleFindingsByChunk.set(task.chunkId, existing);
+  });
+
+  const openScanTasks: OpenScanTask[] = [];
+  const openScanGroupSeen = new Set<string>();
+  for (const insight of fileInsights) {
+    const ruleFindings = ruleFindingsByChunk.get(insight.chunkId) ?? [];
+    const decision = getOpenScanDecision({
+      understanding: insight.understanding,
+      selectedRuleIds: insight.candidateRuleIds,
+      ruleFindingsSoFar: ruleFindings,
+      strategy: insight.selectionStrategy
+    });
+
+    if (input.debug) {
+      logDebug(input.debug, {
+        event: "llm_open_scan_decision",
+        file: {
+          path: insight.file.path,
+          chunkIndex: insight.file.chunkIndex,
+          startLine: insight.file.startLine,
+          endLine: insight.file.endLine
+        },
+        reasons: decision.reasons,
+        shouldRun: decision.shouldRun,
+        signalCount: decision.signalCount,
+        highRisk: decision.highRisk,
+        rulesSelectedCount: insight.candidateRuleIds.length,
+        strategy: insight.selectionStrategy,
+        findingsSoFar: ruleFindings.length
+      });
+    }
+
+    if (!decision.shouldRun) continue;
+
+    const groupKey = insight.file.overlapGroupId
+      ? `overlap:${insight.file.overlapGroupId}`
+      : `chunk:${insight.chunkId}`;
+    if (openScanGroupSeen.has(groupKey)) continue;
+    openScanGroupSeen.add(groupKey);
+
+    const taskKey = buildOpenScanTaskKey(insight.file);
+    if (resumeResults.has(taskKey)) {
+      const stored = resumeResults.get(taskKey);
+      if (stored && stored.length > 0) {
+        resumedOpenFindings.push(...stored);
+      }
+      resumedTaskCount += 1;
+      continue;
+    }
+    openScanTasks.push({
+      fileInsight: insight,
+      existingFindings,
+      taskKey
+    });
+  }
+
+  if (fileInsights.length > 0) {
+    log(
+      `LLM open scan gating: openScans=${openScanTasks.length}, skipped=${fileInsights.length - openScanTasks.length}`
+    );
+  }
+
+  await input.resume?.setRuleTaskCount(
+    tasks.length + openScanTasks.length + resumedTaskCount
+  );
+
   log("LLM scan (open scan)...");
   const openScanResults = await runWithConcurrency(
     openScanTasks,
-    mapConcurrency,
+    ruleScanConcurrency,
     async (task) => {
       const { fileInsight, existingFindings: existing, taskKey } = task;
       const file = fileInsight.file;
@@ -1168,6 +1262,13 @@ function normalizeMapConcurrency(value?: number): number {
     return Math.trunc(value);
   }
   return DEFAULT_MAP_CONCURRENCY;
+}
+
+function normalizeRuleScanConcurrency(value?: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  return DEFAULT_RULE_SCAN_CONCURRENCY;
 }
 
 async function runWithConcurrency<T, R>(
@@ -1676,11 +1777,15 @@ function applyDerivedSignals(understanding: LlmChunkUnderstanding): void {
     typeof understanding.exposure === "string" ? understanding.exposure.trim().toLowerCase() : "";
   if (exposure === "public") {
     addSignal("public_entrypoint", "exposure marked public", 0.85);
+  } else if (exposure === "internal") {
+    addSignal("internal_entrypoint", "exposure marked internal", 0.7);
   }
 
   const role = typeof understanding.role === "string" ? understanding.role.trim().toLowerCase() : "";
   if (role === "api_handler") {
     addSignal("api_handler", "role indicates API handler", 0.8);
+  } else if (role === "job_worker") {
+    addSignal("job_worker", "role indicates background worker", 0.75);
   }
 
   const dataSinks = Array.isArray(understanding.data_sinks) ? understanding.data_sinks : [];
@@ -1692,6 +1797,39 @@ function applyDerivedSignals(understanding: LlmChunkUnderstanding): void {
   });
   if (hasExecSink) {
     addSignal("exec_sink", "data_sinks includes exec", 0.9);
+  }
+  for (const sink of dataSinks) {
+    if (!sink || typeof sink !== "object" || Array.isArray(sink)) continue;
+    const sinkRecord = sink as Record<string, unknown>;
+    const type = typeof sinkRecord.type === "string" ? sinkRecord.type.trim().toLowerCase() : "";
+    if (!type) continue;
+    if (type.includes("template")) {
+      addSignal("template_render", "data_sinks includes template render", 0.8);
+    }
+    if (type.includes("dom")) {
+      addSignal("frontend_dom_write", "data_sinks includes DOM writes", 0.8);
+    }
+    if (type.includes("redirect")) {
+      addSignal("redirect_sink", "data_sinks includes redirect", 0.7);
+    }
+    if (type.includes("http") || type.includes("fetch") || type.includes("request")) {
+      addSignal("http_request_sink", "data_sinks includes http requests", 0.75);
+    }
+    if (type.includes("file_write") || type.includes("write_file") || type.includes("filewrite")) {
+      addSignal("file_write_sink", "data_sinks includes file writes", 0.8);
+    }
+    if (type.includes("file_read") || type.includes("read_file") || type.includes("fileread")) {
+      addSignal("file_read_sink", "data_sinks includes file reads", 0.75);
+    }
+    if (type.includes("eval")) {
+      addSignal("eval_sink", "data_sinks includes eval/Function", 0.8);
+    }
+    if (type.includes("raw_sql") || (type.includes("sql") && type.includes("raw"))) {
+      addSignal("raw_sql_sink", "data_sinks includes raw SQL", 0.85);
+    }
+    if (type.includes("orm")) {
+      addSignal("orm_query_sink", "data_sinks includes ORM queries", 0.75);
+    }
   }
 
   const dataInputs = Array.isArray(understanding.data_inputs) ? understanding.data_inputs : [];
@@ -1915,6 +2053,42 @@ function extractSignalIds(understanding: LlmChunkUnderstanding | null): SignalId
   return ids;
 }
 
+function hasHighRiskSignal(signalSet: Set<SignalId>): boolean {
+  for (const signal of HIGH_RISK_SIGNAL_IDS) {
+    if (signalSet.has(signal)) return true;
+  }
+  return false;
+}
+
+function hasClientSuppliedIdSignal(signalSet: Set<SignalId>): boolean {
+  return (
+    signalSet.has("client_supplied_identifier") ||
+    signalSet.has("client_supplied_org_id") ||
+    signalSet.has("client_supplied_user_id")
+  );
+}
+
+function isHighRiskChunk(
+  understanding: LlmChunkUnderstanding,
+  signalSet: Set<SignalId>
+): boolean {
+  const exposure =
+    typeof understanding.exposure === "string"
+      ? understanding.exposure.trim().toLowerCase()
+      : "";
+  const exposurePublic = exposure === "public";
+  const highRiskSignals = hasHighRiskSignal(signalSet);
+  const hasWebhook = signalSet.has("webhook_handler");
+  const hasClientSuppliedId = hasClientSuppliedIdSignal(signalSet);
+  const authzMissing = signalSet.has("authz_missing_or_unknown");
+
+  return (
+    (exposurePublic && highRiskSignals) ||
+    (hasClientSuppliedId && authzMissing) ||
+    hasWebhook
+  );
+}
+
 function countMatchedSignals(list: SignalId[] | undefined, signalSet: Set<SignalId>): number {
   if (!list || list.length === 0) return 0;
   let count = 0;
@@ -1994,28 +2168,96 @@ function deriveSelectionFamilies(
   return families;
 }
 
+type OpenScanDecision = {
+  shouldRun: boolean;
+  reasons: string[];
+  highRisk: boolean;
+  signalCount: number;
+};
+
+function getOpenScanDecision(params: {
+  understanding: LlmChunkUnderstanding | null;
+  selectedRuleIds: string[];
+  ruleFindingsSoFar?: RepositoryScanFinding[];
+  strategy: "signals_primary" | "role_fallback" | "baseline_fallback";
+}): OpenScanDecision {
+  const { understanding, selectedRuleIds, ruleFindingsSoFar, strategy } = params;
+  const signalIds = extractSignalIds(understanding);
+  const signalSet = new Set<SignalId>(signalIds);
+  const lowCoverage = selectedRuleIds.length < OPEN_SCAN_MIN_RULES;
+  const signalsMissing = signalIds.length === 0;
+  const isFallback = strategy === "role_fallback" || strategy === "baseline_fallback";
+  const highRisk = hasHighRiskSignal(signalSet);
+  const findingsCount = ruleFindingsSoFar ? ruleFindingsSoFar.length : 0;
+
+  const reasons: string[] = [];
+  if (lowCoverage) reasons.push("low_rule_coverage");
+  if (isFallback) reasons.push("role_fallback");
+  if (signalsMissing) reasons.push("signals_missing");
+  if (highRisk && findingsCount === 0) reasons.push("high_risk_no_findings");
+
+  return {
+    shouldRun: reasons.length > 0,
+    reasons,
+    highRisk,
+    signalCount: signalIds.length
+  };
+}
+
+export function shouldRunOpenScan(params: {
+  understanding: LlmChunkUnderstanding | null;
+  selectedRuleIds: string[];
+  ruleFindingsSoFar?: RepositoryScanFinding[];
+  strategy: "signals_primary" | "role_fallback" | "baseline_fallback";
+}): boolean {
+  return getOpenScanDecision(params).shouldRun;
+}
+
 export function resolveCandidateRuleIds(params: {
   understanding: LlmChunkUnderstanding | null;
   familyMapping: LlmFamilyMapping | null;
   rulesById: Map<string, RuleScanDefinition>;
   fallbackRuleIds: string[];
+  maxRulesPerChunkDefault?: number;
+  maxRulesPerChunkHighRisk?: number;
+  minRulesPerChunk?: number;
 }): {
   ruleIds: string[];
   families: string[];
   strategy: "signals_primary" | "role_fallback" | "baseline_fallback";
+  capUsed: number;
+  highRisk: boolean;
 } {
   const { understanding, familyMapping, rulesById, fallbackRuleIds } = params;
+  const normalizeCap = (value: number | undefined, fallback: number): number => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
+    return Math.max(1, Math.trunc(value));
+  };
+  const maxRulesDefault = normalizeCap(
+    params.maxRulesPerChunkDefault,
+    DEFAULT_MAX_RULES_PER_CHUNK_DEFAULT
+  );
+  const maxRulesHighRisk = normalizeCap(
+    params.maxRulesPerChunkHighRisk,
+    DEFAULT_MAX_RULES_PER_CHUNK_HIGH_RISK
+  );
+  const minRules = normalizeCap(params.minRulesPerChunk, DEFAULT_MIN_RULES_PER_CHUNK);
   const filteredFallback = fallbackRuleIds.filter((ruleId) => rulesById.has(ruleId));
   if (!understanding) {
+    const capUsed = Math.max(1, Math.min(maxRulesDefault, maxRulesHighRisk));
     return {
-      ruleIds: filteredFallback.slice(0, MAX_RULES_PER_CHUNK),
+      ruleIds: filteredFallback.slice(0, capUsed),
       families: [],
-      strategy: "baseline_fallback"
+      strategy: "baseline_fallback",
+      capUsed,
+      highRisk: false
     };
   }
 
   const signalIds = extractSignalIds(understanding);
   const signalSet = new Set<SignalId>(signalIds);
+  const highRisk = isHighRiskChunk(understanding, signalSet);
+  const capUsed = highRisk ? maxRulesHighRisk : maxRulesDefault;
   const scoredRules: Array<{ id: string; score: number }> = [];
   if (signalSet.size > 0) {
     for (const rule of rulesById.values()) {
@@ -2032,7 +2274,7 @@ export function resolveCandidateRuleIds(params: {
   const selected: string[] = [];
   const seen = new Set<string>();
   for (const entry of scoredRules) {
-    if (selected.length >= MAX_RULES_PER_CHUNK) break;
+    if (selected.length >= capUsed) break;
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
     selected.push(entry.id);
@@ -2040,7 +2282,7 @@ export function resolveCandidateRuleIds(params: {
 
   const suggestedRuleIds = (familyMapping?.suggested_rule_ids ?? []).filter(Boolean);
   for (const ruleId of suggestedRuleIds) {
-    if (selected.length >= MAX_RULES_PER_CHUNK) break;
+    if (selected.length >= capUsed) break;
     if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
     seen.add(ruleId);
     selected.push(ruleId);
@@ -2048,29 +2290,31 @@ export function resolveCandidateRuleIds(params: {
 
   let strategy: "signals_primary" | "role_fallback" | "baseline_fallback" = "signals_primary";
 
-  if (signalSet.size === 0 || selected.length < MIN_RULES_PER_CHUNK) {
+  if (signalSet.size === 0 || selected.length < minRules) {
     const role =
       typeof understanding.role === "string"
         ? understanding.role.trim()
         : "unknown";
     const fallbackFamilies = ROLE_FAMILY_FALLBACKS[role] ?? ROLE_FAMILY_FALLBACKS.unknown;
     strategy = "role_fallback";
+    const fallbackLimit = Math.min(capUsed, DEFAULT_FALLBACK_RULE_CAP);
+    const fallbackTarget = Math.min(fallbackLimit, Math.max(minRules, selected.length));
 
     for (const family of fallbackFamilies) {
       const ruleIds = FAMILY_RULES[family] ?? [];
       for (const ruleId of ruleIds) {
-        if (selected.length >= MAX_RULES_PER_CHUNK) break;
+        if (selected.length >= fallbackTarget) break;
         if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
         seen.add(ruleId);
         selected.push(ruleId);
       }
-      if (selected.length >= MAX_RULES_PER_CHUNK) break;
+      if (selected.length >= fallbackTarget) break;
     }
 
     if (selected.length === 0) {
       strategy = "baseline_fallback";
       for (const ruleId of filteredFallback) {
-        if (selected.length >= MAX_RULES_PER_CHUNK) break;
+        if (selected.length >= fallbackTarget) break;
         if (seen.has(ruleId)) continue;
         seen.add(ruleId);
         selected.push(ruleId);
@@ -2081,7 +2325,9 @@ export function resolveCandidateRuleIds(params: {
   return {
     ruleIds: selected,
     families: deriveSelectionFamilies(selected, rulesById),
-    strategy
+    strategy,
+    capUsed,
+    highRisk
   };
 }
 

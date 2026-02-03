@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { RepositoryFileSample } from "../../types.js";
 import {
   buildMappingBatches,
+  buildRuleScanBatches,
   chunkRuleIds,
   resolveRuleCluster,
   runWithCircuitBreaker
@@ -85,6 +86,18 @@ test("chunkRuleIds groups by cluster and never mixes clusters", () => {
     const cluster = resolveRuleCluster(batch[0]);
     assert.ok(batch.every((ruleId) => resolveRuleCluster(ruleId) === cluster));
   }
+});
+
+test("rule scan batching collapses to a single batch", () => {
+  const ruleIds = [
+    "missing_authentication",
+    "sql_injection",
+    "missing_webhook_signature"
+  ];
+  const batches = buildRuleScanBatches(ruleIds);
+
+  assert.equal(batches.length, 1);
+  assert.deepStrictEqual(batches[0], ruleIds);
 });
 
 test("runWithCircuitBreaker splits batches on failure", async () => {
