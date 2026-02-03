@@ -63,6 +63,9 @@ export interface HadrixConfig {
     maxConcurrency?: number;
     estimatedTokensPerTask?: number;
     mappingBatchSize?: number;
+    understandingMaxPromptTokens?: number;
+    understandingMinBatchSize?: number;
+    understandingMaxBatchChunks?: number;
     reasoning?: boolean;
     reasoningModel?: string;
     rateLimit?: {
@@ -235,6 +238,21 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(readEnv("HADRIX_LLM_MAPPING_BATCH_SIZE")) ??
     parsePositiveNumber(configFile.llm?.mappingBatchSize);
 
+  const understandingMaxPromptTokens =
+    parsePositiveNumber(readEnv("HADRIX_UNDERSTANDING_MAX_PROMPT_TOKENS")) ??
+    parsePositiveNumber(configFile.llm?.understandingMaxPromptTokens) ??
+    6500;
+
+  const understandingMinBatchSize =
+    parsePositiveNumber(readEnv("HADRIX_UNDERSTANDING_MIN_BATCH_SIZE")) ??
+    parsePositiveNumber(configFile.llm?.understandingMinBatchSize) ??
+    1;
+
+  const understandingMaxBatchChunks =
+    parsePositiveNumber(readEnv("HADRIX_UNDERSTANDING_MAX_BATCH_CHUNKS")) ??
+    parsePositiveNumber(configFile.llm?.understandingMaxBatchChunks) ??
+    8;
+
   const llmRateLimit = {
     ...(llmRequestsPerMinute ? { requestsPerMinute: llmRequestsPerMinute } : {}),
     ...(llmTokensPerMinute ? { tokensPerMinute: llmTokensPerMinute } : {}),
@@ -261,6 +279,9 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       maxConcurrency: llmMaxConcurrency ?? undefined,
       estimatedTokensPerTask: llmEstimatedTokensPerTask ?? undefined,
       mappingBatchSize: llmMappingBatchSize ?? undefined,
+      understandingMaxPromptTokens,
+      understandingMinBatchSize,
+      understandingMaxBatchChunks,
       reasoning: llmReasoning,
       reasoningModel: llmReasoningModel,
       rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,

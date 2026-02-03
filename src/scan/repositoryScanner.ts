@@ -16,9 +16,7 @@ import {
   buildRepositoryScanOutputSchema,
   buildRepositoryRuleBatchSystemPrompt
 } from "./prompts/repositoryPrompts.js";
-import {
-  buildUnderstandingAndFamilyMappingSystemPrompt
-} from "./prompts/llmUnderstandingPrompts.js";
+import { buildChunkUnderstandingSystemPrompt } from "./prompts/llmUnderstandingPrompts.js";
 import { buildOpenScanSystemPrompt } from "./prompts/openScanPrompts.js";
 import { REPOSITORY_SCAN_RULES, type RuleScanDefinition } from "./catalog/repositoryRuleCatalog.js";
 import {
@@ -113,7 +111,6 @@ type RuleCatalogEntry = {
 type RuleScanTask = {
   ruleIds: string[];
   file: RepositoryFileSample;
-  systemPrompt: string;
   existingFindings: ExistingScanFinding[];
   taskKey: string;
   llmUnderstanding: LlmChunkUnderstanding | null;
@@ -130,12 +127,80 @@ type OpenScanTask = {
 const DEFAULT_MAP_CONCURRENCY = 4;
 const DEFAULT_MAX_EXISTING_FINDINGS_PER_REPO = 80;
 const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
-const DEFAULT_MAPPING_BATCH_SIZE = 3;
-const MAX_MAPPING_BATCH_SIZE = 4;
-
 const MAX_RULES_PER_CHUNK = 10;
 const MIN_RULES_PER_CHUNK = 3;
 const RULE_BATCH_SIZE = 5;
+
+const RULE_CLUSTER_BY_ID: Record<string, string> = {
+  missing_authentication: "auth_enforcement",
+  missing_server_action_auth: "auth_enforcement",
+  missing_role_check: "auth_enforcement",
+  frontend_only_authorization: "auth_enforcement",
+  idor: "auth_enforcement",
+  org_id_trust: "auth_enforcement",
+  missing_admin_mfa: "auth_enforcement",
+  missing_lockout: "auth_enforcement",
+  missing_secure_token_handling: "auth_enforcement",
+  session_fixation: "auth_enforcement",
+  jwt_validation_bypass: "auth_enforcement",
+  weak_jwt_secret: "auth_enforcement",
+  weak_token_generation: "auth_enforcement",
+  weak_password_hashing: "auth_enforcement",
+  anon_key_bearer: "auth_enforcement",
+  missing_bearer_token: "auth_enforcement",
+
+  missing_webhook_signature: "webhook_security",
+  missing_replay_protection: "webhook_security",
+  missing_webhook_config_integrity: "webhook_security",
+  webhook_code_execution: "webhook_security",
+
+  sql_injection: "injection_exec",
+  unsafe_query_builder: "injection_exec",
+  command_injection: "injection_exec",
+  dangerous_html_render: "injection_exec",
+  template_injection: "injection_exec",
+  path_traversal: "injection_exec",
+  nosql_injection: "injection_exec",
+  ldap_injection: "injection_exec",
+  xpath_injection: "injection_exec",
+
+  frontend_secret_exposure: "secrets_logging",
+  sensitive_logging: "secrets_logging",
+  command_output_logging: "secrets_logging",
+  plaintext_secrets: "secrets_logging",
+  sensitive_client_storage: "secrets_logging",
+  debug_auth_leak: "secrets_logging",
+  weak_encryption: "secrets_logging",
+
+  permissive_cors: "hardening_limits",
+  missing_timeout: "hardening_limits",
+  missing_rate_limiting: "hardening_limits",
+  missing_audit_logging: "hardening_limits",
+  missing_output_sanitization: "hardening_limits",
+  missing_input_validation: "hardening_limits",
+  missing_least_privilege: "hardening_limits",
+  unbounded_query: "hardening_limits",
+  missing_upload_size_limit: "hardening_limits",
+  unrestricted_file_upload: "hardening_limits",
+  verbose_error_messages: "hardening_limits",
+  debug_mode_in_production: "hardening_limits",
+  missing_security_headers: "hardening_limits",
+  frontend_login_rate_limit: "hardening_limits",
+  insecure_temp_files: "hardening_limits",
+  log_injection: "hardening_limits",
+
+  frontend_direct_db_write: "data_access",
+  mass_assignment: "data_access",
+  excessive_data_exposure: "data_access",
+  weak_rls_policies: "data_access"
+};
+
+type MappingBatchOptions = {
+  basePromptTokens: number;
+  maxPromptTokens: number;
+  minBatchSize: number;
+  maxBatchChunks: number;
+};
 
 const OPEN_SCAN_FAMILIES = new Set([
   "injection",
@@ -304,12 +369,26 @@ function buildChunkKey(file: RepositoryFileSample): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-function chunkRuleIds(ruleIds: string[], size: number): string[][] {
+export function resolveRuleCluster(ruleId: string): string {
+  return RULE_CLUSTER_BY_ID[ruleId] ?? "misc";
+}
+
+export function chunkRuleIds(ruleIds: string[], size: number): string[][] {
   if (ruleIds.length === 0) return [];
   const batchSize = Math.max(1, Math.trunc(size));
+  const clusters = new Map<string, string[]>();
+  for (const ruleId of ruleIds) {
+    const clusterId = resolveRuleCluster(ruleId);
+    if (!clusters.has(clusterId)) {
+      clusters.set(clusterId, []);
+    }
+    clusters.get(clusterId)!.push(ruleId);
+  }
   const batches: string[][] = [];
-  for (let i = 0; i < ruleIds.length; i += batchSize) {
-    batches.push(ruleIds.slice(i, i + batchSize));
+  for (const clusterRuleIds of clusters.values()) {
+    for (let i = 0; i < clusterRuleIds.length; i += batchSize) {
+      batches.push(clusterRuleIds.slice(i, i + batchSize));
+    }
   }
   return batches;
 }
@@ -389,107 +468,112 @@ function inferLanguage(filepath: string): string {
   }
 }
 
-function normalizeMappingBatchSize(
-  value: number | undefined,
-  log: ((message: string) => void) | undefined
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function estimateMappingChunkTokens(file: RepositoryFileSample): number {
+  const chunkIdPlaceholder = "x".repeat(64);
+  const header = [
+    `chunk_id:${chunkIdPlaceholder}`,
+    `file_path:${file.path}`,
+    `language:${inferLanguage(file.path)}`,
+    "chunk_text:"
+  ].join("\n");
+  const text = `${header}${file.content ?? ""}`;
+  return estimateTokens(text);
+}
+
+function estimateMappingBatchTokens(
+  batch: RepositoryFileSample[],
+  basePromptTokens: number
 ): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_MAPPING_BATCH_SIZE;
+  let total = basePromptTokens;
+  for (const file of batch) {
+    total += estimateMappingChunkTokens(file);
   }
-  const rounded = Math.trunc(value);
-  if (rounded <= 1) return 1;
-  if (rounded > MAX_MAPPING_BATCH_SIZE) {
-    log?.(
-      `LLM mapping batch size ${rounded} is too large; capping at ${MAX_MAPPING_BATCH_SIZE}.`
-    );
-    return MAX_MAPPING_BATCH_SIZE;
-  }
-  return rounded;
+  return total;
 }
 
-function splitMappingBatches(
-  items: RepositoryFileSample[],
-  batchSize: number
-): RepositoryFileSample[][] {
-  if (items.length === 0) return [];
-  const batches: RepositoryFileSample[][] = [];
-  for (let i = 0; i < items.length; i += batchSize) {
-    batches.push(items.slice(i, i + batchSize));
-  }
-  return batches;
-}
-
-function buildMappingBatches(
+export function buildMappingBatches(
   files: RepositoryFileSample[],
-  batchSize: number
+  options: MappingBatchOptions
 ): RepositoryFileSample[][] {
-  if (batchSize <= 1) return files.map((file) => [file]);
+  if (files.length === 0) return [];
 
-  const byFile = new Map<string, RepositoryFileSample[]>();
-  for (const file of files) {
-    if (!byFile.has(file.path)) {
-      byFile.set(file.path, []);
+  const groups = new Map<string, RepositoryFileSample[]>();
+  const ensureGroup = (key: string) => {
+    if (!groups.has(key)) {
+      groups.set(key, []);
     }
-    byFile.get(file.path)!.push(file);
+    return groups.get(key)!;
+  };
+
+  for (const file of files) {
+    const groupKey = file.overlapGroupId
+      ? `overlap:${file.overlapGroupId}`
+      : file.path
+        ? `file:${file.path}`
+        : "misc";
+    ensureGroup(groupKey).push(file);
   }
 
   const batches: RepositoryFileSample[][] = [];
+  const maxPromptTokens = Math.max(1, Math.trunc(options.maxPromptTokens));
+  const minBatchSize = Math.max(1, Math.trunc(options.minBatchSize));
+  const maxBatchChunks = Math.max(minBatchSize, Math.trunc(options.maxBatchChunks));
 
-  for (const list of byFile.values()) {
-    list.sort(
-      (a, b) =>
-        (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) ||
-        a.startLine - b.startLine ||
-        a.endLine - b.endLine
-    );
+  for (const group of groups.values()) {
+    let current: RepositoryFileSample[] = [];
+    let currentTokens = options.basePromptTokens;
 
-    const overlapGroups = new Map<string, RepositoryFileSample[]>();
-    const noOverlap: RepositoryFileSample[] = [];
-
-    for (const sample of list) {
-      if (sample.overlapGroupId) {
-        if (!overlapGroups.has(sample.overlapGroupId)) {
-          overlapGroups.set(sample.overlapGroupId, []);
-        }
-        overlapGroups.get(sample.overlapGroupId)!.push(sample);
-      } else {
-        noOverlap.push(sample);
+    for (const file of group) {
+      const nextTokens = estimateMappingChunkTokens(file);
+      const wouldExceed =
+        current.length > 0 &&
+        (currentTokens + nextTokens > maxPromptTokens || current.length >= maxBatchChunks);
+      if (wouldExceed) {
+        batches.push(current);
+        current = [];
+        currentTokens = options.basePromptTokens;
       }
+      current.push(file);
+      currentTokens += nextTokens;
     }
 
-    for (const group of overlapGroups.values()) {
-      group.sort(
-        (a, b) =>
-          (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) ||
-          a.startLine - b.startLine
-      );
-      batches.push(...splitMappingBatches(group, batchSize));
-    }
-
-    if (noOverlap.length > 0) {
-      noOverlap.sort(
-        (a, b) =>
-          (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0) ||
-          a.startLine - b.startLine
-      );
-      let current: RepositoryFileSample[] = [noOverlap[0]];
-      for (let i = 1; i < noOverlap.length; i += 1) {
-        const prev = noOverlap[i - 1];
-        const next = noOverlap[i];
-        if (next.chunkIndex === prev.chunkIndex + 1) {
-          current.push(next);
-        } else {
-          batches.push(...splitMappingBatches(current, batchSize));
-          current = [next];
-        }
-      }
-      if (current.length) {
-        batches.push(...splitMappingBatches(current, batchSize));
-      }
+    if (current.length > 0) {
+      batches.push(current);
     }
   }
 
   return batches;
+}
+
+type BatchCircuitBreakerOptions<T, R> = {
+  maxDepth: number;
+  onRetry?: (info: { attempt: number; batchSize: number; reason: string; items: T[] }) => void;
+  onExhausted?: (items: T[], reason: string) => R[];
+};
+
+export async function runWithCircuitBreaker<T, R>(
+  items: T[],
+  runBatch: (batch: T[]) => Promise<R[]>,
+  options: BatchCircuitBreakerOptions<T, R>,
+  attempt = 1
+): Promise<R[]> {
+  try {
+    return await runBatch(items);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    options.onRetry?.({ attempt, batchSize: items.length, reason, items });
+    if (items.length <= 1 || attempt >= options.maxDepth) {
+      return options.onExhausted ? options.onExhausted(items, reason) : [];
+    }
+    const mid = Math.ceil(items.length / 2);
+    const left = await runWithCircuitBreaker(items.slice(0, mid), runBatch, options, attempt + 1);
+    const right = await runWithCircuitBreaker(items.slice(mid), runBatch, options, attempt + 1);
+    return [...left, ...right];
+  }
 }
 
 export async function scanRepository(input: RepositoryScanInput): Promise<RepositoryScanFinding[]> {
@@ -505,8 +589,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     undefined,
     buildKnowledgeContext() || undefined
   );
-  const understandingAndFamilyMappingSystemPrompt = [
-    buildUnderstandingAndFamilyMappingSystemPrompt(),
+  const understandingSystemPrompt = [
+    buildChunkUnderstandingSystemPrompt(),
     systemContext
   ].filter(Boolean).join("\n\n");
   const openScanSystemPrompt = [
@@ -527,13 +611,18 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   const resumedOpenFindings: RepositoryScanFinding[] = [];
   let resumedTaskCount = 0;
 
-  log("LLM scan (understanding + family mapping, single-pass)...");
+  log("LLM scan (understanding, batched)...");
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
-  const mappingBatchSize = normalizeMappingBatchSize(
-    input.config.llm?.mappingBatchSize,
-    log
-  );
-  const mappingBatches = buildMappingBatches(input.files, mappingBatchSize);
+  const understandingMaxPromptTokens = input.config.llm?.understandingMaxPromptTokens ?? 6500;
+  const understandingMinBatchSize = input.config.llm?.understandingMinBatchSize ?? 1;
+  const understandingMaxBatchChunks = input.config.llm?.understandingMaxBatchChunks ?? 8;
+  const mappingBasePromptTokens = estimateTokens(understandingSystemPrompt);
+  const mappingBatches = buildMappingBatches(input.files, {
+    basePromptTokens: mappingBasePromptTokens,
+    maxPromptTokens: understandingMaxPromptTokens,
+    minBatchSize: understandingMinBatchSize,
+    maxBatchChunks: understandingMaxBatchChunks
+  });
 
   const buildMappingPayload = (file: RepositoryFileSample, chunkId: string) => ({
     chunk_id: chunkId,
@@ -569,9 +658,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         candidateRuleIds,
         signals: signalIds,
         signalCount: signalIds.length,
-        selectionFamilies: selection.families,
-        families: familyMapping?.families ?? [],
-        suggestedRuleIds: familyMapping?.suggested_rule_ids ?? []
+        selectionFamilies: selection.families
       });
     }
     log(
@@ -580,8 +667,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         `${file.path}:${file.startLine}-${file.endLine}`,
         `signals=${signalIds.length}`,
         `families=${selection.families.length ? selection.families.join(",") : "none"}`,
-        `familyCandidates=${familyMapping?.families?.length ?? 0}`,
-        `suggestedRules=${familyMapping?.suggested_rule_ids?.length ?? 0}`,
         `rules=${candidateRuleIds.length}`,
         `strategy=${selection.strategy}`
       ].join(" | ")
@@ -597,140 +682,205 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     };
   };
 
-  const mapSingleChunk = async (file: RepositoryFileSample): Promise<LlmFileInsight> => {
-    const chunkId = buildChunkKey(file);
-    const mappingPayload = buildMappingPayload(file, chunkId);
+  type MappingItem = { file: RepositoryFileSample; chunkId: string };
+
+  const runUnderstandingBatch = async (items: MappingItem[]): Promise<LlmFileInsight[]> => {
+    const mappingPayload =
+      items.length === 1
+        ? buildMappingPayload(items[0].file, items[0].chunkId)
+        : items.map((item) => buildMappingPayload(item.file, item.chunkId));
+
     const mappingResponse = await runChatCompletion(input.config, [
-      { role: "system", content: understandingAndFamilyMappingSystemPrompt },
+      { role: "system", content: understandingSystemPrompt },
       { role: "user", content: JSON.stringify(mappingPayload, null, 2) }
     ]);
 
-    let understanding: LlmChunkUnderstanding | null = null;
-    let familyMapping: LlmFamilyMapping | null = null;
     try {
-      const parsed = parseUnderstandingAndFamilyMapping(mappingResponse, {
-        chunkId,
-        filePath: file.path
-      });
-      understanding = parsed.understanding;
-      familyMapping = parsed.familyMapping;
+      const understandings = parseChunkUnderstandingBatch(
+        mappingResponse,
+        items.map((item) => ({ chunkId: item.chunkId, filePath: item.file.path }))
+      );
+      return items.map((item, index) =>
+        buildFileInsight(item.file, item.chunkId, understandings[index], null)
+      );
     } catch (err) {
+      const label = items.length > 1 ? "llm-understanding-batch" : "llm-understanding";
       const savedPath = await writeLlmDebugArtifact(
         input.config,
-        "llm-understanding-family-mapping",
+        label,
         mappingResponse
       );
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `LLM understanding/family mapping parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+        `LLM understanding parse error for ${items.length} chunk(s). ${message}. Saved response: ${savedPath}`
       );
       logDebug(input.debug, {
-        event: "llm_understanding_family_mapping_parse_error",
-        file: {
-          path: file.path,
-          chunkIndex: file.chunkIndex,
-          startLine: file.startLine,
-          endLine: file.endLine
-        },
+        event: "llm_understanding_parse_error",
         message,
-        savedPath
+        savedPath,
+        batchSize: items.length
       });
+      throw err;
     }
-
-    return buildFileInsight(file, chunkId, understanding, familyMapping);
   };
 
   const mapBatch = async (batch: RepositoryFileSample[]): Promise<LlmFileInsight[]> => {
-    if (batch.length <= 1) {
-      return [await mapSingleChunk(batch[0])];
-    }
-
     const batchItems = batch.map((file) => ({
       file,
       chunkId: buildChunkKey(file)
     }));
-    const mappingPayload = batchItems.map((item) =>
-      buildMappingPayload(item.file, item.chunkId)
+    const maxDepth = Math.ceil(Math.log2(batchItems.length)) + 2;
+    return runWithCircuitBreaker(
+      batchItems,
+      runUnderstandingBatch,
+      {
+        maxDepth,
+        onRetry: ({ attempt, batchSize, reason, items }) => {
+          const estimatedTokens = estimateMappingBatchTokens(
+            items.map((item) => item.file),
+            mappingBasePromptTokens
+          );
+          logDebug(input.debug, {
+            event: "llm_understanding_retry",
+            attempt,
+            batchSize,
+            estimatedTokens,
+            reason
+          });
+        },
+        onExhausted: (items, reason) => {
+          logDebug(input.debug, {
+            event: "llm_understanding_retry_exhausted",
+            attempt: maxDepth,
+            batchSize: items.length,
+            reason
+          });
+          return items.map((item) => buildFileInsight(item.file, item.chunkId, null, null));
+        }
+      }
     );
+  };
 
-    const mappingResponse = await runChatCompletion(input.config, [
-      { role: "system", content: understandingAndFamilyMappingSystemPrompt },
-      { role: "user", content: JSON.stringify(mappingPayload, null, 2) }
+  const buildRuleBatchPrompt = (ruleIds: string[]): string => {
+    const rules = ruleIds
+      .map((ruleId) => rulesById.get(ruleId))
+      .filter(Boolean) as RuleScanDefinition[];
+    const systemPrompt = buildRepositoryRuleBatchSystemPrompt(rules);
+    return [systemPrompt, systemContext].filter(Boolean).join("\n\n");
+  };
+
+  const runRuleBatchOnce = async (
+    ruleIds: string[],
+    file: RepositoryFileSample,
+    existing: ExistingScanFinding[],
+    context: {
+      llmUnderstanding: LlmChunkUnderstanding | null;
+      familyMapping: LlmFamilyMapping | null;
+      candidateRuleIds: string[];
+    }
+  ): Promise<RepositoryScanFinding[]> => {
+    if (ruleIds.length === 0) return [];
+    const systemPrompt = buildRuleBatchPrompt(ruleIds);
+    const filePayload = {
+      path: file.path,
+      startLine: file.startLine,
+      endLine: file.endLine,
+      chunkIndex: file.chunkIndex,
+      truncated: file.truncated ?? false,
+      content: file.content,
+      llmUnderstanding: context.llmUnderstanding ?? undefined,
+      familyMapping: context.familyMapping ?? undefined,
+      candidateRuleIds: context.candidateRuleIds.length ? context.candidateRuleIds : undefined
+    };
+    const payload = {
+      outputSchema,
+      repositories: [
+        {
+          fullName: input.repository.fullName,
+          defaultBranch: input.repository.defaultBranch ?? undefined,
+          metadata: input.repository.providerMetadata ?? undefined,
+          repoPaths: input.repository.repoPaths,
+          repoRoles: input.repository.repoRoles,
+          existingFindings: existing.length ? existing : undefined,
+          files: [filePayload]
+        }
+      ],
+      focus: buildRuleBatchFocus(ruleIds, rulesById)
+    };
+
+    const response = await runChatCompletion(input.config, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(payload, null, 2) }
     ]);
 
-    let parsedBatch: {
-      results: Array<{ understanding: LlmChunkUnderstanding; familyMapping: LlmFamilyMapping } | null>;
-      errors: string[];
-    };
     try {
-      parsedBatch = parseUnderstandingAndFamilyMappingBatch(
-        mappingResponse,
-        batchItems.map((item) => ({ chunkId: item.chunkId, filePath: item.file.path }))
-      );
+      const parsed = parseFindings(response, input.repository, {
+        requireFilepath: true,
+        defaultLocation: {
+          filepath: file.path,
+          startLine: file.startLine,
+          endLine: file.endLine,
+          chunkIndex: file.chunkIndex
+        }
+      });
+      const scoped = enforceRuleBatchFindings(parsed, ruleIds);
+      if (parsed.length > 0 && scoped.length === 0) {
+        throw new Error("LLM returned findings without matching rule ids.");
+      }
+      return scoped;
     } catch (err) {
       const savedPath = await writeLlmDebugArtifact(
         input.config,
-        "llm-understanding-family-mapping-batch",
-        mappingResponse
+        `llm-map-${ruleIds.join("-")}`,
+        response
       );
       const message = err instanceof Error ? err.message : String(err);
       log(
-        `LLM understanding/family mapping batch parse error for ${batchItems.length} chunks. ${message}. Saved response: ${savedPath}`
+        `LLM rule scan parse error (${ruleIds.join(",")}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
       );
       logDebug(input.debug, {
-        event: "llm_understanding_family_mapping_batch_parse_error",
+        event: "llm_parse_error",
+        ruleIds,
+        file: {
+          path: file.path,
+          chunkIndex: file.chunkIndex,
+          startLine: file.startLine,
+          endLine: file.endLine,
+        },
         message,
         savedPath,
-        batchSize: batchItems.length
       });
-      const fallback: LlmFileInsight[] = [];
-      for (const item of batchItems) {
-        fallback.push(await mapSingleChunk(item.file));
+      throw err;
+    }
+  };
+
+  const runRuleBatchWithRetry = async (
+    ruleIds: string[],
+    file: RepositoryFileSample,
+    existing: ExistingScanFinding[],
+    context: {
+      llmUnderstanding: LlmChunkUnderstanding | null;
+      familyMapping: LlmFamilyMapping | null;
+      candidateRuleIds: string[];
+    }
+  ): Promise<RepositoryScanFinding[]> => {
+    const maxDepth = Math.ceil(Math.log2(ruleIds.length || 1)) + 2;
+    return runWithCircuitBreaker(
+      ruleIds,
+      (batchRuleIds) => runRuleBatchOnce(batchRuleIds, file, existing, context),
+      {
+        maxDepth,
+        onRetry: ({ attempt, batchSize, reason, items }) => {
+          logDebug(input.debug, {
+            event: "llm_rule_retry",
+            attempt,
+            batchSize,
+            reason,
+            ruleIds: items
+          });
+        }
       }
-      return fallback;
-    }
-
-    const { results, errors } = parsedBatch;
-    const needsFallback: number[] = [];
-    for (let i = 0; i < batchItems.length; i += 1) {
-      if (!results[i]) {
-        needsFallback.push(i);
-      }
-    }
-
-    if (errors.length || needsFallback.length) {
-      const savedPath = await writeLlmDebugArtifact(
-        input.config,
-        "llm-understanding-family-mapping-batch",
-        mappingResponse
-      );
-      const message = errors.length ? errors.join("; ") : "missing batch items";
-      log(
-        `LLM understanding/family mapping batch parse issues for ${batchItems.length} chunks. ${message}. Saved response: ${savedPath}`
-      );
-      logDebug(input.debug, {
-        event: "llm_understanding_family_mapping_batch_parse_error",
-        message,
-        savedPath,
-        batchSize: batchItems.length,
-        missing: needsFallback
-      });
-    }
-
-    const insights: LlmFileInsight[] = [];
-    for (let i = 0; i < batchItems.length; i += 1) {
-      const item = batchItems[i];
-      const parsed = results[i];
-      if (parsed) {
-        insights.push(
-          buildFileInsight(item.file, item.chunkId, parsed.understanding, parsed.familyMapping)
-        );
-      } else {
-        insights.push(await mapSingleChunk(item.file));
-      }
-    }
-
-    return insights;
+    );
   };
 
   const fileInsights = (await runWithConcurrency(
@@ -748,8 +898,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         .map((ruleId) => rulesById.get(ruleId))
         .filter(Boolean) as RuleScanDefinition[];
       if (rules.length === 0) continue;
-      const systemPrompt = buildRepositoryRuleBatchSystemPrompt(rules);
-      const combinedSystemPrompt = [systemPrompt, systemContext].filter(Boolean).join("\n\n");
       const taskKey = buildRuleBatchTaskKey(ruleIds, insight.file);
       if (resumeResults.has(taskKey)) {
         const stored = resumeResults.get(taskKey);
@@ -762,7 +910,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       tasks.push({
         ruleIds,
         file: insight.file,
-        systemPrompt: combinedSystemPrompt,
         existingFindings,
         taskKey,
         llmUnderstanding: insight.understanding,
@@ -820,86 +967,23 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
 
   const results = await runWithConcurrency(tasks, mapConcurrency, async (task) => {
     const { ruleIds, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping, candidateRuleIds } = task;
-
-    const filePayload = {
-      path: file.path,
-      startLine: file.startLine,
-      endLine: file.endLine,
-      chunkIndex: file.chunkIndex,
-      truncated: file.truncated ?? false,
-      content: file.content,
-      llmUnderstanding: llmUnderstanding ?? undefined,
-      familyMapping: familyMapping ?? undefined,
-      candidateRuleIds: candidateRuleIds.length ? candidateRuleIds : undefined
-    };
-
-    const payload = {
-      outputSchema,
-      repositories: [
-        {
-          fullName: input.repository.fullName,
-          defaultBranch: input.repository.defaultBranch ?? undefined,
-          metadata: input.repository.providerMetadata ?? undefined,
-          repoPaths: input.repository.repoPaths,
-          repoRoles: input.repository.repoRoles,
-          existingFindings: existing.length ? existing : undefined,
-          files: [filePayload]
-        }
-      ],
-      focus: buildRuleBatchFocus(ruleIds, rulesById)
-    };
-
-    const response = await runChatCompletion(input.config, [
-      { role: "system", content: task.systemPrompt },
-      { role: "user", content: JSON.stringify(payload, null, 2) }
-    ]);
-
-    try {
-      const parsed = parseFindings(response, input.repository, {
-        requireFilepath: true,
-        defaultLocation: {
-          filepath: file.path,
-          startLine: file.startLine,
-          endLine: file.endLine,
-          chunkIndex: file.chunkIndex
-        }
-      });
-      const scoped = enforceRuleBatchFindings(parsed, ruleIds);
-      const overlapGroupId = file.overlapGroupId ?? null;
-      if (overlapGroupId) {
-        const adjusted = scoped.map((finding) => ({
-          ...finding,
-          details: { ...toRecord(finding.details), overlapGroupId }
-        }));
-        await input.resume?.recordRuleResult(taskKey, adjusted);
-        return adjusted;
-      }
-      await input.resume?.recordRuleResult(taskKey, scoped);
-      return scoped;
-    } catch (err) {
-      const savedPath = await writeLlmDebugArtifact(
-        input.config,
-        `llm-map-${ruleIds.join("-")}`,
-        response
-      );
-      const message = err instanceof Error ? err.message : String(err);
-      log(
-        `LLM rule scan parse error (${ruleIds.join(",")}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
-      );
-      logDebug(input.debug, {
-        event: "llm_parse_error",
-        ruleIds,
-        file: {
-          path: file.path,
-          chunkIndex: file.chunkIndex,
-          startLine: file.startLine,
-          endLine: file.endLine,
-        },
-        message,
-        savedPath,
-      });
-      return [];
+    const scoped = await runRuleBatchWithRetry(
+      ruleIds,
+      file,
+      existing,
+      { llmUnderstanding, familyMapping, candidateRuleIds }
+    );
+    const overlapGroupId = file.overlapGroupId ?? null;
+    if (overlapGroupId) {
+      const adjusted = scoped.map((finding) => ({
+        ...finding,
+        details: { ...toRecord(finding.details), overlapGroupId }
+      }));
+      await input.resume?.recordRuleResult(taskKey, adjusted);
+      return adjusted;
     }
+    await input.resume?.recordRuleResult(taskKey, scoped);
+    return scoped;
   });
 
   log("LLM scan (open scan)...");
@@ -1689,15 +1773,43 @@ function parseFamilyMappingRecord(
   };
 }
 
-function parseChunkUnderstanding(
+function parseChunkUnderstandingBatch(
   raw: string,
-  fallback: { chunkId: string; filePath: string }
-): LlmChunkUnderstanding {
+  fallbacks: Array<{ chunkId: string; filePath: string }>
+): LlmChunkUnderstanding[] {
   const parsed = extractJson(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!parsed || typeof parsed !== "object") {
     throw new Error("LLM returned invalid JSON for chunk understanding.");
   }
-  return parseChunkUnderstandingRecord(parsed as Record<string, unknown>, fallback);
+  const isArray = Array.isArray(parsed);
+  if (fallbacks.length > 1 && !isArray) {
+    throw new Error("Expected JSON array for batched chunk understanding.");
+  }
+  const records = isArray ? parsed : [parsed];
+  if (records.length !== fallbacks.length) {
+    throw new Error(`expected ${fallbacks.length} results, got ${records.length}`);
+  }
+  const results: LlmChunkUnderstanding[] = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error(`index ${i}: invalid record`);
+    }
+    const rawChunkId =
+      typeof (record as Record<string, unknown>).chunk_id === "string"
+        ? (record as Record<string, unknown>).chunk_id
+        : "";
+    if (!rawChunkId || !rawChunkId.trim()) {
+      throw new Error(`index ${i}: missing chunk_id`);
+    }
+    if (rawChunkId.trim() !== fallbacks[i].chunkId) {
+      throw new Error(`index ${i}: chunk_id mismatch`);
+    }
+    results.push(
+      parseChunkUnderstandingRecord(record as Record<string, unknown>, fallbacks[i])
+    );
+  }
+  return results;
 }
 
 function parseFamilyMapping(

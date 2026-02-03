@@ -6,6 +6,8 @@ export function buildChunkUnderstandingSystemPrompt(): string {
   return [
     "You are a security-oriented code analyst.",
     "Your task is to produce a concise, structured understanding of a single code chunk.",
+    "If the input is a JSON array of chunks, return a JSON array of results in the SAME order, one object per chunk_id.",
+    "If the input is a single JSON object, return a single JSON object.",
     "Do NOT diagnose vulnerabilities. Do NOT suggest fixes.",
     "If information is missing, respond with \"unknown\" or empty lists rather than guessing.",
     "",
