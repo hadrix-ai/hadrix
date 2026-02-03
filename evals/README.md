@@ -36,8 +36,7 @@ Optional flags:
     - `hadrix-evals-frontend-direct-db-write`
   - App-based suites (kept for parity runs):
     - `hadrix-evals-react-supabase`
-    - `hadrix-evals-nextjs`
-- Variant suites are tracked in `evals/EVAL_VARIANTS_CHECKLIST.md`. When variant fixtures/specs are present, they use a `-variants` suffix (for example `hadrix-evals-react-supabase-variants` or `hadrix-evals-nextjs-variants`). Point `--fixtures` or `HADRIX_EVALS_DIR` at the directory containing those repos when running them.
+- Variant suites are tracked in `evals/EVAL_VARIANTS_CHECKLIST.md`. When variant fixtures/specs are present, they use a `-variants` suffix (for example `hadrix-evals-react-supabase-variants`). Point `--fixtures` or `HADRIX_EVALS_DIR` at the directory containing those repos when running them.
 - `--fixtures <dir>` or positional `hadrix evals <dir>` to point at a different fixture directory.
 - `HADRIX_EVALS_DIR=<dir>` to override the default fixtures directory.
 - `--repo <path>` to run a single spec against a specific repo path (requires `--spec`).
