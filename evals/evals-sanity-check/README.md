@@ -1,10 +1,10 @@
 # Evals Sanity Check
 
-This is a tiny repo used for quick Hadrix sanity checks. It intentionally contains
-one vulnerability copied from `evals/hadrix-evals-nextjs`.
+This is a tiny repo used for quick Hadrix sanity checks. It includes a single
+evaluation case derived from a Next.js fixture suite.
 
-## Included vulnerability
-- **A03 Injection**: unsafe raw SQL execution helper (from `lib/unsafeSql.ts`).
+## Included case
+- Direct SQL execution helper.
 
 ## Files
-- `src/unsafeSql.ts` — intentionally unsafe SQL helper with a HADRIX_VULN marker.
+- `src/` — helper module used by the eval harness.

@@ -1,6 +1,5 @@
 import type { EvalRepoSpec } from "./types.js";
 import {
-  HADRIX_EVALS_NEXTJS_SPEC,
   HADRIX_EVALS_REACT_SUPABASE_SPEC,
   HADRIX_EVALS_SANITY_CHECK_SPEC,
 } from "./specs/hadrixEvals/index.js";
@@ -45,5 +44,4 @@ export const ALL_EVAL_SPECS: EvalRepoSpec[] = [
   HADRIX_EVALS_DOS_RESILIENCE_SPEC,
   HADRIX_EVALS_VULNERABLE_DEPS_SPEC,
   HADRIX_EVALS_REACT_SUPABASE_SPEC,
-  HADRIX_EVALS_NEXTJS_SPEC,
 ];
