@@ -84,6 +84,7 @@ const MAX_CALLEE_DEPTH = 2;
 const MAX_CALLEE_ANCHORS = 6;
 const MAX_CALLEE_RANGES_PER_ANCHOR = 6;
 const DEFAULT_MIN_CHUNK_SIZE = 50;
+const PUBLIC_ENV_SECRET_CONTEXT_LINES = 10;
 
 const HTTP_ROUTE_PATTERNS = [
   /\brouter\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/i,
@@ -111,6 +112,11 @@ const AUTHZ_PATTERNS = [
 ];
 const ADMIN_PATTERNS = [/\badmin\b/i, /\bisAdmin\b/i, /\badminOnly\b/i];
 const VALIDATION_PATTERNS = [/\bvalidate\b/i, /\bzod\b/i, /\byup\b/i, /\bschema\b/i];
+const PUBLIC_ENV_PREFIX_PATTERN =
+  /\b(?:NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|PUBLIC_|GATSBY_|EXPO_PUBLIC_)[A-Z0-9_]*\b/i;
+const PUBLIC_ENV_SECRET_MARKER_PATTERN =
+  /\b(?:SERVICE_ROLE|SECRET|PRIVATE_KEY|PASSWORD|MASTER|ADMIN|ROOT)\b/i;
+const ENV_ACCESS_PATTERN = /\b(?:process\.env|import\.meta\.env)\b/i;
 
 const INPUT_PATTERNS: Array<{ regex: RegExp; format: (match: RegExpMatchArray) => string }> = [
   {
@@ -469,6 +475,60 @@ function buildSyntheticAnchors(
 
   const synthetic: AnchorNode[] = [];
   for (const range of merged.slice(0, MAX_SAST_HINTS_PER_FILE)) {
+    const anchor: AnchorNode = {
+      filePath: file.filepath,
+      startLine: range.startLine,
+      endLine: range.endLine,
+      startColumn: 0,
+      endColumn: 0
+    };
+    const key = anchorKey(anchor);
+    if (anchorKeys.has(key)) continue;
+    anchorKeys.add(key);
+    synthetic.push(anchor);
+  }
+
+  return synthetic;
+}
+
+function buildPublicEnvSecretAnchors(file: LocalFile, anchors: AnchorNode[]): AnchorNode[] {
+  const anchorKeys = new Set(anchors.map(anchorKey));
+  const candidateRanges: ChunkRange[] = [];
+
+  for (let i = 0; i < file.lines.length; i += 1) {
+    const line = file.lines[i];
+    if (!ENV_ACCESS_PATTERN.test(line)) continue;
+    if (!PUBLIC_ENV_PREFIX_PATTERN.test(line)) continue;
+    if (!PUBLIC_ENV_SECRET_MARKER_PATTERN.test(line)) continue;
+    const startLine = Math.max(1, i + 1 - PUBLIC_ENV_SECRET_CONTEXT_LINES);
+    const endLine = Math.min(file.lines.length, i + 1 + PUBLIC_ENV_SECRET_CONTEXT_LINES);
+    candidateRanges.push({ startLine, endLine });
+  }
+
+  if (candidateRanges.length === 0) return [];
+
+  candidateRanges.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+
+  const merged: ChunkRange[] = [];
+  for (const range of candidateRanges) {
+    if (merged.length === 0) {
+      merged.push({ ...range });
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    if (range.startLine <= last.endLine + 1) {
+      last.endLine = Math.max(last.endLine, range.endLine);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+
+  const synthetic: AnchorNode[] = [];
+  for (const range of merged) {
+    const covered = anchors.some((anchor) =>
+      rangesOverlap(anchor.startLine, anchor.endLine, range.startLine, range.endLine)
+    );
+    if (covered) continue;
     const anchor: AnchorNode = {
       filePath: file.filepath,
       startLine: range.startLine,
@@ -1091,7 +1151,13 @@ export function securityChunkFile(options: SecurityChunkFileOptions): Chunk[] {
 
   const baseAnchors = options.anchors ?? [];
   const syntheticAnchors = buildSyntheticAnchors(file, baseAnchors, fileSastHints);
-  const anchors = [...baseAnchors, ...syntheticAnchors];
+  let anchors = [...baseAnchors, ...syntheticAnchors];
+  if (baseAnchors.length > 0) {
+    const publicEnvAnchors = buildPublicEnvSecretAnchors(file, anchors);
+    if (publicEnvAnchors.length > 0) {
+      anchors = [...anchors, ...publicEnvAnchors];
+    }
+  }
   const { anchorBySymbol, symbolByAnchorKey } = buildAnchorSymbolIndex(file, anchors);
 
   const chunkDrafts: ChunkDraft[] = [];

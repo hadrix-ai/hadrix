@@ -120,7 +120,8 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "Frontend secret exposure guidance:",
         "- Report when hardcoded secrets (API keys, service tokens, private keys) appear in client components or frontend bundles.",
         "- Evidence can be a literal secret string assigned in code and used in fetch headers or SDK initialization.",
-        "- Public/anon keys are acceptable only for low-privilege use; service role or secret keys in frontend are findings."
+        "- Public/anon keys are acceptable only for low-privilege use; service role or secret keys in frontend are findings.",
+        "- Treat public client env vars (NEXT_PUBLIC_/VITE_/REACT_APP_/NUXT_PUBLIC_) that reference service role/secret keys as exposed."
       ];
     case "plaintext_secrets":
       return [
