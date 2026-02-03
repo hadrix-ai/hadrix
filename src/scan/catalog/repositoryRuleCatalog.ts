@@ -528,7 +528,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description: "Public or anon API keys are used for privileged actions or bearer auth.",
     candidateTypes: ["anon_key_bearer"],
     requiredAnySignals: ["authn_present", "http_request_sink", "public_api_key_usage"],
-    optionalSignals: ["public_entrypoint"],
+    optionalSignals: ["public_entrypoint", "public_api_key_usage"],
     guidance: [
       "Report when a public/anon key is used as a bearer token or to initialize a privileged server client.",
       "Evidence can be: Authorization: Bearer with a public/anon key, or createClient(...) wired to an anon/public key for admin data access.",

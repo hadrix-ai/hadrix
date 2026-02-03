@@ -27,6 +27,7 @@ import {
 } from "./dedupeKey.js";
 import type { DedupeDebug } from "./debugLog.js";
 import { SIGNAL_IDS, type SignalId } from "../security/signals.js";
+import { detectPublicEnvSecretUsage } from "./signals/detectors/secretExposure.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -295,7 +296,8 @@ const PUBLIC_API_KEY_PATTERN =
 const SUPABASE_ANON_HELPER_PATTERN = /\bsupabaseAnon\b/i;
 const SUPABASE_CLIENT_USAGE_PATTERN =
   /\bcreateClient\s*\(|\bfrom\(\s*["'`][^"'`]+["'`]\s*\)/i;
-const AUTH_BEARER_HEADER_PATTERN = /\bauthorization\b[^;]*\bBearer\b/i;
+const AUTH_HEADER_PATTERN = /\bauthorization\b/i;
+const BEARER_TOKEN_PATTERN = /\bBearer\b/i;
 const STORAGE_BUCKET_PATTERN = /bucket/i;
 const PUBLIC_BUCKET_NAME_PATTERN = /["'`][^"'`]*public[^"'`]*["'`]/i;
 const PUBLIC_BUCKET_CONFIG_PATTERN = /\bpublic\s*:\s*true\b/i;
@@ -321,6 +323,23 @@ const ID_LIKE_PARAM_NAMES = new Set([
 ]);
 const USER_ID_PARAM_NAMES = new Set(["userid", "user_id", "email"]);
 const ORG_ID_PARAM_NAMES = new Set(["orgid", "org_id", "tenantid", "tenant_id"]);
+const SQL_PARAM_PATTERN = /\bsql\s*:\s*string\b/i;
+const SQL_EXEC_LOG_PATTERN = /\bExecuting SQL\b|\bRunning SQL\b/i;
+const SQL_LOG_WITH_VAR_PATTERN =
+  /\b(console\.(log|info|warn|error)|logger\.\w+)\([^)]*\bsql\b[^)]*\)/i;
+const SQL_EXEC_CALL_PATTERN =
+  /\b(queryObject|query|execute|raw|unsafeSql)\s*(?:<[^>]+>)?\s*\(\s*sql\b/i;
+const SQL_HELPER_NAME_PATTERN =
+  /\b(runQuery|queryExecutor|executeSql|unsafeSql|queryRunner|runSql)\b/i;
+const SUPABASE_OR_FILTER_PATTERN = /\.or\(\s*([A-Za-z0-9_]+)\s*\)/g;
+const QUERY_PARAM_ASSIGN_PATTERN =
+  /\bconst\s+([A-Za-z0-9_]+)\s*=\s*[^;\n]*?\b(searchParams\.get\(|req\.(?:query|params)\.)/g;
+const STRIPE_SECRET_PATTERN = /\bsk_(?:live|test)_[A-Za-z0-9]{8,}\b/;
+const SLACK_BOT_TOKEN_PATTERN = /\bxoxb-\d{8,}-\d{8,}-[A-Za-z0-9]{10,}\b/;
+const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}\b/;
+const JWT_TOKEN_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
+const SECRET_ASSIGN_PATTERN =
+  /\b([A-Z0-9_]*(SECRET|TOKEN|API_KEY|SERVICE_ROLE|PRIVATE_KEY)[A-Z0-9_]*)\b\s*[:=]\s*["'][^"'\\]{10,}["']/i;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -373,7 +392,7 @@ function detectPublicApiKeyUsage(content: string): boolean {
   const hasAnonKey = PUBLIC_API_KEY_PATTERN.test(content);
   const hasAnonHelper = SUPABASE_ANON_HELPER_PATTERN.test(content);
   const hasClientUsage = SUPABASE_CLIENT_USAGE_PATTERN.test(content);
-  const hasBearer = AUTH_BEARER_HEADER_PATTERN.test(content);
+  const hasBearer = AUTH_HEADER_PATTERN.test(content) && BEARER_TOKEN_PATTERN.test(content);
   if (hasAnonKey && (hasClientUsage || hasBearer)) return true;
   if (hasAnonHelper && hasClientUsage) return true;
   return false;
@@ -383,6 +402,41 @@ function detectPublicStorageBucket(content: string): boolean {
   if (!content) return false;
   if (PUBLIC_BUCKET_CONFIG_PATTERN.test(content)) return true;
   return STORAGE_BUCKET_PATTERN.test(content) && PUBLIC_BUCKET_NAME_PATTERN.test(content);
+}
+
+function detectRawSqlHelper(content: string): boolean {
+  if (!content || !SQL_PARAM_PATTERN.test(content)) return false;
+  if (SQL_EXEC_CALL_PATTERN.test(content)) return true;
+  if (SQL_EXEC_LOG_PATTERN.test(content)) return true;
+  if (SQL_LOG_WITH_VAR_PATTERN.test(content)) return true;
+  return SQL_HELPER_NAME_PATTERN.test(content);
+}
+
+function detectUnsafeQueryBuilder(content: string): boolean {
+  if (!content) return false;
+  SUPABASE_OR_FILTER_PATTERN.lastIndex = 0;
+  const orMatches = Array.from(content.matchAll(SUPABASE_OR_FILTER_PATTERN));
+  if (orMatches.length === 0) return false;
+  QUERY_PARAM_ASSIGN_PATTERN.lastIndex = 0;
+  const queryVars = new Set<string>();
+  for (const match of content.matchAll(QUERY_PARAM_ASSIGN_PATTERN)) {
+    if (match[1]) queryVars.add(match[1]);
+  }
+  if (queryVars.size === 0) return false;
+  for (const match of orMatches) {
+    const varName = match[1];
+    if (varName && queryVars.has(varName)) return true;
+  }
+  return false;
+}
+
+function detectHardcodedSecret(content: string): boolean {
+  if (!content) return false;
+  if (STRIPE_SECRET_PATTERN.test(content)) return true;
+  if (SLACK_BOT_TOKEN_PATTERN.test(content)) return true;
+  if (GOOGLE_API_KEY_PATTERN.test(content)) return true;
+  if (JWT_TOKEN_PATTERN.test(content)) return true;
+  return SECRET_ASSIGN_PATTERN.test(content);
 }
 
 function normalizeParamName(value: string): string {
@@ -489,6 +543,40 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       id: "public_storage_bucket",
       evidence: "storage bucket marked as public",
       confidence: 0.7
+    });
+  }
+  if (detectRawSqlHelper(content)) {
+    signals.push({
+      id: "raw_sql_sink",
+      evidence: "raw SQL execution helper accepts SQL string",
+      confidence: 0.78
+    });
+  }
+  if (detectUnsafeQueryBuilder(content)) {
+    signals.push({
+      id: "orm_query_sink",
+      evidence: "query builder uses .or() with request-derived filter",
+      confidence: 0.76
+    });
+    signals.push({
+      id: "untrusted_input_present",
+      evidence: "filter derived from request params used in query builder",
+      confidence: 0.72
+    });
+  }
+  if (detectHardcodedSecret(content)) {
+    signals.push({
+      id: "secrets_access",
+      evidence: "hardcoded secret token detected",
+      confidence: 0.8
+    });
+  }
+  const publicEnvSecret = detectPublicEnvSecretUsage(content);
+  if (publicEnvSecret && !signals.some((signal) => signal.id === "secrets_access")) {
+    signals.push({
+      id: "secrets_access",
+      evidence: publicEnvSecret.evidence,
+      confidence: 0.82
     });
   }
   const idSignals = detectClientSuppliedIdentifiers(content);

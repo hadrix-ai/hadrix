@@ -7,8 +7,8 @@
   },
   {
     "category": "A03_Injection",
-    "file": "cases/nextjs-baseline/lib/runQuery.ts",
-    "description": "Raw SQL execution helper used by Next.js route handlers",
+    "file": "cases/nextjs-baseline/lib/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Next.js route handlers",
     "severity": "high"
   },
   {
@@ -37,8 +37,8 @@
   },
   {
     "category": "A03_Injection",
-    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/runQuery.ts",
-    "description": "Raw SQL execution helper used by Edge Functions (no parameterization)",
+    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Edge Functions (no parameterization)",
     "severity": "high"
   },
   {
@@ -61,8 +61,8 @@
   },
   {
     "category": "A03_Injection",
-    "file": "cases/nodevulnerable-baseline/server/db/runQuery.ts",
-    "description": "Raw SQL execution helper used by Node baseline routes (no parameterization)",
+    "file": "cases/nodevulnerable-baseline/server/db/unsafeSql.ts",
+    "description": "Unsafe raw SQL execution helper used by Node baseline routes (no parameterization)",
     "severity": "high"
   }
 ]

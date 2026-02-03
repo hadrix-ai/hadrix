@@ -115,6 +115,19 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Prefer private buckets with signed URLs or authenticated access checks.",
         "- Evidence can be: bucket config with public=true or bucket names like \"public-*\" used for app data."
       ];
+    case "frontend_secret_exposure":
+      return [
+        "Frontend secret exposure guidance:",
+        "- Report when hardcoded secrets (API keys, service tokens, private keys) appear in client components or frontend bundles.",
+        "- Evidence can be a literal secret string assigned in code and used in fetch headers or SDK initialization.",
+        "- Public/anon keys are acceptable only for low-privilege use; service role or secret keys in frontend are findings."
+      ];
+    case "plaintext_secrets":
+      return [
+        "Plaintext secrets guidance:",
+        "- Report when config files or code embed secret values directly (API keys, service role keys, tokens).",
+        "- Evidence can be: JSON/ENV entries with secret-looking values."
+      ];
     case "permissive_cors":
       return [
         "CORS guidance:",
