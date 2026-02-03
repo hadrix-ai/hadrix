@@ -296,7 +296,7 @@ const SUPABASE_ANON_HELPER_PATTERN = /\bsupabaseAnon\b/i;
 const SUPABASE_CLIENT_USAGE_PATTERN =
   /\bcreateClient\s*\(|\bfrom\(\s*["'`][^"'`]+["'`]\s*\)/i;
 const AUTH_BEARER_HEADER_PATTERN = /\bauthorization\b[^;]*\bBearer\b/i;
-const STORAGE_BUCKET_PATTERN = /\bbucket\b/i;
+const STORAGE_BUCKET_PATTERN = /bucket/i;
 const PUBLIC_BUCKET_NAME_PATTERN = /["'`][^"'`]*public[^"'`]*["'`]/i;
 const PUBLIC_BUCKET_CONFIG_PATTERN = /\bpublic\s*:\s*true\b/i;
 const REQUEST_PARAM_CAPTURE_PATTERN = /\breq\.(?:params|query)\.([A-Za-z0-9_]+)\b/g;
