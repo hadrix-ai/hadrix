@@ -1,3 +1,7 @@
+import { SIGNAL_IDS } from "../../security/signals.js";
+
+const SIGNAL_ID_LIST = SIGNAL_IDS.join(", ");
+
 export function buildChunkUnderstandingSystemPrompt(): string {
   return [
     "You are a security-oriented code analyst.",
@@ -26,6 +30,8 @@ export function buildChunkUnderstandingSystemPrompt(): string {
     "  \"threat_surface_hints\": [{\"threat\": string, \"rationale\": string}],",
     "  \"confidence\": number,",
     "  \"static_signals\": string[] (optional),",
+    "  \"signals\": [{\"id\": string, \"evidence\": string, \"confidence\": number}],",
+    "  \"identifiers\": [{\"name\": string, \"kind\": \"org_id\"|\"user_id\"|\"account_id\"|\"project_id\"|\"tenant_id\"|\"resource_id\"|\"unknown\", \"source\": string, \"trust\": \"untrusted\"|\"trusted\"|\"unknown\"}],",
     "  \"notes\": string (optional)",
     "}",
     "",
@@ -38,6 +44,11 @@ export function buildChunkUnderstandingSystemPrompt(): string {
     "- exposure: \"public\" if it appears reachable from external input (HTTP route, public handler).",
     "- related_entities: functions/modules referenced OR likely callers if visible in code.",
     "- threat_surface_hints: cautious hints based on observable input->sink patterns; do not claim vulnerabilities.",
+    `- signals.id must be one of: ${SIGNAL_ID_LIST}.`,
+    "- signals.evidence: short phrase referencing concrete code behavior (no line numbers).",
+    "- signals.confidence: 0.0 to 1.0.",
+    "- identifiers.kind must be one of: org_id, user_id, account_id, project_id, tenant_id, resource_id, unknown.",
+    "- identifiers.trust must be one of: untrusted, trusted, unknown.",
     "- confidence: 0.0 to 1.0."
   ].join("\n");
 }
@@ -154,6 +165,8 @@ export function buildUnderstandingAndFamilyMappingSystemPrompt(): string {
     "    \"threat_surface_hints\": [{\"threat\": string, \"rationale\": string}],",
     "    \"confidence\": number,",
     "    \"static_signals\": string[] (optional),",
+    "    \"signals\": [{\"id\": string, \"evidence\": string, \"confidence\": number}],",
+    "    \"identifiers\": [{\"name\": string, \"kind\": \"org_id\"|\"user_id\"|\"account_id\"|\"project_id\"|\"tenant_id\"|\"resource_id\"|\"unknown\", \"source\": string, \"trust\": \"untrusted\"|\"trusted\"|\"unknown\"}],",
     "    \"notes\": string (optional)",
     "  },",
     "  \"family_mapping\": {",
@@ -164,6 +177,13 @@ export function buildUnderstandingAndFamilyMappingSystemPrompt(): string {
     "    \"notes\": string",
     "  }",
     "}",
+    "",
+    "Guidance:",
+    `- signals.id must be one of: ${SIGNAL_ID_LIST}.`,
+    "- signals.evidence: short phrase referencing concrete code behavior (no line numbers).",
+    "- signals.confidence: 0.0 to 1.0.",
+    "- identifiers.kind must be one of: org_id, user_id, account_id, project_id, tenant_id, resource_id, unknown.",
+    "- identifiers.trust must be one of: untrusted, trusted, unknown.",
     "",
     "Rules:",
     "- Choose 1-3 families max.",

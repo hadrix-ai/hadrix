@@ -26,6 +26,7 @@ import {
   extractFindingIdentityType
 } from "./dedupeKey.js";
 import type { DedupeDebug } from "./debugLog.js";
+import { SIGNAL_IDS, type SignalId } from "../security/signals.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -61,11 +62,26 @@ type LlmFamilyCandidate = {
   rationale?: string;
 };
 
+type LlmChunkUnderstandingSignal = {
+  id: SignalId;
+  evidence: string;
+  confidence: number;
+};
+
+type LlmChunkUnderstandingIdentifier = {
+  name: string;
+  kind: "org_id" | "user_id" | "account_id" | "project_id" | "tenant_id" | "resource_id" | "unknown";
+  source: string;
+  trust: "untrusted" | "trusted" | "unknown";
+};
+
 type LlmChunkUnderstanding = {
   chunk_id: string;
   file_path: string;
   confidence: number;
   summary?: string;
+  signals: LlmChunkUnderstandingSignal[];
+  identifiers: LlmChunkUnderstandingIdentifier[];
   [key: string]: unknown;
 };
 
@@ -84,7 +100,7 @@ type LlmFileInsight = {
   familyMapping: LlmFamilyMapping | null;
   candidateRuleIds: string[];
   selectionFamilies: string[];
-  selectionStrategy: "family_mapping" | "role_fallback" | "baseline_fallback";
+  selectionStrategy: "signals_primary" | "role_fallback" | "baseline_fallback";
 };
 
 type RuleCatalogEntry = {
@@ -117,9 +133,8 @@ const DEFAULT_MAX_PRIOR_FINDINGS_PER_REPO = 40;
 const DEFAULT_MAPPING_BATCH_SIZE = 3;
 const MAX_MAPPING_BATCH_SIZE = 4;
 
-const UNDERSTANDING_CONFIDENCE_FLOOR = 0.45;
-const FAMILY_CONFIDENCE_FLOOR = 0.35;
 const MAX_RULES_PER_CHUNK = 10;
+const MIN_RULES_PER_CHUNK = 3;
 const RULE_BATCH_SIZE = 5;
 
 const OPEN_SCAN_FAMILIES = new Set([
@@ -143,6 +158,22 @@ const BASELINE_RULE_IDS = [
   "missing_rate_limiting",
   "permissive_cors"
 ];
+
+const SIGNAL_ID_SET = new Set<SignalId>(SIGNAL_IDS);
+const IDENTIFIER_KINDS = new Set<LlmChunkUnderstandingIdentifier["kind"]>([
+  "org_id",
+  "user_id",
+  "account_id",
+  "project_id",
+  "tenant_id",
+  "resource_id",
+  "unknown"
+]);
+const IDENTIFIER_TRUST_LEVELS = new Set<LlmChunkUnderstandingIdentifier["trust"]>([
+  "untrusted",
+  "trusted",
+  "unknown"
+]);
 
 const ROLE_FAMILY_FALLBACKS: Record<string, string[]> = {
   api_handler: ["authentication", "access_control", "injection", "logic_issues"],
@@ -524,6 +555,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       fallbackRuleIds: BASELINE_RULE_IDS
     });
     const candidateRuleIds = selection.ruleIds;
+    const signalIds = extractSignalIds(understanding);
     if (input.debug) {
       logDebug(input.debug, {
         event: "llm_threat_mapping",
@@ -535,6 +567,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         },
         understandingConfidence: understanding?.confidence ?? 0,
         candidateRuleIds,
+        signals: signalIds,
+        signalCount: signalIds.length,
+        selectionFamilies: selection.families,
         families: familyMapping?.families ?? [],
         suggestedRuleIds: familyMapping?.suggested_rule_ids ?? []
       });
@@ -543,6 +578,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       [
         "LLM map",
         `${file.path}:${file.startLine}-${file.endLine}`,
+        `signals=${signalIds.length}`,
         `families=${selection.families.length ? selection.families.join(",") : "none"}`,
         `familyCandidates=${familyMapping?.families?.length ?? 0}`,
         `suggestedRules=${familyMapping?.suggested_rule_ids?.length ?? 0}`,
@@ -873,7 +909,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     async (task) => {
       const { fileInsight, existingFindings: existing, taskKey } = task;
       const file = fileInsight.file;
-      const fallbackFamily = pickPrimaryFamily(fileInsight.familyMapping);
+      const fallbackFamily =
+        pickPrimaryFamilyFromCategories(fileInsight.selectionFamilies) ??
+        pickPrimaryFamilyFromMapping(fileInsight.familyMapping);
 
       const filePayload = {
         path: file.path,
@@ -1476,7 +1514,117 @@ function coerceStringArray(value: unknown): string[] {
   return next;
 }
 
-function parseChunkUnderstandingRecord(
+function parseSignals(value: unknown): LlmChunkUnderstandingSignal[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("signals must be an array.");
+  }
+  const results: LlmChunkUnderstandingSignal[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("signals entries must be objects.");
+    }
+    const record = entry as Record<string, unknown>;
+    const rawId = typeof record.id === "string" ? record.id.trim() : "";
+    if (!rawId || !SIGNAL_ID_SET.has(rawId as SignalId)) {
+      throw new Error(`Invalid signal id: ${rawId || "unknown"}.`);
+    }
+    const evidence = typeof record.evidence === "string" ? record.evidence.trim() : "";
+    if (!evidence) {
+      throw new Error(`Signal evidence missing for ${rawId}.`);
+    }
+    results.push({
+      id: rawId as SignalId,
+      evidence,
+      confidence: normalizeConfidence(record.confidence)
+    });
+  }
+  return results;
+}
+
+function parseIdentifiers(value: unknown): LlmChunkUnderstandingIdentifier[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("identifiers must be an array.");
+  }
+  const results: LlmChunkUnderstandingIdentifier[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("identifiers entries must be objects.");
+    }
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!name) {
+      throw new Error("identifiers.name must be a non-empty string.");
+    }
+    const kind = typeof record.kind === "string" ? record.kind.trim().toLowerCase() : "";
+    if (!IDENTIFIER_KINDS.has(kind as LlmChunkUnderstandingIdentifier["kind"])) {
+      throw new Error(`Invalid identifier kind: ${kind || "unknown"}.`);
+    }
+    const source = typeof record.source === "string" ? record.source.trim() : "";
+    if (!source) {
+      throw new Error(`identifiers.source missing for ${name}.`);
+    }
+    const trust = typeof record.trust === "string" ? record.trust.trim().toLowerCase() : "";
+    if (!IDENTIFIER_TRUST_LEVELS.has(trust as LlmChunkUnderstandingIdentifier["trust"])) {
+      throw new Error(`Invalid identifier trust: ${trust || "unknown"}.`);
+    }
+    results.push({
+      name,
+      kind: kind as LlmChunkUnderstandingIdentifier["kind"],
+      source,
+      trust: trust as LlmChunkUnderstandingIdentifier["trust"]
+    });
+  }
+  return results;
+}
+
+function applyDerivedSignals(understanding: LlmChunkUnderstanding): void {
+  const signals = understanding.signals ?? [];
+  const seen = new Set<SignalId>(signals.map((signal) => signal.id));
+  const addSignal = (id: SignalId, evidence: string, confidence = 0.8) => {
+    if (seen.has(id)) return;
+    signals.push({ id, evidence, confidence });
+    seen.add(id);
+  };
+
+  const exposure =
+    typeof understanding.exposure === "string" ? understanding.exposure.trim().toLowerCase() : "";
+  if (exposure === "public") {
+    addSignal("public_entrypoint", "exposure marked public", 0.85);
+  }
+
+  const role = typeof understanding.role === "string" ? understanding.role.trim().toLowerCase() : "";
+  if (role === "api_handler") {
+    addSignal("api_handler", "role indicates API handler", 0.8);
+  }
+
+  const dataSinks = Array.isArray(understanding.data_sinks) ? understanding.data_sinks : [];
+  const hasExecSink = dataSinks.some((sink) => {
+    if (!sink || typeof sink !== "object" || Array.isArray(sink)) return false;
+    const sinkRecord = sink as Record<string, unknown>;
+    const type = typeof sinkRecord.type === "string" ? sinkRecord.type.trim().toLowerCase() : "";
+    return type === "exec";
+  });
+  if (hasExecSink) {
+    addSignal("exec_sink", "data_sinks includes exec", 0.9);
+  }
+
+  const dataInputs = Array.isArray(understanding.data_inputs) ? understanding.data_inputs : [];
+  const hasUntrustedInput = dataInputs.some((input) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+    const inputRecord = input as Record<string, unknown>;
+    const trust = typeof inputRecord.trust === "string" ? inputRecord.trust.trim().toLowerCase() : "";
+    return trust === "untrusted";
+  });
+  if (hasUntrustedInput) {
+    addSignal("untrusted_input_present", "data_inputs include untrusted sources", 0.85);
+  }
+
+  understanding.signals = signals;
+}
+
+export function parseChunkUnderstandingRecord(
   record: Record<string, unknown>,
   fallback: { chunkId: string; filePath: string }
 ): LlmChunkUnderstanding {
@@ -1489,12 +1637,18 @@ function parseChunkUnderstandingRecord(
       ? record.file_path.trim()
       : fallback.filePath;
   const confidence = normalizeConfidence(record.confidence);
-  return {
+  const signals = parseSignals(record.signals);
+  const identifiers = parseIdentifiers(record.identifiers);
+  const understanding: LlmChunkUnderstanding = {
     ...record,
     chunk_id: chunkId,
     file_path: filePath,
-    confidence
+    confidence,
+    signals,
+    identifiers
   };
+  applyDerivedSignals(understanding);
+  return understanding;
 }
 
 function parseFamilyMappingRecord(
@@ -1637,7 +1791,98 @@ function parseUnderstandingAndFamilyMappingBatch(
   return { results, errors };
 }
 
-function resolveCandidateRuleIds(params: {
+function extractSignalIds(understanding: LlmChunkUnderstanding | null): SignalId[] {
+  if (!understanding?.signals?.length) return [];
+  const ids: SignalId[] = [];
+  for (const signal of understanding.signals) {
+    if (!signal || typeof signal !== "object") continue;
+    const id = typeof signal.id === "string" ? signal.id.trim() : "";
+    if (!id || !SIGNAL_ID_SET.has(id as SignalId)) continue;
+    ids.push(id as SignalId);
+  }
+  return ids;
+}
+
+function countMatchedSignals(list: SignalId[] | undefined, signalSet: Set<SignalId>): number {
+  if (!list || list.length === 0) return 0;
+  let count = 0;
+  for (const signal of list) {
+    if (signalSet.has(signal)) count += 1;
+  }
+  return count;
+}
+
+function isRuleEligibleBySignals(rule: RuleScanDefinition, signalSet: Set<SignalId>): boolean {
+  const requiredAll = rule.requiredAllSignals ?? [];
+  if (requiredAll.length > 0) {
+    for (const signal of requiredAll) {
+      if (!signalSet.has(signal)) return false;
+    }
+  }
+  const requiredAny = rule.requiredAnySignals ?? [];
+  if (requiredAny.length > 0 && countMatchedSignals(requiredAny, signalSet) === 0) {
+    return false;
+  }
+  return true;
+}
+
+function scoreRuleBySignals(
+  rule: RuleScanDefinition,
+  signalSet: Set<SignalId>,
+  understanding: LlmChunkUnderstanding
+): number {
+  const requiredAll = rule.requiredAllSignals ?? [];
+  const requiredAny = rule.requiredAnySignals ?? [];
+  const optional = rule.optionalSignals ?? [];
+  let score = 0;
+
+  if (requiredAll.length > 0) {
+    score += 3 * countMatchedSignals(requiredAll, signalSet);
+  }
+
+  if (requiredAny.length > 0 && countMatchedSignals(requiredAny, signalSet) > 0) {
+    score += 2;
+  }
+
+  score += countMatchedSignals(optional, signalSet);
+
+  const exposure = typeof understanding.exposure === "string"
+    ? understanding.exposure.trim().toLowerCase()
+    : "";
+  if (exposure === "public") {
+    score += 0.25;
+  }
+
+  const role = typeof understanding.role === "string"
+    ? understanding.role.trim().toLowerCase()
+    : "";
+  if (role === "api_handler") {
+    score += 0.15;
+  } else if (role === "job_worker") {
+    score += 0.1;
+  }
+
+  return score;
+}
+
+function deriveSelectionFamilies(
+  ruleIds: string[],
+  rulesById: Map<string, RuleScanDefinition>
+): string[] {
+  const families: string[] = [];
+  const seen = new Set<string>();
+  for (const ruleId of ruleIds) {
+    const rule = rulesById.get(ruleId);
+    if (!rule) continue;
+    const family = normalizeFamilyToken(rule.category);
+    if (!family || seen.has(family)) continue;
+    seen.add(family);
+    families.push(family);
+  }
+  return families;
+}
+
+export function resolveCandidateRuleIds(params: {
   understanding: LlmChunkUnderstanding | null;
   familyMapping: LlmFamilyMapping | null;
   rulesById: Map<string, RuleScanDefinition>;
@@ -1645,7 +1890,7 @@ function resolveCandidateRuleIds(params: {
 }): {
   ruleIds: string[];
   families: string[];
-  strategy: "family_mapping" | "role_fallback" | "baseline_fallback";
+  strategy: "signals_primary" | "role_fallback" | "baseline_fallback";
 } {
   const { understanding, familyMapping, rulesById, fallbackRuleIds } = params;
   const filteredFallback = fallbackRuleIds.filter((ruleId) => rulesById.has(ruleId));
@@ -1656,66 +1901,76 @@ function resolveCandidateRuleIds(params: {
       strategy: "baseline_fallback"
     };
   }
-  const understandingConfidence = normalizeConfidence(understanding.confidence);
-  const mappingFamilies = (familyMapping?.families ?? [])
-    .map((entry) => ({
-      family: typeof entry.family === "string" ? entry.family.trim().toLowerCase() : "",
-      confidence: normalizeConfidence(entry.confidence)
-    }))
-    .filter((entry) => entry.family);
-  mappingFamilies.sort((a, b) => b.confidence - a.confidence);
-  const maxCandidateConfidence = mappingFamilies[0]?.confidence ?? 0;
 
-  let families: string[] = [];
-  let strategy: "family_mapping" | "role_fallback" | "baseline_fallback" = "role_fallback";
-  if (understandingConfidence >= UNDERSTANDING_CONFIDENCE_FLOOR &&
-      mappingFamilies.length > 0 &&
-      maxCandidateConfidence >= FAMILY_CONFIDENCE_FLOOR) {
-    families = mappingFamilies.map((entry) => entry.family);
-    strategy = "family_mapping";
-  } else {
+  const signalIds = extractSignalIds(understanding);
+  const signalSet = new Set<SignalId>(signalIds);
+  const scoredRules: Array<{ id: string; score: number }> = [];
+  if (signalSet.size > 0) {
+    for (const rule of rulesById.values()) {
+      if (!isRuleEligibleBySignals(rule, signalSet)) continue;
+      const score = scoreRuleBySignals(rule, signalSet, understanding);
+      scoredRules.push({ id: rule.id, score });
+    }
+  }
+  scoredRules.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.id.localeCompare(b.id);
+  });
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of scoredRules) {
+    if (selected.length >= MAX_RULES_PER_CHUNK) break;
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    selected.push(entry.id);
+  }
+
+  const suggestedRuleIds = (familyMapping?.suggested_rule_ids ?? []).filter(Boolean);
+  for (const ruleId of suggestedRuleIds) {
+    if (selected.length >= MAX_RULES_PER_CHUNK) break;
+    if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
+    seen.add(ruleId);
+    selected.push(ruleId);
+  }
+
+  let strategy: "signals_primary" | "role_fallback" | "baseline_fallback" = "signals_primary";
+
+  if (signalSet.size === 0 || selected.length < MIN_RULES_PER_CHUNK) {
     const role =
       typeof understanding.role === "string"
         ? understanding.role.trim()
         : "unknown";
-    families = ROLE_FAMILY_FALLBACKS[role] ?? ROLE_FAMILY_FALLBACKS.unknown;
+    const fallbackFamilies = ROLE_FAMILY_FALLBACKS[role] ?? ROLE_FAMILY_FALLBACKS.unknown;
     strategy = "role_fallback";
-  }
 
-  const selected: string[] = [];
-  const seen = new Set<string>();
-
-  // LLM-driven narrowing: if the mapping suggests specific rule ids, prioritize them.
-  const suggestedRuleIds = (familyMapping?.suggested_rule_ids ?? []).filter(Boolean);
-  for (const ruleId of suggestedRuleIds) {
-    if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
-    seen.add(ruleId);
-    selected.push(ruleId);
-    if (selected.length >= MAX_RULES_PER_CHUNK) {
-      return { ruleIds: selected, families, strategy };
+    for (const family of fallbackFamilies) {
+      const ruleIds = FAMILY_RULES[family] ?? [];
+      for (const ruleId of ruleIds) {
+        if (selected.length >= MAX_RULES_PER_CHUNK) break;
+        if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
+        seen.add(ruleId);
+        selected.push(ruleId);
+      }
+      if (selected.length >= MAX_RULES_PER_CHUNK) break;
     }
-  }
 
-  for (const family of families) {
-    const ruleIds = FAMILY_RULES[family] ?? [];
-    for (const ruleId of ruleIds) {
-      if (!rulesById.has(ruleId) || seen.has(ruleId)) continue;
-      seen.add(ruleId);
-      selected.push(ruleId);
-      if (selected.length >= MAX_RULES_PER_CHUNK) {
-        return { ruleIds: selected, families, strategy };
+    if (selected.length === 0) {
+      strategy = "baseline_fallback";
+      for (const ruleId of filteredFallback) {
+        if (selected.length >= MAX_RULES_PER_CHUNK) break;
+        if (seen.has(ruleId)) continue;
+        seen.add(ruleId);
+        selected.push(ruleId);
       }
     }
   }
 
-  if (selected.length === 0) {
-    return {
-      ruleIds: filteredFallback.slice(0, MAX_RULES_PER_CHUNK),
-      families,
-      strategy: "baseline_fallback"
-    };
-  }
-  return { ruleIds: selected, families, strategy };
+  return {
+    ruleIds: selected,
+    families: deriveSelectionFamilies(selected, rulesById),
+    strategy
+  };
 }
 
 function normalizeFamilyToken(value: unknown): string {
@@ -1723,7 +1978,7 @@ function normalizeFamilyToken(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
-function pickPrimaryFamily(mapping: LlmFamilyMapping | null): string | null {
+function pickPrimaryFamilyFromMapping(mapping: LlmFamilyMapping | null): string | null {
   if (!mapping?.families?.length) return null;
   let best = mapping.families[0];
   for (const entry of mapping.families) {
@@ -1733,6 +1988,16 @@ function pickPrimaryFamily(mapping: LlmFamilyMapping | null): string | null {
   }
   const family = normalizeFamilyToken(best.family);
   return OPEN_SCAN_FAMILIES.has(family) ? family : null;
+}
+
+function pickPrimaryFamilyFromCategories(families: string[]): string | null {
+  for (const family of families) {
+    const normalized = normalizeFamilyToken(family);
+    if (normalized && OPEN_SCAN_FAMILIES.has(normalized)) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function resolveOpenScanFamily(
