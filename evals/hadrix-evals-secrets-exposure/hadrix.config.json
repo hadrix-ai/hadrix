@@ -1,0 +1,9 @@
+{
+  "appName": "hadrix-evals-secrets-exposure",
+  "mode": "vulnerable",
+  "vulnerabilities": {
+    "A02_security_misconfiguration": {
+      "frontend_secret_exposure": true
+    }
+  }
+}

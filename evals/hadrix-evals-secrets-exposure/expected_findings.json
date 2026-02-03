@@ -1,0 +1,26 @@
+[
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-baseline/components/BillingSecrets.tsx",
+    "description": "Stripe secret key is hardcoded in a client component and sent from the browser",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/nextjs-fakeout-1/components/AdminDashboard.tsx",
+    "description": "Supabase service role key is sourced from NEXT_PUBLIC env and used in client-side code",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/supabase-baseline/frontend/components/AlertsBridge.tsx",
+    "description": "Slack bot token is hardcoded in a client component and used to call the Slack API",
+    "severity": "high"
+  },
+  {
+    "category": "A02_Security_Misconfiguration",
+    "file": "cases/brokencrystals-baseline/client/MapsPreview.tsx",
+    "description": "Google Maps API key is embedded directly in frontend code",
+    "severity": "high"
+  }
+]
