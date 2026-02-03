@@ -167,8 +167,10 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
     extraGuidance.push(
       "Admin MFA guidance:",
       "- Treat paths containing /admin (or symbols named admin*) as privileged endpoints.",
-      "- If the handler uses only basic session/JWT auth and there is no step-up check (MFA/OTP/WebAuthn/reauth) in the handler or referenced middleware, report missing_admin_mfa.",
-      "- Evidence can be: auth context read + admin data access/mutation without any MFA check."
+      "- Role/permission checks (e.g., auth.role === \"admin\") are NOT MFA; they satisfy authz only.",
+      "- If the handler uses only basic session/JWT auth and there is no step-up check (MFA/OTP/WebAuthn/reauth or mfa-level claim) in the handler or referenced middleware, report missing_admin_mfa.",
+      "- Do not assume global login MFA unless there is explicit evidence in code (e.g., amr/acr/mfa claim checks or step-up middleware).",
+      "- Evidence can be: auth context read + admin data access (including read-only lists) or mutation without any MFA check."
     );
   }
   if (rule.id === "missing_authentication") {

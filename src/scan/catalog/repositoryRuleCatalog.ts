@@ -248,9 +248,10 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     optionalSignals: ["authz_missing_or_unknown"],
     guidance: [
       "Report when an admin/privileged endpoint performs sensitive actions based only on a basic session/JWT without step-up auth (2FA/OTP/WebAuthn) and there is no verified global enforcement.",
-      "Accept equivalent step-up controls (re-auth prompt + OTP, WebAuthn, device challenge) when clearly present.",
-      "Do not report on non-admin endpoints; focus on destructive actions or admin data access.",
-      "Treat paths containing /admin (or symbols named admin*) as privileged endpoints." 
+      "Role/permission checks (e.g., auth.role === \"admin\") are NOT MFA; they satisfy authz only.",
+      "Accept equivalent step-up controls (re-auth prompt + OTP, WebAuthn, device challenge, or explicit amr/acr/mfa claim checks) when clearly present.",
+      "Do not report on non-admin endpoints; focus on destructive actions or admin data access (including read-only user lists).",
+      "Treat paths containing /admin (or symbols named admin*) as privileged endpoints."
     ]
   },
   {
