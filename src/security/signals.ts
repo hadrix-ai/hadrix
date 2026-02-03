@@ -33,7 +33,10 @@ export const SIGNAL_IDS = [
   "unvalidated_input",
   "weak_validation_or_unknown",
   "rate_limit_missing_or_unknown",
-  "cors_permissive_or_unknown"
+  "cors_permissive_or_unknown",
+  "login_attempt_present",
+  "bearer_token_optional",
+  "auth_header_present"
 ] as const;
 
 export type SignalId = typeof SIGNAL_IDS[number];
@@ -143,5 +146,14 @@ export const SIGNAL_DEFINITIONS: Record<SignalId, { description: string }> = {
   },
   cors_permissive_or_unknown: {
     description: "CORS configuration is permissive or unclear."
+  },
+  login_attempt_present: {
+    description: "Password-based login or sign-in attempt is present."
+  },
+  bearer_token_optional: {
+    description: "Bearer token is constructed from an optional or empty value."
+  },
+  auth_header_present: {
+    description: "Authorization header is read to establish authentication context."
   }
 };

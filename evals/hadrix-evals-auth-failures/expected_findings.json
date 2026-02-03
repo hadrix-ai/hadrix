@@ -19,12 +19,6 @@
   },
   {
     "category": "A06_Authentication_Failures",
-    "file": "cases/nextjs-baseline/app/api/admin/users/route.ts",
-    "description": "Admin endpoints proceed without an additional step-up factor",
-    "severity": "high"
-  },
-  {
-    "category": "A06_Authentication_Failures",
     "file": "cases/nextjs-fakeout-1/app/api/auth/session/route.ts",
     "description": "Session tokens are decoded without checking signatures; unsigned tokens are accepted",
     "severity": "high"

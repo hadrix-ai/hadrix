@@ -264,6 +264,92 @@ const IDENTIFIER_TRUST_LEVELS = new Set<LlmChunkUnderstandingIdentifier["trust"]
   "unknown"
 ]);
 
+const PASSWORD_INPUT_PATTERN =
+  /type\s*=\s*["']password["']|name\s*=\s*["']password["']|formdata\.get\(\s*["']password["']\s*\)|\breq\.(?:body|query|params)\.password\b|\bpassword\b\s*[:=]/i;
+const LOGIN_ACTION_PATTERN =
+  /\b(signinwithpassword|sign_in_with_password|signin|sign-in|log\s*in|loginaction|authenticate|auth\.signin|signsession|createsession|setsession)\b|cookies\(\)\.set\(\s*["']session["']/i;
+const INLINE_OPTIONAL_BEARER_PATTERN =
+  /Bearer\s*\$\{[^}]*?(?:\?\?|\|\|)\s*["']["'][^}]*\}/i;
+const TOKEN_DEFAULT_PATTERN =
+  /\b(?:const|let|var)\s+(\w+)\s*=\s*[^;\n]*?(?:\?\?|\|\|)\s*["']["']/g;
+const AUTH_HEADER_READ_PATTERN =
+  /\bheaders\.get\(\s*["']authorization["']\s*\)/i;
+const BEARER_MARKER_PATTERN = /\bBearer\s+/i;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function detectLoginAttempt(content: string): boolean {
+  if (!content) return false;
+  const hasPasswordInput = PASSWORD_INPUT_PATTERN.test(content);
+  if (!hasPasswordInput) return false;
+  return LOGIN_ACTION_PATTERN.test(content);
+}
+
+function detectOptionalBearerToken(content: string): boolean {
+  if (!content || !/Bearer\b/i.test(content)) return false;
+  if (INLINE_OPTIONAL_BEARER_PATTERN.test(content)) return true;
+  const tokenDefaults = new Set<string>();
+  for (const match of content.matchAll(TOKEN_DEFAULT_PATTERN)) {
+    if (match[1]) tokenDefaults.add(match[1]);
+  }
+  if (tokenDefaults.size === 0) return false;
+  for (const tokenVar of tokenDefaults) {
+    const escaped = escapeRegExp(tokenVar);
+    const templatePattern = new RegExp(`Bearer\\s*\\$\\{\\s*${escaped}\\s*\\}`, "i");
+    const concatPattern = new RegExp(`Bearer\\s*["']\\s*\\+\\s*${escaped}\\b`, "i");
+    if (templatePattern.test(content) || concatPattern.test(content)) return true;
+  }
+  return false;
+}
+
+function detectAuthHeaderPresence(content: string): boolean {
+  if (!content) return false;
+  return AUTH_HEADER_READ_PATTERN.test(content) && BEARER_MARKER_PATTERN.test(content);
+}
+
+function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstandingSignal[] {
+  const content = typeof file.content === "string" ? file.content : "";
+  if (!content) return [];
+  const signals: LlmChunkUnderstandingSignal[] = [];
+  if (detectLoginAttempt(content)) {
+    signals.push({
+      id: "login_attempt_present",
+      evidence: "password login attempt detected",
+      confidence: 0.72
+    });
+  }
+  if (detectOptionalBearerToken(content)) {
+    signals.push({
+      id: "bearer_token_optional",
+      evidence: "bearer token defaults to empty or optional value",
+      confidence: 0.82
+    });
+  }
+  if (detectAuthHeaderPresence(content)) {
+    signals.push({
+      id: "auth_header_present",
+      evidence: "reads Authorization bearer token from request headers",
+      confidence: 0.74
+    });
+  }
+  return signals;
+}
+
+function mergeSignals(
+  base: LlmChunkUnderstandingSignal[],
+  additions: LlmChunkUnderstandingSignal[]
+): void {
+  if (!additions.length) return;
+  const seen = new Set(base.map((signal) => signal.id));
+  for (const signal of additions) {
+    if (seen.has(signal.id)) continue;
+    base.push(signal);
+    seen.add(signal.id);
+  }
+}
+
 const ROLE_FAMILY_FALLBACKS: Record<string, string[]> = {
   api_handler: ["authentication", "access_control", "injection", "logic_issues"],
   db_access: ["injection", "access_control", "logic_issues"],
@@ -754,8 +840,22 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     understanding: LlmChunkUnderstanding | null,
     familyMapping: LlmFamilyMapping | null
   ): LlmFileInsight => {
+    const staticSignals = collectStaticSignals(file);
+    let mergedUnderstanding = understanding;
+    if (staticSignals.length > 0) {
+      if (!mergedUnderstanding) {
+        mergedUnderstanding = {
+          chunk_id: chunkId,
+          file_path: file.path,
+          confidence: 0.2,
+          signals: [],
+          identifiers: []
+        };
+      }
+      mergeSignals(mergedUnderstanding.signals, staticSignals);
+    }
     const selection = resolveCandidateRuleIds({
-      understanding,
+      understanding: mergedUnderstanding,
       familyMapping,
       rulesById,
       fallbackRuleIds: BASELINE_RULE_IDS,
@@ -775,7 +875,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       ruleTokensById: rulePromptTokensById
     });
     const packedRuleIds = packing.packedRuleIds;
-    const signalIds = extractSignalIds(understanding);
+    const signalIds = extractSignalIds(mergedUnderstanding);
     if (input.debug) {
       logDebug(input.debug, {
         event: "llm_threat_mapping",
@@ -785,7 +885,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           startLine: file.startLine,
           endLine: file.endLine
         },
-        understandingConfidence: understanding?.confidence ?? 0,
+        understandingConfidence: mergedUnderstanding?.confidence ?? 0,
         candidateRuleIds,
         signals: signalIds,
         signalCount: signalIds.length,
@@ -794,6 +894,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         highRisk: selection.highRisk,
         strategy: selection.strategy,
         topSignals: signalIds.slice(0, 6),
+        eligibleRulesTop: candidateRuleIds.slice(0, 8),
         selectionFamilies: selection.families
       });
       logDebug(input.debug, {
@@ -806,10 +907,23 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         },
         eligibleRulesCount: candidateRuleIds.length,
         packedRulesCount: packedRuleIds.length,
+        packedRuleIds: packedRuleIds.slice(0, 8),
         truncated: packing.truncated,
         truncationReason: packing.truncationReason ?? null,
         estimatedPromptTokens: packing.estimatedPromptTokens
       });
+      if (staticSignals.length > 0) {
+        logDebug(input.debug, {
+          event: "static_signal_detection",
+          file: {
+            path: file.path,
+            chunkIndex: file.chunkIndex,
+            startLine: file.startLine,
+            endLine: file.endLine
+          },
+          staticSignals: staticSignals.map((signal) => signal.id)
+        });
+      }
     }
     log(
       [
@@ -826,7 +940,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     return {
       file,
       chunkId,
-      understanding,
+      understanding: mergedUnderstanding,
       familyMapping,
       candidateRuleIds,
       packedRuleIds,

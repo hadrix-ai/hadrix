@@ -38,79 +38,84 @@ export const BASE_RULE_EVAL_PROMPT = [
   "Return findings strictly in the provided JSON schema."
 ].join("\n");
 
+function buildRuleExtraGuidance(ruleId: string): string[] {
+  switch (ruleId) {
+    case "sql_injection":
+      return [
+        "SQL injection helper guidance:",
+        "- Also report raw-SQL helper wrappers that accept a SQL string parameter (e.g., function runQuery(sql: string), unsafeSql(sql: string)).",
+        "- Even if the snippet is a stub/placeholder (e.g., only logs the SQL), treat it as a dangerous raw-SQL execution pattern and report it.",
+        "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
+        "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
+      ];
+    case "missing_lockout":
+      return [
+        "Lockout/bruteforce guidance:",
+        "- If the chunk shows a login attempt (password sign-in) and there is no backoff/lockout/CAPTCHA logic, report missing_lockout.",
+        "- It is valid to report based on the login UI/server action code when that code triggers password sign-in (e.g., signInWithPassword).",
+        "- Evidence can be absence-of-control: there is no delay counters, no attempt tracking, no CAPTCHA, no lockout messaging or state.",
+        "- Do not confuse missing credential validation bugs with lockout bugs; focus on brute-force defenses."
+      ];
+    case "missing_rate_limiting":
+      return [
+        "Rate limiting guidance:",
+        "- Report when a server-side handler performs login, token issuance, password reset, invite, delete, or other sensitive actions and there is no visible rate limiting/backoff/guard in the handler or referenced middleware.",
+        "- Do NOT report on client-only helpers or UI components.",
+        "- Login endpoints are expected to be public; do not confuse missing_authentication with missing_rate_limiting.",
+        "- Comments/feature flags indicating a missing or disabled limiter count as missing."
+      ];
+    case "missing_timeout":
+      return [
+        "Timeout guidance:",
+        "- Treat HTTP calls and subprocess executions (fetch/axios, child_process exec/execFile/spawn, Deno.Command) as external calls that should be bounded.",
+        "- Report when no explicit timeout/abort signal is passed and the code can block indefinitely.",
+        "- If the code retries failures in a tight loop without backoff/cap, mention retry-storm risk alongside missing timeouts."
+      ];
+    case "unbounded_query":
+      return [
+        "Unbounded query guidance:",
+        "- Report list/export handlers that return all rows without pagination (limit/range/offset/cursor).",
+        "- Raw SQL like `SELECT * ...` without LIMIT/OFFSET or ORM queries without `.limit`/`.range` are strong signals.",
+        "- Do NOT require seeing pagination helpers elsewhere; the handler should enforce a cap in the shown code."
+      ];
+    case "missing_admin_mfa":
+      return [
+        "Admin MFA guidance:",
+        "- Treat paths containing /admin (or symbols named admin*) as privileged endpoints.",
+        "- Role/permission checks (e.g., auth.role === \"admin\") are NOT MFA; they satisfy authz only.",
+        "- If the handler uses only basic session/JWT auth and there is no step-up check (MFA/OTP/WebAuthn/reauth or mfa-level claim) in the handler or referenced middleware, report missing_admin_mfa.",
+        "- Do not assume global login MFA unless there is explicit evidence in code (e.g., amr/acr/mfa claim checks or step-up middleware).",
+        "- Evidence can be: auth context read + admin data access (including read-only lists) or mutation without any MFA check."
+      ];
+    case "missing_authentication":
+      return [
+        "Missing authentication guidance:",
+        "- Do NOT report on login/signup/token issuance endpoints; those are public by design.",
+        "- Only report when the handler performs sensitive actions without any auth/session validation."
+      ];
+    case "missing_bearer_token":
+      return [
+        "Bearer token guidance:",
+        "- Report when code sends Authorization: Bearer using a token that can be empty (nullish coalescing, logical OR, optional chaining) or unvalidated client state.",
+        "- Treat frontend session tokens (from client auth SDKs or localStorage) as attacker-controlled; if they can be empty, report.",
+        "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
+        "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
+      ];
+    case "jwt_validation_bypass":
+      return [
+        "JWT validation bypass guidance:",
+        "- Report when code accepts a JWT/bearer token without verifying its signature (e.g., jwt.decode without verify, or constructing auth context purely from header presence).",
+        "- Treat patterns like `if (rawToken) return { userId: ... }` before any verification as a bypass.",
+        "- Evidence can be: parsing `Authorization: Bearer ...` and returning a user context without verification."
+      ];
+    default:
+      return [];
+  }
+}
+
 export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): string {
   const ruleCard = formatRuleCardCompact(rule);
-  const extraGuidance: string[] = [];
-  if (rule.id === "sql_injection") {
-    extraGuidance.push(
-      "SQL injection helper guidance:",
-      "- Also report raw-SQL helper wrappers that accept a SQL string parameter (e.g., function runQuery(sql: string), unsafeSql(sql: string)).",
-      "- Even if the snippet is a stub/placeholder (e.g., only logs the SQL), treat it as a dangerous raw-SQL execution pattern and report it.",
-      "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
-      "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
-    );
-  }
-  if (rule.id === "missing_lockout") {
-    extraGuidance.push(
-      "Lockout/bruteforce guidance:",
-      "- If the chunk shows a login attempt (password sign-in) and there is no backoff/lockout/CAPTCHA logic, report missing_lockout.",
-      "- It is valid to report based on the login UI/server action code when that code triggers password sign-in (e.g., signInWithPassword).",
-      "- Evidence can be absence-of-control: there is no delay counters, no attempt tracking, no CAPTCHA, no lockout messaging or state.",
-      "- Do not confuse missing credential validation bugs with lockout bugs; focus on brute-force defenses."
-    );
-  }
-  if (rule.id === "missing_rate_limiting") {
-    extraGuidance.push(
-      "Rate limiting guidance:",
-      "- Report when a server-side handler performs login, token issuance, password reset, invite, delete, or other sensitive actions and there is no visible rate limiting/backoff/guard in the handler or referenced middleware.",
-      "- Do NOT report on client-only helpers or UI components.",
-      "- Login endpoints are expected to be public; do not confuse missing_authentication with missing_rate_limiting.",
-      "- Comments/feature flags indicating a missing or disabled limiter count as missing."
-    );
-  }
-  if (rule.id === "missing_timeout") {
-    extraGuidance.push(
-      "Timeout guidance:",
-      "- Treat HTTP calls and subprocess executions (fetch/axios, child_process exec/execFile/spawn, Deno.Command) as external calls that should be bounded.",
-      "- Report when no explicit timeout/abort signal is passed and the code can block indefinitely.",
-      "- If the code retries failures in a tight loop without backoff/cap, mention retry-storm risk alongside missing timeouts."
-    );
-  }
-  if (rule.id === "unbounded_query") {
-    extraGuidance.push(
-      "Unbounded query guidance:",
-      "- Report list/export handlers that return all rows without pagination (limit/range/offset/cursor).",
-      "- Raw SQL like `SELECT * ...` without LIMIT/OFFSET or ORM queries without `.limit`/`.range` are strong signals.",
-      "- Do NOT require seeing pagination helpers elsewhere; the handler should enforce a cap in the shown code."
-    );
-  }
-  if (rule.id === "missing_admin_mfa") {
-    extraGuidance.push(
-      "Admin MFA guidance:",
-      "- Treat paths containing /admin (or symbols named admin*) as privileged endpoints.",
-      "- Role/permission checks (e.g., auth.role === \"admin\") are NOT MFA; they satisfy authz only.",
-      "- If the handler uses only basic session/JWT auth and there is no step-up check (MFA/OTP/WebAuthn/reauth or mfa-level claim) in the handler or referenced middleware, report missing_admin_mfa.",
-      "- Do not assume global login MFA unless there is explicit evidence in code (e.g., amr/acr/mfa claim checks or step-up middleware).",
-      "- Evidence can be: auth context read + admin data access (including read-only lists) or mutation without any MFA check."
-    );
-  }
-  if (rule.id === "missing_authentication") {
-    extraGuidance.push(
-      "Missing authentication guidance:",
-      "- Do NOT report on login/signup/token issuance endpoints; those are public by design.",
-      "- Only report when the handler performs sensitive actions without any auth/session validation."
-    );
-  }
-  if (rule.id === "missing_bearer_token") {
-    extraGuidance.push(
-      "Bearer token guidance:",
-      "- Report when code sends Authorization: Bearer using a token that can be empty (nullish coalescing, logical OR, optional chaining) or unvalidated client state.",
-      "- Treat frontend session tokens (from client auth SDKs or localStorage) as attacker-controlled; if they can be empty, report.",
-      "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
-      "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
-    );
-  }
-
+  const extraGuidance = buildRuleExtraGuidance(rule.id);
   return [
     BASE_RULE_EVAL_PROMPT,
     "",
@@ -137,16 +142,14 @@ export function buildRepositoryRuleBatchSystemPrompt(
   }
   const ruleCards = rules.map(formatRuleCardCompact).join("\n\n");
   const ruleIds = rules.map((rule) => rule.id).join(", ");
-  const hasSqlInjection = rules.some((rule) => rule.id === "sql_injection");
   const extraGuidance: string[] = [];
-  if (hasSqlInjection) {
-    extraGuidance.push(
-      "SQL injection helper guidance (applies only when emitting ruleId=sql_injection):",
-      "- Also report raw-SQL helper wrappers that accept a SQL string parameter (e.g., function runQuery(sql: string), unsafeSql(sql: string)).",
-      "- Even if the snippet is a stub/placeholder (e.g., only logs the SQL), treat it as a dangerous raw-SQL execution pattern and report it.",
-      "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
-      "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
-    );
+  const seen = new Set<string>();
+  for (const rule of rules) {
+    if (seen.has(rule.id)) continue;
+    seen.add(rule.id);
+    const guidance = buildRuleExtraGuidance(rule.id);
+    if (!guidance.length) continue;
+    extraGuidance.push(`Guidance for ruleId=${rule.id}:`, ...guidance);
   }
 
   return [

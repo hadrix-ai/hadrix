@@ -113,7 +113,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "authentication",
     description: "Login flows lack account lockout or brute-force defenses.",
     candidateTypes: ["missing_lockout"],
-    requiredAnySignals: ["authn_present", "rate_limit_missing_or_unknown"],
+    requiredAnySignals: ["authn_present", "rate_limit_missing_or_unknown", "login_attempt_present"],
     optionalSignals: ["public_entrypoint"],
     guidance: [
       "Report when a login flow performs password sign-in attempts (server route, server action, or client auth call like signInWithPassword) and there is no evidence of lockout/backoff/CAPTCHA after repeated failures.",
@@ -457,7 +457,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "authentication",
     description: "JWT verification can be bypassed or uses weak validation.",
     candidateTypes: ["jwt_validation_bypass"],
-    requiredAnySignals: ["authn_present"],
+    requiredAnySignals: ["authn_present", "auth_header_present"],
     optionalSignals: ["secrets_access"]
   },
   {
@@ -523,7 +523,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "authentication",
     description: "Requests are sent without bearer tokens (or with empty/placeholder bearer tokens) for protected endpoints.",
     candidateTypes: ["missing_bearer_token"],
-    requiredAnySignals: ["http_request_sink"],
+    requiredAnySignals: ["http_request_sink", "bearer_token_optional"],
     optionalSignals: ["authn_present"],
     guidance: [
       "Report when code constructs an Authorization: Bearer header from a token value that can be empty (e.g., token ?? \"\") and then proceeds with the request.",
