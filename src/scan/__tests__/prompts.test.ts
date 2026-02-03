@@ -4,7 +4,6 @@ import { REPOSITORY_SCAN_RULES } from "../catalog/repositoryRuleCatalog.js";
 import {
   buildRepositoryRuleBatchSystemPrompt,
   buildRepositoryRuleSystemPrompt,
-  buildRepositoryScanSystemPrompt,
   formatRuleCardCompact,
   formatRuleCardFull
 } from "../prompts/repositoryPrompts.js";
@@ -33,11 +32,4 @@ test("rule-batch prompts use short base and omit discovery text", () => {
   assert.ok(prompt.includes("SECURITY HEADER"));
   assert.ok(!prompt.includes("Explicitly look for:"));
   assert.ok(!prompt.includes("identify NEW, high-impact vulnerabilities"));
-});
-
-test("repository scan prompt retains discovery guidance", () => {
-  const prompt = buildRepositoryScanSystemPrompt();
-
-  assert.ok(prompt.includes("Explicitly look for:"));
-  assert.ok(prompt.includes("reviewing a real production repository"));
 });

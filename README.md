@@ -51,6 +51,42 @@ hadrix setup
 HADRIX_PROVIDER=openai HADRIX_API_KEY=sk-... hadrix scan /path/to/repo
 ```
 
+## How the Scan Works
+
+Signals → Candidate Rule Selection → Rule Evaluation → Findings
+
+1. **Static scans (optional)**
+Runs ESLint security rules plus Semgrep, gitleaks, and osv-scanner when enabled. These findings are treated as already reported; AI findings are deduplicated against them later.
+
+2. **Jelly anchors + reachability index (required)**
+Discovers entry points, builds a call/reachability graph, and attaches anchors used to group related code.
+
+3. **Security chunking**
+Creates semantic chunks around handlers, server actions, and security‑relevant helpers. This is not arbitrary line window slicing.
+
+4. **Chunk sampling with deterministic inclusion**
+Always includes high‑risk surfaces, dangerous sinks, and key files. Sampling reduces cost without dropping critical paths.
+
+5. **LLM understanding + `SignalId` extraction**
+An LLM produces a structured understanding of each chunk (role, inputs, sinks, auth, trust boundaries). From that, Hadrix derives `SignalId` facts. Signals are generic and composable, describe observable behavior, and are **not** vulnerabilities.
+
+6. **Candidate rule selection + rule evaluation**
+Candidate rule selection (deterministic): Each rule card declares required/optional signals. Given a chunk’s signals, eligible rule cards are selected and ranked without an LLM.
+Rule evaluation (LLM, rule‑scoped): The LLM is asked, “Does this chunk show evidence that this rule applies?” This is **not** free‑form vulnerability discovery. Evidence must be quoted from the chunk, and the model should prefer no finding over guessing. Multiple rules are evaluated in a single prompt, packed by token budget (often ~10–15 rules per chunk) rather than a fixed top‑K.
+
+7. **Optional open scan (fallback)**
+Runs only when signals are sparse or when high‑risk surfaces produce no rule findings. It is a safety net, not the primary mechanism.
+
+8. **Deduplication, normalization, and composite pass**
+Findings are deduplicated across chunks and anchors, normalized vs static findings, and optionally passed through a composite analysis pass for systemic issues. No code is re‑scanned in this step.
+
+**Design principles**
+- Signals ≠ vulnerabilities. Signals describe behavior; rule cards decide risk.
+- Deterministic routing, LLM for judgment. The LLM evaluates applicability, not which rules to check.
+- Rule evaluation ≠ vulnerability discovery. Discovery comes from candidate rule selection plus the optional open scan.
+- Recall vs performance is managed via token budgets, not hard caps like “top 5 rules”.
+- Extensibility: new rules usually compose existing signals; new signals are added only when necessary.
+
 ## Supabase database scan (optional)
 
 Hadrix can connect to Supabase to check RLS, privileges, functions, and storage buckets.
