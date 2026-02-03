@@ -28,11 +28,12 @@ Optional flags:
     - `hadrix-evals-rls-exposure`
     - `hadrix-evals-auth-failures`
     - `hadrix-evals-security-misconfiguration`
+    - `hadrix-evals-secrets-exposure`
     - `hadrix-evals-crypto-failures`
     - `hadrix-evals-software-integrity`
     - `hadrix-evals-logging-monitoring`
     - `hadrix-evals-dos-resilience`
-    - `hadrix-evals-vulnerable-deps`
+    - `hadrix-evals-file-upload`
     - `hadrix-evals-frontend-direct-db-write`
   - App-based suites (kept for parity runs):
     - `hadrix-evals-react-supabase`
