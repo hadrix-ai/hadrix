@@ -86,10 +86,8 @@ test("open scan gating: high risk only when no findings", () => {
     selectedRuleIds: ["command_injection", "missing_authentication", "missing_rate_limiting", "missing_timeout", "missing_security_headers"],
     ruleFindingsSoFar: [{
       type: "command_injection",
-      title: "demo",
-      description: "demo",
-      confidence: 0.6,
       severity: "high",
+      summary: "demo",
       location: { filepath: "src/service/public.ts" },
       details: {}
     }],

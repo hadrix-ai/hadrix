@@ -88,16 +88,24 @@ test("chunkRuleIds groups by cluster and never mixes clusters", () => {
   }
 });
 
-test("rule scan batching collapses to a single batch", () => {
-  const ruleIds = [
-    "missing_authentication",
-    "sql_injection",
-    "missing_webhook_signature"
-  ];
-  const batches = buildRuleScanBatches(ruleIds);
+test("rule scan packing stops at token budget", () => {
+  const ruleTokensById = new Map<string, number>([
+    ["r1", 50],
+    ["r2", 50],
+    ["r3", 50]
+  ]);
+  const result = buildRuleScanBatches({
+    candidateRuleIds: ["r1", "r2", "r3"],
+    basePromptTokens: 10,
+    maxPromptTokens: 109,
+    softRuleCap: 15,
+    hardRuleCap: 25,
+    ruleTokensById
+  });
 
-  assert.equal(batches.length, 1);
-  assert.deepStrictEqual(batches[0], ruleIds);
+  assert.deepStrictEqual(result.batches, [["r1"]]);
+  assert.equal(result.truncated, true);
+  assert.equal(result.truncationReason, "token_budget");
 });
 
 test("runWithCircuitBreaker splits batches on failure", async () => {

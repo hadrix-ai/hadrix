@@ -6,6 +6,7 @@ export type RuleScanDefinition = {
   category: string;
   description: string;
   guidance?: string[];
+  evidenceQuestions?: string[];
   requiredControls?: string[];
   candidateTypes?: string[];
   requiredAllSignals?: SignalId[];

@@ -70,6 +70,9 @@ export interface HadrixConfig {
     maxRulesPerChunkDefault?: number;
     maxRulesPerChunkHighRisk?: number;
     minRulesPerChunk?: number;
+    ruleEvalMaxPromptTokens?: number;
+    ruleEvalMaxRulesPerChunkSoft?: number;
+    ruleEvalMaxRulesPerChunkHard?: number;
     reasoning?: boolean;
     reasoningModel?: string;
     rateLimit?: {
@@ -261,6 +264,21 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(configFile.llm?.understandingMaxBatchChunks) ??
     8;
 
+  const ruleEvalMaxPromptTokens =
+    parsePositiveNumber(readEnv("HADRIX_RULE_EVAL_MAX_PROMPT_TOKENS")) ??
+    parsePositiveNumber(configFile.llm?.ruleEvalMaxPromptTokens) ??
+    6500;
+
+  const ruleEvalMaxRulesPerChunkSoft =
+    parsePositiveNumber(readEnv("HADRIX_RULE_EVAL_MAX_RULES_PER_CHUNK_SOFT")) ??
+    parsePositiveNumber(configFile.llm?.ruleEvalMaxRulesPerChunkSoft) ??
+    15;
+
+  const ruleEvalMaxRulesPerChunkHard =
+    parsePositiveNumber(readEnv("HADRIX_RULE_EVAL_MAX_RULES_PER_CHUNK_HARD")) ??
+    parsePositiveNumber(configFile.llm?.ruleEvalMaxRulesPerChunkHard) ??
+    25;
+
   const maxRulesPerChunkDefault =
     parsePositiveNumber(readEnv("HADRIX_MAX_RULES_PER_CHUNK_DEFAULT")) ??
     parsePositiveNumber(configFile.llm?.maxRulesPerChunkDefault) ??
@@ -306,6 +324,9 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       understandingMaxPromptTokens,
       understandingMinBatchSize,
       understandingMaxBatchChunks,
+      ruleEvalMaxPromptTokens,
+      ruleEvalMaxRulesPerChunkSoft,
+      ruleEvalMaxRulesPerChunkHard,
       maxRulesPerChunkDefault,
       maxRulesPerChunkHighRisk,
       minRulesPerChunk,

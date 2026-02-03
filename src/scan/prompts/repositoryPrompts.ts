@@ -8,7 +8,7 @@ type RepositoryForScan = {
   repoPaths?: string[] | null;
 };
 
-const BASE_SCAN_PROMPT = [
+export const BASE_SCAN_PROMPT = [
     "You are a senior application security engineer reviewing a real production repository.",
     "",
     "You are given:",
@@ -64,6 +64,34 @@ const BASE_SCAN_PROMPT = [
     "Prefer fewer, higher-signal findings; include additional findings only when strongly supported by evidence."
   ].join("\n");
 
+export const BASE_RULE_EVAL_PROMPT = [
+  "You are a security reviewer performing a rule-scoped scan over a code chunk.",
+  "",
+  "Security header handling:",
+  "- Each chunk may begin with a SECURITY HEADER. It is metadata only; do not treat header lines as code evidence.",
+  "",
+  "Static scanner findings are already reported. Do NOT duplicate them.",
+  "",
+  "Task:",
+  "- For the provided rule(s), decide whether the risk applies based on the chunk evidence.",
+  "- If evidence is insufficient or ambiguous, return an empty findings array.",
+  "",
+  "Evidence requirements:",
+  "- Evidence MUST be grounded in the chunk body (not the SECURITY HEADER).",
+  "- Include 1-3 short verbatim quotes (<=200 chars) in evidence[].",
+  "- If evidence is not explicit, do NOT emit a finding.",
+  "",
+  "Conservative behavior:",
+  "- Prefer no findings over guessing.",
+  "- Only infer missing controls when the shown handler/flow clearly should contain it and the absence is unambiguous.",
+  "",
+  "Guardrails:",
+  "- Do NOT report missing_authentication on login/signup/token issuance endpoints.",
+  "- Only report server-side control gaps (rate limiting, audit logging) on server handlers/middleware; do not flag UI components or SDK initialization.",
+  "",
+  "Return findings strictly in the provided JSON schema."
+].join("\n");
+
 export function buildRepositoryScanSystemPrompt(): string {
   return [
     BASE_SCAN_PROMPT,
@@ -118,7 +146,7 @@ export function buildRepositoryScanSystemPrompt(): string {
 }
 
 export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): string {
-  const ruleCard = formatRuleCard(rule);
+  const ruleCard = formatRuleCardCompact(rule);
   const extraGuidance: string[] = [];
   if (rule.id === "sql_injection") {
     extraGuidance.push(
@@ -191,7 +219,7 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
   }
 
   return [
-    BASE_SCAN_PROMPT,
+    BASE_RULE_EVAL_PROMPT,
     "",
     "This scan is rule-scoped.",
     "You may ONLY report findings for the rule below.",
@@ -214,7 +242,7 @@ export function buildRepositoryRuleBatchSystemPrompt(
   if (rules.length === 1) {
     return buildRepositoryRuleSystemPrompt(rules[0]);
   }
-  const ruleCards = rules.map(formatRuleCard).join("\n\n");
+  const ruleCards = rules.map(formatRuleCardCompact).join("\n\n");
   const ruleIds = rules.map((rule) => rule.id).join(", ");
   const hasSqlInjection = rules.some((rule) => rule.id === "sql_injection");
   const extraGuidance: string[] = [];
@@ -229,7 +257,7 @@ export function buildRepositoryRuleBatchSystemPrompt(
   }
 
   return [
-    BASE_SCAN_PROMPT,
+    BASE_RULE_EVAL_PROMPT,
     "",
     "This scan is rule-scoped.",
     "You may ONLY report findings for the rules below.",
@@ -338,7 +366,7 @@ export function buildRepositoryContextPrompt(
   return parts.join("\n");
 }
 
-function formatRuleCard(rule: RuleScanDefinition): string {
+export function formatRuleCardFull(rule: RuleScanDefinition): string {
   const lines: string[] = [
     "Rule card:",
     `- id: ${rule.id}`,
@@ -352,6 +380,26 @@ function formatRuleCard(rule: RuleScanDefinition): string {
     lines.push("- guidance:");
     for (const tip of rule.guidance) {
       lines.push(`  - ${tip}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export function formatRuleCardCompact(rule: RuleScanDefinition): string {
+  const lines: string[] = [
+    "Rule card:",
+    `- id: ${rule.id}`,
+    `- title: ${rule.title}`,
+    `- category: ${rule.category}`
+  ];
+  if (rule.description) {
+    lines.push(`- description: ${rule.description}`);
+  }
+  const questions = (rule.evidenceQuestions ?? []).filter(Boolean).slice(0, 3);
+  if (questions.length > 0) {
+    lines.push("- evidenceQuestions:");
+    for (const question of questions) {
+      lines.push(`  - ${question}`);
     }
   }
   return lines.join("\n");
