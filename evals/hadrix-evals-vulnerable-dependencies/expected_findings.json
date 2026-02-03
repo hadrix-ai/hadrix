@@ -1,0 +1,24 @@
+[
+  {
+    "category": "A10_Vulnerable_Dependencies",
+    "file": "cases/react-baseline/package.json",
+    "description": "axios@0.21.1: trim regex uses a pattern with high worst-case backtracking cost",
+    "severity": "high",
+    "osv_id": "GHSA-cph5-m8f7-6c5x"
+  },
+  {
+    "category": "A10_Vulnerable_Dependencies",
+    "file": "cases/react-baseline/package.json",
+    "description": "lodash@4.17.20: template function can invoke commands derived from template input",
+    "severity": "high",
+    "osv_id": "GHSA-35jh-r3h4-6jhm"
+  },
+  {
+    "category": "A10_Vulnerable_Dependencies",
+    "file": "cases/react-baseline/package.json",
+    "description": "jsonwebtoken@8.5.1: verification accepts multiple key types without strict enforcement",
+    "severity": "high",
+    "osv_id": "GHSA-hjrf-2m68-5959"
+  }
+]
+

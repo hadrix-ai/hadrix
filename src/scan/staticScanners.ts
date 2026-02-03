@@ -2,6 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import fg from "fast-glob";
 import { readEnv, readEnvRaw } from "../config/env.js";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
@@ -579,17 +580,209 @@ function pickPrimaryAdvisoryId(vulnId: string | undefined, aliases: string[]): s
   return trimmedId;
 }
 
-async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
+const PINNED_NPM_VERSION_RE =
+  /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+const isPinnedNpmVersion = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed === "*" || trimmed.toLowerCase() === "latest") return false;
+  if (trimmed.startsWith("^") || trimmed.startsWith("~")) return false;
+  if (trimmed.startsWith("<") || trimmed.startsWith(">") || trimmed.startsWith("=")) return false;
+  if (trimmed.includes("||")) return false;
+  if (trimmed.includes(" ") || trimmed.includes("\t") || trimmed.includes("\n")) return false;
+  if (
+    trimmed.startsWith("workspace:") ||
+    trimmed.startsWith("file:") ||
+    trimmed.startsWith("link:") ||
+    trimmed.startsWith("git+") ||
+    trimmed.startsWith("github:")
+  ) {
+    return false;
+  }
+  return PINNED_NPM_VERSION_RE.test(trimmed);
+};
+
+const hasAdjacentLockfile = (manifestPath: string): boolean => {
+  const dir = path.dirname(manifestPath);
+  const candidates = [
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+  ];
+  return candidates.some((name) => existsSync(path.join(dir, name)));
+};
+
+const collectPinnedDeps = (packageJson: unknown): Array<{ name: string; version: string }> => {
+  if (!packageJson || typeof packageJson !== "object") return [];
+  const record = packageJson as Record<string, unknown>;
+  const sections = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+  const deps: Array<{ name: string; version: string }> = [];
+  for (const section of sections) {
+    const raw = record[section];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    for (const [name, versionRaw] of Object.entries(raw as Record<string, unknown>)) {
+      if (!name) continue;
+      if (typeof versionRaw !== "string") continue;
+      if (!isPinnedNpmVersion(versionRaw)) continue;
+      deps.push({ name: name.trim(), version: versionRaw.trim() });
+    }
+  }
+  return deps;
+};
+
+const osvBatchQuery = async (queries: Array<{ name: string; version: string }>): Promise<any[]> => {
+  if (queries.length === 0) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch("https://api.osv.dev/v1/querybatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        queries: queries.map((q) => ({
+          package: { name: q.name, ecosystem: "npm" },
+          version: q.version,
+        })),
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`osv querybatch failed: ${res.status} ${res.statusText}`);
+    }
+    const json = (await res.json()) as any;
+    return Array.isArray(json?.results) ? json.results : [];
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+async function scanPinnedNpmDepsInPackageJson(
+  config: HadrixConfig,
+  scanRoot: string,
+  repoRoot: string
+): Promise<StaticFinding[]> {
+  const manifests = await fg(["**/package.json"], {
+    cwd: scanRoot,
+    absolute: true,
+    dot: true,
+    onlyFiles: true,
+    followSymbolicLinks: false,
+    ignore: config.chunking.exclude ?? [],
+  });
+
+  const findings: StaticFinding[] = [];
+  const seen = new Set<string>();
+
+  for (const manifestPath of manifests) {
+    if (hasAdjacentLockfile(manifestPath)) continue;
+
+    let json: unknown;
+    try {
+      json = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    } catch {
+      continue;
+    }
+
+    const deps = collectPinnedDeps(json);
+    if (deps.length === 0) continue;
+
+    let results: any[];
+    try {
+      results = await osvBatchQuery(deps);
+    } catch {
+      continue;
+    }
+
+    const filepath = path.relative(repoRoot, manifestPath);
+    for (let i = 0; i < deps.length; i += 1) {
+      const dep = deps[i];
+      const entry = results[i] ?? {};
+      const vulnerabilities = Array.isArray(entry?.vulns)
+        ? entry.vulns
+        : Array.isArray(entry?.vulnerabilities)
+          ? entry.vulnerabilities
+          : [];
+
+      for (const vuln of vulnerabilities) {
+        const summary = vuln?.summary ?? "Vulnerability detected";
+        const aliases = Array.isArray(vuln?.aliases)
+          ? vuln.aliases.filter((alias: unknown) => typeof alias === "string")
+          : [];
+        const advisoryId = typeof vuln?.id === "string" ? vuln.id.trim() : "";
+        const aliasIds = uniqueStrings([advisoryId, ...aliases].filter(Boolean));
+        const primaryId = pickPrimaryAdvisoryId(advisoryId || undefined, aliasIds);
+        const ecosystem = "npm";
+        const packageName = dep.name;
+        const packageVersion = dep.version;
+        const packageRuleId = `osv:${packageName}@${packageVersion}`;
+        const ecosystemRuleId = `osv:${ecosystem}:${packageName}@${packageVersion}`;
+        const severity = mapSeverity("osv-scanner", extractCvssSeverity(vuln));
+        const canonicalId = primaryId || advisoryId || aliasIds[0] || "";
+        const ruleId = canonicalId || ecosystemRuleId;
+        const mergedRuleIds = uniqueStrings([
+          ruleId,
+          ...aliasIds,
+          packageRuleId,
+          ecosystemRuleId
+        ]);
+        const snippet = `Vulnerable package: ${packageName}@${packageVersion} (${ecosystem})`;
+        const dedupeKey = `osv|${packageName}@${packageVersion}|${ruleId}|${filepath}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
+        const message = `${ruleId}: ${summary} in ${packageName}@${packageVersion}`;
+
+        findings.push({
+          tool: "osv-scanner",
+          ruleId,
+          message,
+          severity,
+          filepath,
+          startLine: 0,
+          endLine: 0,
+          snippet,
+          details: {
+            packageName,
+            packageVersion,
+            ecosystem,
+            advisoryId: ruleId || null,
+            summary,
+            aliases: aliasIds.length ? aliasIds : undefined,
+            mergedRuleIds,
+            dedupeKey,
+            identityKey: dedupeKey
+          }
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+async function runOsvScanner(
+  config: HadrixConfig,
+  toolPath: string,
+  scanRoot: string,
+  repoRoot: string
+): Promise<StaticFinding[]> {
   const args = ["--format", "json", "--recursive", scanRoot];
   const result = await spawnCapture(toolPath, args, scanRoot);
+  const packageJsonFindings = await scanPinnedNpmDepsInPackageJson(config, scanRoot, repoRoot).catch(() => []);
+
   if (result.code !== 0 && result.code !== 1) {
     if (result.stderr.includes("no package sources found") || result.stdout.trim() === "") {
-      return [];
+      return packageJsonFindings;
     }
     throw new Error(`osv-scanner exited with ${result.code}: ${result.stderr.trim()}`);
   }
 
-  if (!result.stdout.trim()) return [];
+  if (!result.stdout.trim()) return packageJsonFindings;
   const json = JSON.parse(result.stdout);
   const findings: StaticFinding[] = [];
   const results = Array.isArray(json?.results) ? json.results : [];
@@ -660,7 +853,7 @@ async function runOsvScanner(toolPath: string, scanRoot: string, repoRoot: strin
     }
   }
 
-  return findings;
+  return [...findings, ...packageJsonFindings];
 }
 
 export async function runStaticScanners(config: HadrixConfig, scanRoot: string, logger?: (message: string) => void): Promise<StaticFinding[]> {
@@ -672,7 +865,7 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
     runEslint(config, scanRoot, config.projectRoot),
     runSemgrep(config, tools.semgrep, scanRoot, config.projectRoot),
     runGitleaks(tools.gitleaks, scanRoot, config.projectRoot),
-    runOsvScanner(tools.osvScanner, scanRoot, config.projectRoot)
+    runOsvScanner(config, tools.osvScanner, scanRoot, config.projectRoot)
   ]);
 
   return [...eslint, ...semgrep, ...gitleaks, ...osv];

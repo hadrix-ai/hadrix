@@ -61,6 +61,7 @@ jobs:
           - hadrix-evals-security-misconfiguration
           - hadrix-evals-secrets-exposure
           - hadrix-evals-file-upload
+          - hadrix-evals-vulnerable-dependencies
           # Excluded (in evals-todo or deferred):
           # - hadrix-evals-admin-authz
           # - hadrix-evals-command-injection

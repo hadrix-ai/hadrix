@@ -1,0 +1,12 @@
+{
+  "name": "hadrix-evals-vulnerable-dependencies-react-baseline",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "axios": "0.21.1",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.20",
+    "react": "18.2.0"
+  }
+}
+

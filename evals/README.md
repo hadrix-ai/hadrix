@@ -34,6 +34,7 @@ Optional flags:
     - `hadrix-evals-logging-monitoring`
     - `hadrix-evals-dos-resilience`
     - `hadrix-evals-file-upload`
+    - `hadrix-evals-vulnerable-dependencies`
     - `hadrix-evals-frontend-direct-db-write`
   - App-based suites (kept for parity runs):
     - `hadrix-evals-react-supabase`
