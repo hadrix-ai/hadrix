@@ -181,7 +181,8 @@ export function buildRepositoryRuleSystemPrompt(rule: RuleScanDefinition): strin
   if (rule.id === "missing_bearer_token") {
     extraGuidance.push(
       "Bearer token guidance:",
-      "- Report when code sends Authorization: Bearer using a token that can be empty (token ?? \"\") or unvalidated client state.",
+      "- Report when code sends Authorization: Bearer using a token that can be empty (nullish coalescing, logical OR, optional chaining) or unvalidated client state.",
+      "- Treat frontend session tokens (from client auth SDKs or localStorage) as attacker-controlled; if they can be empty, report.",
       "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
       "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
     );

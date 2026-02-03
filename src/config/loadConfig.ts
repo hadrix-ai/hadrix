@@ -62,6 +62,7 @@ export interface HadrixConfig {
     baseUrl?: string;
     maxConcurrency?: number;
     estimatedTokensPerTask?: number;
+    mappingBatchSize?: number;
     reasoning?: boolean;
     reasoningModel?: string;
     rateLimit?: {
@@ -230,6 +231,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     parsePositiveNumber(readEnv("HADRIX_LLM_EST_TOKENS_PER_TASK")) ??
     parsePositiveNumber(configFile.llm?.estimatedTokensPerTask);
 
+  const llmMappingBatchSize =
+    parsePositiveNumber(readEnv("HADRIX_LLM_MAPPING_BATCH_SIZE")) ??
+    parsePositiveNumber(configFile.llm?.mappingBatchSize);
+
   const llmRateLimit = {
     ...(llmRequestsPerMinute ? { requestsPerMinute: llmRequestsPerMinute } : {}),
     ...(llmTokensPerMinute ? { tokensPerMinute: llmTokensPerMinute } : {}),
@@ -255,6 +260,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       temperature: configFile.llm?.temperature ?? 0.1,
       maxConcurrency: llmMaxConcurrency ?? undefined,
       estimatedTokensPerTask: llmEstimatedTokensPerTask ?? undefined,
+      mappingBatchSize: llmMappingBatchSize ?? undefined,
       reasoning: llmReasoning,
       reasoningModel: llmReasoningModel,
       rateLimit: Object.keys(llmRateLimit).length ? llmRateLimit : undefined,

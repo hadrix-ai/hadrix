@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { HadrixConfig } from "../config/loadConfig.js";
 import { loadConfig } from "../config/loadConfig.js";
+import { isCompositeScanEnabled } from "../config/featureFlags.js";
 import { discoverFiles } from "../fs/discover.js";
 import { hashFile, toRelative } from "../chunking/chunker.js";
 import { securityChunkFile } from "../chunking/securityChunker.js";
@@ -1521,6 +1522,9 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         repositoryDescriptor &&
         (llmFindings.length || existingFindings.length)
       ) {
+        if (!isCompositeScanEnabled()) {
+          log("LLM composite pass disabled (HADRIX_DISABLE_COMPOSITE_SCAN=1).");
+        } else {
         const resumedComposite = resumeStore?.getCompositeResults();
         if (resumedComposite !== null && resumedComposite !== undefined) {
           compositeFindings = resumedComposite;
@@ -1543,6 +1547,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
             await handleResumeError(err, "composite");
             throw err;
           }
+        }
         }
       }
   
