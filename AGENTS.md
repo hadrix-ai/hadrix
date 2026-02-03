@@ -10,14 +10,19 @@ Short, practical guidance for agents working in this repo.
 - Chunking: `src/chunking/securityChunker.ts`
   - `MAX_CHUNK_LINES=160`, `OVERLAP_LINES=40`, `DEFAULT_MIN_CHUNK_SIZE=50`.
 - LLM stages (all inside `scanRepository`):
-  1) Chunk understanding (structured + summary)
-     - Prompt: `src/scan/prompts/llmUnderstandingPrompts.ts`
-  2) Family mapping (coarse threat families)
-     - Prompt: `src/scan/prompts/llmUnderstandingPrompts.ts`
-  3) Rule‑scoped diagnosis (token‑budgeted packing; often ~10–15 rules / chunk)
-     - Prompt: `src/scan/prompts/repositoryPrompts.ts`
-  4) Open scan (catch‑all for non‑catalog issues)
+  1) Chunk understanding (batched)
+     - Prompt: `src/scan/prompts/llmUnderstandingPrompts.ts` (`buildChunkUnderstandingSystemPrompt`)
+  2) Deterministic static signals merged into understanding
+     - Regex-based signals live in `src/scan/repositoryScanner.ts` (`collectStaticSignals`).
+  3) Rule selection + packing
+     - Signal-gated eligibility + scoring (with role/baseline fallback) → token-budgeted packing.
+     - Config: `minRulesPerChunk`, `ruleEvalMaxPromptTokens`, soft/hard caps.
+  4) Rule‑scoped evaluation (batched per chunk)
+     - Prompt: `src/scan/prompts/repositoryPrompts.ts` (`buildRepositoryRuleBatchSystemPrompt`)
+  5) Open scan (gated catch‑all for non‑catalog issues)
      - Prompt: `src/scan/prompts/openScanPrompts.ts`
+- Optional (not currently wired): combined understanding + family mapping prompt exists in
+  `src/scan/prompts/llmUnderstandingPrompts.ts` (`buildUnderstandingAndFamilyMappingSystemPrompt`).
 - Rule catalog: `src/scan/catalog/repositoryRuleCatalog.ts`.
 - Deduping: `reduceRepositoryFindings(...)` in `src/scan/repositoryScanner.ts`.
 

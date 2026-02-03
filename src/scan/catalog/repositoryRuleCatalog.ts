@@ -177,7 +177,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description:
       "Client-side code writes to the database directly instead of using server or edge functions.",
     candidateTypes: ["frontend_direct_db_write"],
-    requiredAnySignals: ["orm_query_sink", "raw_sql_sink"],
+    requiredAnySignals: ["orm_query_sink", "raw_sql_sink", "client_db_write"],
     optionalSignals: ["frontend_dom_write"],
     guidance: [
       "Move write operations behind API/edge functions or server actions.",
@@ -452,6 +452,19 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     requiredAnySignals: ["cors_permissive_or_unknown"]
   },
   {
+    id: "public_storage_bucket",
+    title: "Storage bucket configured for public access",
+    category: "configuration",
+    description: "Storage buckets are configured to allow unauthenticated public access.",
+    candidateTypes: ["public_storage_bucket"],
+    requiredAnySignals: ["public_storage_bucket"],
+    guidance: [
+      "Do not use public buckets for sensitive assets.",
+      "Prefer private buckets with signed URLs or authenticated access checks.",
+      "Separate truly public assets into dedicated buckets with limited scope."
+    ]
+  },
+  {
     id: "jwt_validation_bypass",
     title: "JWT validation bypass",
     category: "authentication",
@@ -510,12 +523,17 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
   },
   {
     id: "anon_key_bearer",
-    title: "Anon key used as bearer credential",
+    title: "Public/anon key used for privileged access",
     category: "authentication",
-    description: "Public anon keys are used as bearer tokens for privileged actions.",
+    description: "Public or anon API keys are used for privileged actions or bearer auth.",
     candidateTypes: ["anon_key_bearer"],
-    requiredAnySignals: ["authn_present", "http_request_sink"],
-    optionalSignals: ["public_entrypoint"]
+    requiredAnySignals: ["authn_present", "http_request_sink", "public_api_key_usage"],
+    optionalSignals: ["public_entrypoint"],
+    guidance: [
+      "Report when a public/anon key is used as a bearer token or to initialize a privileged server client.",
+      "Evidence can be: Authorization: Bearer with a public/anon key, or createClient(...) wired to an anon/public key for admin data access.",
+      "Public/anon keys are intended for low-privilege access; privileged actions should use scoped service credentials."
+    ]
   },
   {
     id: "missing_bearer_token",

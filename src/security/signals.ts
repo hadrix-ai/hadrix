@@ -16,6 +16,7 @@ export const SIGNAL_IDS = [
   "file_read_sink",
   "file_write_sink",
   "secrets_access",
+  "public_api_key_usage",
   "logs_sensitive",
   "debug_endpoint",
   "authn_present",
@@ -36,7 +37,9 @@ export const SIGNAL_IDS = [
   "cors_permissive_or_unknown",
   "login_attempt_present",
   "bearer_token_optional",
-  "auth_header_present"
+  "auth_header_present",
+  "client_db_write",
+  "public_storage_bucket"
 ] as const;
 
 export type SignalId = typeof SIGNAL_IDS[number];
@@ -92,6 +95,9 @@ export const SIGNAL_DEFINITIONS: Record<SignalId, { description: string }> = {
   },
   secrets_access: {
     description: "Accesses secrets or credentials."
+  },
+  public_api_key_usage: {
+    description: "Uses a public or anon API key for client/service access."
   },
   logs_sensitive: {
     description: "Logs potentially sensitive data."
@@ -155,5 +161,11 @@ export const SIGNAL_DEFINITIONS: Record<SignalId, { description: string }> = {
   },
   auth_header_present: {
     description: "Authorization header is read to establish authentication context."
+  },
+  client_db_write: {
+    description: "Client-side code performs direct database writes via a browser SDK."
+  },
+  public_storage_bucket: {
+    description: "Storage bucket configured for unauthenticated public access."
   }
 };

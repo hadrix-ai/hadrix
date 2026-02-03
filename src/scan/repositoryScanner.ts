@@ -181,6 +181,7 @@ const RULE_CLUSTER_BY_ID: Record<string, string> = {
   weak_encryption: "secrets_logging",
 
   permissive_cors: "hardening_limits",
+  public_storage_bucket: "hardening_limits",
   missing_timeout: "hardening_limits",
   missing_rate_limiting: "hardening_limits",
   missing_audit_logging: "hardening_limits",
@@ -275,6 +276,51 @@ const TOKEN_DEFAULT_PATTERN =
 const AUTH_HEADER_READ_PATTERN =
   /\bheaders\.get\(\s*["']authorization["']\s*\)/i;
 const BEARER_MARKER_PATTERN = /\bBearer\s+/i;
+const CLIENT_DIRECTIVE_PATTERN = /["']use client["']/i;
+const SUPABASE_IMPORT_PATTERN = /@supabase\/supabase-js/i;
+const SUPABASE_CREATE_PATTERN = /\bcreateClient\s*\(/i;
+const SUPABASE_WRITE_PATTERN =
+  /\bfrom\(\s*["'`][^"'`]+["'`]\s*\)\.(insert|update|upsert|delete)\s*\(/i;
+const CORS_ALLOW_ORIGIN_PATTERN = /access-control-allow-origin/i;
+const CORS_ALLOW_ORIGIN_WILDCARD_PATTERN =
+  /access-control-allow-origin[^\n]{0,80}["']?\*["']?/i;
+const CORS_SET_HEADER_PATTERN =
+  /setHeader\(\s*["']Access-Control-Allow-Origin["']\s*,\s*["']\*["']\s*\)/i;
+const DEBUG_FLAG_PATTERN = /\bdebug\s*:\s*true\b/i;
+const HEADERS_DUMP_PATTERN =
+  /headers\.entries\(\)|Object\.fromEntries\([^)]*headers\.entries\(\)\)/i;
+const ENV_DUMP_PATTERN = /\bprocess\.env\b|\bDeno\.env\b/i;
+const PUBLIC_API_KEY_PATTERN =
+  /\bSUPABASE_ANON_KEY\b|\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b|\bsupabaseAnonKey\b/i;
+const SUPABASE_ANON_HELPER_PATTERN = /\bsupabaseAnon\b/i;
+const SUPABASE_CLIENT_USAGE_PATTERN =
+  /\bcreateClient\s*\(|\bfrom\(\s*["'`][^"'`]+["'`]\s*\)/i;
+const AUTH_BEARER_HEADER_PATTERN = /\bauthorization\b[^;]*\bBearer\b/i;
+const STORAGE_BUCKET_PATTERN = /\bbucket\b/i;
+const PUBLIC_BUCKET_NAME_PATTERN = /["'`][^"'`]*public[^"'`]*["'`]/i;
+const PUBLIC_BUCKET_CONFIG_PATTERN = /\bpublic\s*:\s*true\b/i;
+const REQUEST_PARAM_CAPTURE_PATTERN = /\breq\.(?:params|query)\.([A-Za-z0-9_]+)\b/g;
+const SEARCH_PARAM_CAPTURE_PATTERN = /searchParams\.get\(\s*["']([A-Za-z0-9_]+)["']\s*\)/g;
+const ID_LIKE_PARAM_NAMES = new Set([
+  "id",
+  "userid",
+  "user_id",
+  "email",
+  "orgid",
+  "org_id",
+  "accountid",
+  "account_id",
+  "projectid",
+  "project_id",
+  "tenantid",
+  "tenant_id",
+  "resourceid",
+  "resource_id",
+  "orderid",
+  "order_id"
+]);
+const USER_ID_PARAM_NAMES = new Set(["userid", "user_id", "email"]);
+const ORG_ID_PARAM_NAMES = new Set(["orgid", "org_id", "tenantid", "tenant_id"]);
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -309,6 +355,84 @@ function detectAuthHeaderPresence(content: string): boolean {
   return AUTH_HEADER_READ_PATTERN.test(content) && BEARER_MARKER_PATTERN.test(content);
 }
 
+function detectPermissiveCors(content: string): boolean {
+  if (!content || !CORS_ALLOW_ORIGIN_PATTERN.test(content)) return false;
+  return (
+    CORS_SET_HEADER_PATTERN.test(content) ||
+    CORS_ALLOW_ORIGIN_WILDCARD_PATTERN.test(content)
+  );
+}
+
+function detectDebugAuthLeak(content: string): boolean {
+  if (!content || !DEBUG_FLAG_PATTERN.test(content)) return false;
+  return HEADERS_DUMP_PATTERN.test(content) || ENV_DUMP_PATTERN.test(content);
+}
+
+function detectPublicApiKeyUsage(content: string): boolean {
+  if (!content) return false;
+  const hasAnonKey = PUBLIC_API_KEY_PATTERN.test(content);
+  const hasAnonHelper = SUPABASE_ANON_HELPER_PATTERN.test(content);
+  const hasClientUsage = SUPABASE_CLIENT_USAGE_PATTERN.test(content);
+  const hasBearer = AUTH_BEARER_HEADER_PATTERN.test(content);
+  if (hasAnonKey && (hasClientUsage || hasBearer)) return true;
+  if (hasAnonHelper && hasClientUsage) return true;
+  return false;
+}
+
+function detectPublicStorageBucket(content: string): boolean {
+  if (!content) return false;
+  if (PUBLIC_BUCKET_CONFIG_PATTERN.test(content)) return true;
+  return STORAGE_BUCKET_PATTERN.test(content) && PUBLIC_BUCKET_NAME_PATTERN.test(content);
+}
+
+function normalizeParamName(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]/g, "").toLowerCase();
+}
+
+function detectClientSuppliedIdentifiers(content: string): {
+  hasId: boolean;
+  hasUserId: boolean;
+  hasOrgId: boolean;
+} {
+  if (!content) return { hasId: false, hasUserId: false, hasOrgId: false };
+  const names = new Set<string>();
+  for (const match of content.matchAll(REQUEST_PARAM_CAPTURE_PATTERN)) {
+    if (match[1]) names.add(normalizeParamName(match[1]));
+  }
+  for (const match of content.matchAll(SEARCH_PARAM_CAPTURE_PATTERN)) {
+    if (match[1]) names.add(normalizeParamName(match[1]));
+  }
+  if (names.size === 0) return { hasId: false, hasUserId: false, hasOrgId: false };
+  let hasId = false;
+  let hasUserId = false;
+  let hasOrgId = false;
+  for (const name of names) {
+    if (USER_ID_PARAM_NAMES.has(name)) {
+      hasUserId = true;
+      hasId = true;
+      continue;
+    }
+    if (ORG_ID_PARAM_NAMES.has(name)) {
+      hasOrgId = true;
+      hasId = true;
+      continue;
+    }
+    if (ID_LIKE_PARAM_NAMES.has(name)) {
+      hasId = true;
+    }
+  }
+  return { hasId, hasUserId, hasOrgId };
+}
+
+function detectClientDbWrite(content: string): boolean {
+  if (!content) return false;
+  if (!CLIENT_DIRECTIVE_PATTERN.test(content)) return false;
+  if (!(SUPABASE_IMPORT_PATTERN.test(content) || SUPABASE_CREATE_PATTERN.test(content))) {
+    return false;
+  }
+  return SUPABASE_WRITE_PATTERN.test(content);
+}
+
 function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstandingSignal[] {
   const content = typeof file.content === "string" ? file.content : "";
   if (!content) return [];
@@ -332,6 +456,68 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       id: "auth_header_present",
       evidence: "reads Authorization bearer token from request headers",
       confidence: 0.74
+    });
+  }
+  if (detectPermissiveCors(content)) {
+    signals.push({
+      id: "cors_permissive_or_unknown",
+      evidence: "CORS allow-origin wildcard detected",
+      confidence: 0.78
+    });
+  }
+  if (detectDebugAuthLeak(content)) {
+    signals.push({
+      id: "debug_endpoint",
+      evidence: "debug response exposes headers or env details",
+      confidence: 0.76
+    });
+    signals.push({
+      id: "logs_sensitive",
+      evidence: "debug response includes request headers or env values",
+      confidence: 0.72
+    });
+  }
+  if (detectPublicApiKeyUsage(content)) {
+    signals.push({
+      id: "public_api_key_usage",
+      evidence: "public/anon API key used for client or bearer access",
+      confidence: 0.74
+    });
+  }
+  if (detectPublicStorageBucket(content)) {
+    signals.push({
+      id: "public_storage_bucket",
+      evidence: "storage bucket marked as public",
+      confidence: 0.7
+    });
+  }
+  const idSignals = detectClientSuppliedIdentifiers(content);
+  if (idSignals.hasId) {
+    signals.push({
+      id: "id_in_path_or_query",
+      evidence: "identifier read from request params or query",
+      confidence: 0.74
+    });
+  }
+  if (idSignals.hasUserId) {
+    signals.push({
+      id: "client_supplied_user_id",
+      evidence: "user identifier read from request params or query",
+      confidence: 0.76
+    });
+  }
+  if (idSignals.hasOrgId) {
+    signals.push({
+      id: "client_supplied_org_id",
+      evidence: "org/tenant identifier read from request params or query",
+      confidence: 0.76
+    });
+  }
+  if (detectClientDbWrite(content)) {
+    signals.push({
+      id: "client_db_write",
+      evidence: "client code performs direct database write via supabase.from(...).insert/update",
+      confidence: 0.78
     });
   }
   return signals;
@@ -429,6 +615,7 @@ const FAMILY_RULES: Record<string, string[]> = {
   ],
   misconfiguration: [
     "permissive_cors",
+    "public_storage_bucket",
     "missing_security_headers",
     "debug_mode_in_production",
     "missing_webhook_config_integrity",

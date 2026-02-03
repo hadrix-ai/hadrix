@@ -101,6 +101,27 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
         "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
       ];
+    case "anon_key_bearer":
+      return [
+        "Public/anon key guidance:",
+        "- Report when a public/anon API key is used as a bearer token or to initialize a privileged server client.",
+        "- Evidence can be: Authorization: Bearer with an anon/public key, or createClient(...) using an anon/public key for admin data access.",
+        "- Public/anon keys are meant for low-privilege access; privileged actions should use scoped service credentials."
+      ];
+    case "public_storage_bucket":
+      return [
+        "Public storage bucket guidance:",
+        "- Report when a storage bucket is configured as public (e.g., public: true) or named/selected as a public bucket for sensitive assets.",
+        "- Prefer private buckets with signed URLs or authenticated access checks.",
+        "- Evidence can be: bucket config with public=true or bucket names like \"public-*\" used for app data."
+      ];
+    case "permissive_cors":
+      return [
+        "CORS guidance:",
+        "- Report when Access-Control-Allow-Origin is set to '*' or when credentials are allowed with a wildcard origin.",
+        "- Evidence can be explicit header assignments or response header objects containing the wildcard.",
+        "- If origin is reflected without validation, treat it as permissive."
+      ];
     case "jwt_validation_bypass":
       return [
         "JWT validation bypass guidance:",
