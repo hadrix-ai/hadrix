@@ -30,5 +30,5 @@ create table if not exists api_tokens (
   id text primary key,
   user_id text references users(id),
   label text,
-  token_plaintext text
+  token_value text
 );

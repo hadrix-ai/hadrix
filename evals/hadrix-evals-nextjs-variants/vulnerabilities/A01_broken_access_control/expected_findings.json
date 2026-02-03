@@ -2,31 +2,31 @@
   {
     "category": "A01_Broken_Access_Control",
     "file": "app/api/projects/[id]/route.ts",
-    "description": "IDOR: project fetched by ID without ownership check when toggle is enabled",
+    "description": "Project fetched by ID without ownership check when toggle is enabled",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "app/api/projects/route.ts",
-    "description": "Cross-tenant leakage: client-controlled orgId used for filtering and writes",
+    "description": "Client-controlled orgId used for filtering and writes",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "app/actions/createProject.ts",
-    "description": "Server action trusts client orgId for project creation",
+    "description": "Server action uses client orgId for project creation",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "app/api/admin/users/route.ts",
-    "description": "Admin list endpoint missing role checks",
+    "description": "Admin list endpoint skips role checks",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "app/api/admin/users/[id]/route.ts",
-    "description": "Admin delete endpoint missing role checks",
+    "description": "Admin delete endpoint skips role checks",
     "severity": "critical"
   },
   {
@@ -38,7 +38,7 @@
   {
     "category": "A01_Broken_Access_Control",
     "file": "db/rls.sql",
-    "description": "Permissive RLS policies allow unrestricted access",
+    "description": "RLS policies allow unrestricted access",
     "severity": "high"
   }
 ]

@@ -2,25 +2,25 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
-    "description": "Unsigned webhooks accepted and signature verification can be skipped",
+    "description": "Webhook requests processed when signature checks are skipped by toggle",
     "severity": "high"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
-    "description": "User-supplied transform logic executed with new Function",
+    "description": "User-supplied transform logic executed via new Function",
     "severity": "high"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nextjs-baseline/app/api/webhook/route.ts",
-    "description": "External config fetched without integrity checks",
+    "description": "External config fetched without verification checks",
     "severity": "medium"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nextjs-fakeout-1/app/api/webhook/route.ts",
-    "description": "Unsigned webhooks accepted when signature enforcement can be skipped",
+    "description": "Webhook requests processed when signature enforcement is skipped by toggle",
     "severity": "high"
   },
   {
@@ -32,25 +32,25 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nextjs-fakeout-1/app/api/webhook/route.ts",
-    "description": "External config fetched without integrity verification",
+    "description": "External config fetched without verification step",
     "severity": "medium"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/webhook.ts",
-    "description": "Unsigned webhooks accepted when signature validation is disabled by toggle",
+    "description": "Webhook requests processed when signature validation is disabled by toggle",
     "severity": "high"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/webhook.ts",
-    "description": "User-supplied transform executed via new Function (code execution / integrity failure) when toggle enabled",
+    "description": "User-supplied transform executed via new Function when toggle enabled",
     "severity": "critical"
   },
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/brokencrystals-baseline/server/routes/webhook.ts",
-    "description": "Unsigned webhooks accepted without signature verification",
+    "description": "Webhook requests processed without signature verification",
     "severity": "high"
   },
   {
@@ -62,7 +62,7 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "cases/nodegoat-baseline/server/routes/deserialize.ts",
-    "description": "User-supplied serialized profile is deserialized with node-serialize (insecure deserialization)",
+    "description": "User-supplied serialized profile deserialized with node-serialize",
     "severity": "high"
   }
 ]

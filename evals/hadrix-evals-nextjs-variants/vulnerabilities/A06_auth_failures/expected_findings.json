@@ -14,13 +14,13 @@
   {
     "category": "A06_Authentication_Failures",
     "file": "app/login/page.tsx",
-    "description": "Unlimited login attempts without lockout",
+    "description": "Login attempts not limited; no lockout",
     "severity": "medium"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "app/api/auth/login/route.ts",
-    "description": "Login API lacks rate limiting",
+    "description": "Login API omits rate limiting",
     "severity": "medium"
   },
   {

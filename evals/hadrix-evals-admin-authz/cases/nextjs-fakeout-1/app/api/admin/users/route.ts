@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   const claimedRole = req.headers.get("x-user-role") ?? auth.role;
   if (claimedRole !== "admin") {
-    console.warn("admin access without admin role", { userId: auth.userId, role: claimedRole });
+    console.warn("role mismatch observed for request", { userId: auth.userId, role: claimedRole });
   }
 
   const mfa = req.headers.get("x-mfa");

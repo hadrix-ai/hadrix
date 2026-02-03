@@ -1,8 +1,8 @@
-# Enabling / disabling A09
+# Toggles for A09
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A09_dos_and_resilience.no_timeouts_external_calls`
-- `vulnerabilities.A09_dos_and_resilience.retry_storms`
-- `vulnerabilities.A09_dos_and_resilience.unbounded_db_queries`
-- `vulnerabilities.A09_dos_and_resilience.resource_exhaustion_large_payloads`
+- `vulnerabilities.A09_dos_and_resilience.external_call_timeout_override`
+- `vulnerabilities.A09_dos_and_resilience.extra_retry_rounds`
+- `vulnerabilities.A09_dos_and_resilience.query_limit_override`
+- `vulnerabilities.A09_dos_and_resilience.upload_body_buffering`

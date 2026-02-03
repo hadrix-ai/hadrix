@@ -1,11 +1,11 @@
 import axios from "axios";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const TIMEOUT_MS = 2000;
 const timeoutKey = ["time", "out"].join("");
 
 const buildRequestOptions = () => {
-  if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.no_timeouts_external_calls")) {
+  if (toggleEnabled("vulnerabilities.A09_dos_and_resilience.external_call_timeout_override")) {
     return undefined;
   }
 

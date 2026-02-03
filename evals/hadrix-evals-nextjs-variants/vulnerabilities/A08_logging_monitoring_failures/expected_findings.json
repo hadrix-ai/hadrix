@@ -14,7 +14,7 @@
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/tokens/route.ts",
-    "description": "Plaintext API tokens logged",
+    "description": "API tokens logged",
     "severity": "high"
   },
   {
@@ -26,7 +26,7 @@
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/admin/users/[id]/route.ts",
-    "description": "Admin deletes lack audit log enforcement",
+    "description": "Admin deletes proceed without audit log enforcement",
     "severity": "high"
   }
 ]

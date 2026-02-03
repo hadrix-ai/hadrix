@@ -1,20 +1,20 @@
-# A06 — Authentication Failures (Orbit Next)
+# A06 — Authentication Flow Scenarios (Orbit Next)
 
-This fixture demonstrates auth failures typical in Next.js fullstack apps:
+This fixture demonstrates authentication flow gaps typical in Next.js fullstack apps:
 
 - Backend trusts client state instead of validating tokens
-- Route handlers skip JWT validation when toggled
-- Unlimited login attempts (no lockout)
-- Admin functionality without MFA requirements
+- Route handlers can skip JWT validation when toggled
+- Login attempts are not limited
+- Admin actions do not require MFA
 
 ## Where it exists
 
-- JWT not validated / synthetic auth context:
+- JWT not validated / synthetic session context:
   - `lib/auth.ts`
 - Frontend trusts its own session state:
   - `app/actions/createProject.ts`
-- Unlimited login attempts:
+- Login attempts not limited:
   - `app/login/page.tsx`
   - `app/api/auth/login/route.ts`
-- Admin functionality without MFA:
+- Admin actions without MFA:
   - `app/api/admin/users/route.ts`

@@ -1,6 +1,6 @@
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { unsafeSql } from "./_shared/unsafeSql.ts";
+import { runQuery } from "./_shared/runQuery.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
 
@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
 
   const sql =
     `select id, org_id, name, description, description_html from public.projects where id = '${id}' and org_id = '${membership.org_id}' limit 1;`;
-  const rows = await unsafeSql<any>(sql);
+  const rows = await runQuery<any>(sql);
 
   return new Response(JSON.stringify({ project: rows[0] ?? null }), {
     headers: jsonHeaders

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import hadrixConfig from "../../../hadrix.config.json";
 
-const FRONTEND_ONLY_ROLE_FLAG = "vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement";
+const CLIENT_ROLE_GATE_FLAG = "vulnerabilities.A01_broken_access_control.client_role_gate";
 const ADMIN_ROLE = "admin";
 const TOKEN_STORAGE_KEY = "access_token";
 
@@ -14,7 +14,7 @@ type AdminUser = {
   org_id: string | null;
 };
 
-function vulnEnabled(path: string): boolean {
+function toggleEnabled(path: string): boolean {
   const parts = path.split(".");
   let current: any = hadrixConfig;
   for (const part of parts) {
@@ -55,7 +55,7 @@ export function AdminUsers() {
     const loadUsers = async () => {
       try {
         const role = readRoleFromToken();
-        const enforceClientGate = vulnEnabled(FRONTEND_ONLY_ROLE_FLAG) && role !== ADMIN_ROLE;
+        const enforceClientGate = toggleEnabled(CLIENT_ROLE_GATE_FLAG) && role !== ADMIN_ROLE;
 
         if (enforceClientGate) {
           setError("You are not an admin (client-side token check).");
@@ -99,7 +99,7 @@ export function AdminUsers() {
           </li>
         ))}
       </ul>
-      <p style={{ color: "#777" }}>Admin actions are intentionally unsafe depending on toggles.</p>
+      <p style={{ color: "#777" }}>Admin actions are controlled by toggles.</p>
     </section>
   );
 }

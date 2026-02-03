@@ -1,17 +1,16 @@
-# A09 — DoS / Resilience Issues (Orbit Projects)
+# A09 — Resilience & Load Handling Scenarios (Orbit Projects)
 
-This fixture includes realistic resilience mistakes in serverless/Edge workloads:
+This fixture includes resilience patterns in serverless/Edge workloads:
 
-- Unbounded queries
-- No timeouts around external calls or subprocesses
-- Retry storms
-- Large payload handling without limits
+- Queries without explicit limits
+- Optional timeouts around external calls or subprocesses
+- Additional retry rounds
+- Large payload handling without explicit size limits
 
 ## Where it exists
 
-- No timeout + retry storms:
+- Timeout/retry configuration:
   - `backend/supabase/functions/scan-repo.ts`
-- Unbounded DB queries:
+- Query limit controls:
   - `backend/supabase/functions/list-projects.ts`
   - `backend/supabase/functions/admin-list-users.ts`
-

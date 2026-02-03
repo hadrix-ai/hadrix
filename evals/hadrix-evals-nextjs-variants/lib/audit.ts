@@ -1,4 +1,4 @@
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export type AuditTrailEntry = {
   event: string;
@@ -7,15 +7,13 @@ export type AuditTrailEntry = {
   context?: Record<string, unknown>;
 };
 
-const auditToggleKey = ["vulnerabilities", "A08_logging_monitoring_failures", "no_audit_logs"].join(".");
-const securitySignalToggleKey = [
-  "vulnerabilities",
-  "A08_logging_monitoring_failures",
-  ["no", "alerts", "for", "privilege", "escalation"].join("_")
-].join(".");
+const auditToggleKey = ["vulnerabilities", "A08_logging_monitoring_failures", "audit_log_skip"].join(".");
+const securitySignalToggleKey = ["vulnerabilities", "A08_logging_monitoring_failures", "admin_action_alerts_skip"].join(
+  "."
+);
 
 export function isAuditTrailEnabled(): boolean {
-  return !vulnEnabled(auditToggleKey);
+  return !toggleEnabled(auditToggleKey);
 }
 
 export async function recordSecurityTrail(entry: AuditTrailEntry): Promise<void> {
@@ -37,7 +35,7 @@ const securitySignalHandlers: Record<"emit" | "drop", SecuritySignalHandler> = {
 };
 
 function selectSecuritySignalHandler(): SecuritySignalHandler {
-  return vulnEnabled(securitySignalToggleKey) ? securitySignalHandlers.drop : securitySignalHandlers.emit;
+  return toggleEnabled(securitySignalToggleKey) ? securitySignalHandlers.drop : securitySignalHandlers.emit;
 }
 
 export function notifySecurityOps(event: string, details: Record<string, unknown>) {

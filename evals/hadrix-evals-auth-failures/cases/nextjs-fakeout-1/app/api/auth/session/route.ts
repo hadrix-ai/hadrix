@@ -12,12 +12,12 @@ export async function GET(req: NextRequest) {
   const rawToken = req.cookies.get("session")?.value ?? "";
 
   if (!rawToken) {
-    return NextResponse.json({ error: "missing session" }, { status: 401 });
+    return NextResponse.json({ error: "missing data" }, { status: 401 });
   }
 
   const payload = jwt.decode(rawToken) as SessionPayload | null;
   if (!payload?.sub) {
-    return NextResponse.json({ error: "invalid session" }, { status: 401 });
+    return NextResponse.json({ error: "invalid data" }, { status: 401 });
   }
 
   return NextResponse.json({

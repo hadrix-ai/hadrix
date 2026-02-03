@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 import { writeAuditLog, alertSecurity } from "@/lib/audit";
 
@@ -8,13 +8,13 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const auth = getAuthContext(req);
   const userId = params.id;
 
-  if (!vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check")) {
+  if (!toggleEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_role_header")) {
     if (auth.role !== "admin") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.log_secrets")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.log_request_headers")) {
     console.log("admin delete auth:", req.headers.get("authorization"));
   }
 

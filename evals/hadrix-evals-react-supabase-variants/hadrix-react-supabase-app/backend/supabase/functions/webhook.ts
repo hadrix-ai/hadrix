@@ -1,6 +1,6 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 const fallbackSecret = ["dev", "secret"].join("-");
 const signatureHeader = ["x", "webhook", "signature"].join("-");
@@ -15,7 +15,7 @@ function resolveSecret(envKey: string, fallbackValue: string) {
 }
 
 function signatureMode(): SignatureMode {
-  return vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.unsigned_webhooks") ? "skip" : "enforce";
+  return toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.webhook_signature_skip") ? "skip" : "enforce";
 }
 
 async function sha256Hex(input: string) {
@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
     raw_payload: payload
   });
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.execute_user_supplied_config")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.runtime_config_exec")) {
     runUserScript(payload);
   }
 

@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { env } from "@/lib/env";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export type AuthContext = {
   userId: string | null;
@@ -18,7 +18,7 @@ export function getAuthContext(req: Request): AuthContext {
     return { userId: null, email: null, role: "anon", orgId: null, rawToken };
   }
 
-  if (vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback")) {
+  if (toggleEnabled("vulnerabilities.A04_cryptographic_failures.jwt_secret_fallback")) {
     const secret = env.jwtSecret || "dev-secret";
     console.log("jwt secret (fallback):", secret);
     const decoded = jwt.decode(rawToken) as any;
@@ -46,7 +46,7 @@ export function getAuthContext(req: Request): AuthContext {
 }
 
 export function signSession(payload: Record<string, unknown>): string {
-  const useFallback = vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback");
+  const useFallback = toggleEnabled("vulnerabilities.A04_cryptographic_failures.jwt_secret_fallback");
   const secret = useFallback ? env.jwtSecret || "dev-secret" : env.jwtSecret;
   if (!secret) {
     throw new Error("JWT_SECRET missing");

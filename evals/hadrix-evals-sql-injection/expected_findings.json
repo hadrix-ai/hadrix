@@ -2,67 +2,67 @@
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-baseline/app/api/projects/[id]/route.ts",
-    "description": "SQL injection: raw SQL built by concatenating the project id into a query string",
+    "description": "Raw SQL built by concatenating the project id into a query string",
     "severity": "critical"
   },
   {
     "category": "A03_Injection",
-    "file": "cases/nextjs-baseline/lib/unsafeSql.ts",
-    "description": "Unsafe raw SQL execution helper used by Next.js route handlers",
+    "file": "cases/nextjs-baseline/lib/runQuery.ts",
+    "description": "Raw SQL execution helper used by Next.js route handlers",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-baseline/app/api/projects/route.ts",
-    "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed to Supabase query builder",
+    "description": "User-controlled `.or()` filter string passed to Supabase query builder",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-fakeout-1/app/api/projects/[id]/route.ts",
-    "description": "SQL injection: raw SQL built by interpolating the project id into a WHERE clause",
+    "description": "Raw SQL built by interpolating the project id into a WHERE clause",
     "severity": "critical"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-fakeout-1/lib/queryExecutor.ts",
-    "description": "Raw SQL execution helper runs unparameterized SQL statements",
+    "description": "Raw SQL execution helper runs SQL statements without parameterization",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
-    "description": "SQL injection: raw SQL built by concatenating the project id into a query string",
+    "description": "Raw SQL built by concatenating the project id into a query string",
     "severity": "critical"
   },
   {
     "category": "A03_Injection",
-    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/unsafeSql.ts",
-    "description": "Unsafe raw SQL execution helper used by Edge Functions (no parameterization)",
+    "file": "cases/supabase-baseline/backend/supabase/functions/_shared/runQuery.ts",
+    "description": "Raw SQL execution helper used by Edge Functions (no parameterization)",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/supabase-baseline/backend/supabase/functions/list-projects.ts",
-    "description": "Unsafe query-builder usage: user-controlled `.or()` filter string passed directly to PostgREST query builder",
+    "description": "User-controlled `.or()` filter string passed directly to PostgREST query builder",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/brokencrystals-baseline/server/routes/testimonials.ts",
-    "description": "SQL injection: raw SQL built by concatenating the search term into the WHERE clause",
+    "description": "Raw SQL built by concatenating the search term into the WHERE clause",
     "severity": "critical"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nodevulnerable-baseline/server/routes/orders.ts",
-    "description": "SQL injection: raw SQL built by concatenating the user id into the WHERE clause",
+    "description": "Raw SQL built by concatenating the user id into the WHERE clause",
     "severity": "critical"
   },
   {
     "category": "A03_Injection",
-    "file": "cases/nodevulnerable-baseline/server/db/unsafeSql.ts",
-    "description": "Unsafe raw SQL execution helper used by NodeVulnerable routes (no parameterization)",
+    "file": "cases/nodevulnerable-baseline/server/db/runQuery.ts",
+    "description": "Raw SQL execution helper used by Node baseline routes (no parameterization)",
     "severity": "high"
   }
 ]

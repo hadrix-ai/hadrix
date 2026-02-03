@@ -3,10 +3,10 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A09_dos_and_resilience": {
-      "no_timeouts_external_calls": true,
-      "retry_storms": true,
-      "unbounded_db_queries": true,
-      "resource_exhaustion_large_payloads": true
+      "external_call_timeout_override": true,
+      "extra_retry_rounds": true,
+      "query_limit_override": true,
+      "upload_body_buffering": true
     }
   }
 }

@@ -2,37 +2,37 @@
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-baseline/lib/cors.ts",
-    "description": "CORS configuration allows any origin",
+    "description": "CORS configuration uses a wildcard origin",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-baseline/app/api/debug/route.ts",
-    "description": "Debug endpoint exposes request headers and environment secrets",
+    "description": "Debug endpoint returns request headers and environment values",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-baseline/lib/supabase.ts",
-    "description": "Service client falls back to an overprivileged anon key",
+    "description": "Service client falls back to a general-purpose anon key",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-baseline/lib/storage.ts",
-    "description": "Storage bucket configured for public access",
+    "description": "Storage bucket configured for unauthenticated access",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nextjs-fakeout-1/app/api/status/route.ts",
-    "description": "Status endpoint sets permissive CORS headers for any origin",
+    "description": "Status endpoint sets CORS headers with a wildcard origin",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/supabase-baseline/backend/supabase/functions/_shared/cors.ts",
-    "description": "Edge function CORS headers allow all origins",
+    "description": "Edge function CORS headers include a wildcard origin",
     "severity": "medium"
   },
   {
@@ -44,31 +44,31 @@
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/supabase-baseline/backend/supabase/functions/get-project.ts",
-    "description": "Admin data access can use an overprivileged anon key",
+    "description": "Admin data access can use a general-purpose anon key",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/supabase-baseline/frontend/utils/api.ts",
-    "description": "Client requests use an overprivileged anon key as the bearer token",
+    "description": "Client requests use a general-purpose anon key as the bearer token",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/brokencrystals-baseline/server/middleware/cors.ts",
-    "description": "CORS configuration allows any origin with credentials",
+    "description": "CORS configuration uses a wildcard origin with credentials",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nodegoat-baseline/server/routes/debug.ts",
-    "description": "Debug endpoint exposes request headers and environment secrets",
+    "description": "Debug endpoint returns request headers and environment values",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "cases/nodevulnerable-baseline/server/middleware/cors.ts",
-    "description": "CORS configuration allows any origin with credentials",
+    "description": "CORS configuration uses a wildcard origin with credentials",
     "severity": "medium"
   }
 ]

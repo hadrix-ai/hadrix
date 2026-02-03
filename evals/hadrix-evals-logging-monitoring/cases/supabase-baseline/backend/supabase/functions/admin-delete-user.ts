@@ -1,6 +1,6 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
 
 Deno.serve(async (req) => {
@@ -34,7 +34,7 @@ Deno.serve(async (req) => {
   const sb = supabaseAdmin();
   const { error } = await sb.auth.admin.deleteUser(userId);
 
-  const writeAudit = !vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.no_audit_logs");
+  const writeAudit = !toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.audit_log_skip");
   if (writeAudit) {
     await sb.from("audit_logs").insert({
       actor_user_id: auth.userId,

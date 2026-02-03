@@ -25,7 +25,7 @@ insert into public.projects (id, org_id, name, description, description_html, cr
     '00000000-0000-0000-0000-000000000001',
     'Launch Checklist',
     'Internal launch tasks for Orbit Demo Org.',
-    '<b>Internal</b> launch tasks. <img src=x onerror=alert("xss") />',
+    '<b>Internal</b> launch tasks. <img src=x onerror=alert("preview") />',
     '11111111-1111-1111-1111-111111111111'
   ),
   (
@@ -42,4 +42,3 @@ insert into public.api_tokens (user_id, token_plaintext) values
   ('11111111-1111-1111-1111-111111111111', 'orbit_admin_token_plaintext_123'),
   ('22222222-2222-2222-2222-222222222222', 'orbit_member_token_plaintext_456')
 on conflict do nothing;
-

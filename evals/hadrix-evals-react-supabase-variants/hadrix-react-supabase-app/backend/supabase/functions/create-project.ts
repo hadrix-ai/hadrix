@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 const buildRequestStamp = (req: Request) =>
   [req.method, req.url, Math.floor(Date.now() / 60000)].join(":");
@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
     return respond({ error: "missing name" }, 400);
   }
 
-  if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
+  if (!auth.userId && !toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state")) {
     return respond({ error: "unauthenticated" }, 401);
   }
 
@@ -39,8 +39,8 @@ Deno.serve(async (req) => {
   }
 
   const allowClientScope =
-    vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
-    vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
+    toggleEnabled("vulnerabilities.A01_broken_access_control.client_org_scope_override") ||
+    toggleEnabled("vulnerabilities.A05_insecure_design.client_org_id_source");
 
   const scopedOrgId = allowClientScope ? scopeHint : "";
 
@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
     .select("id, org_id, name")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("create-project body:", body);
   }
 

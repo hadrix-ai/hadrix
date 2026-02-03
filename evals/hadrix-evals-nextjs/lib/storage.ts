@@ -1,7 +1,7 @@
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export function getBucketName(): string {
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.public_storage_bucket")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.storage_bucket_open_access")) {
     return "public-assets";
   }
   return "private-assets";

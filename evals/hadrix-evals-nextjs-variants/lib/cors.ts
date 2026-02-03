@@ -1,4 +1,4 @@
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const corsHeaderNames = {
   allowOrigin: "access-control-allow-origin",
@@ -12,7 +12,7 @@ const defaultAllowedMethods = "GET,POST,PUT,DELETE,OPTIONS";
 const defaultAllowCredentials = "true";
 
 function resolveAllowedOrigin(origin: string): string {
-  const allowAll = vulnEnabled("vulnerabilities.A02_security_misconfiguration.cors_allow_all");
+  const allowAll = toggleEnabled("vulnerabilities.A02_security_misconfiguration.cors_any_origin");
   return allowAll ? "*" : origin;
 }
 

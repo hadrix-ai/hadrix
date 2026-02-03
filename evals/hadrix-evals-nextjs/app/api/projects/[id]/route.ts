@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { corsHeaders } from "@/lib/cors";
 import { supabaseAdmin, supabaseAnon } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
-import { unsafeSql } from "@/lib/unsafeSql";
+import { runQuery } from "@/lib/runQuery";
 
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse("ok", { headers: corsHeaders(req.headers.get("origin") ?? "") });
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: "missing id" }, { status: 400, headers: corsHeaders(origin) });
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_access")) {
     return NextResponse.json(
       {
         debug: true,
@@ -30,17 +30,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     );
   }
 
-  if (vulnEnabled("vulnerabilities.A03_injection.sql_injection_raw_query")) {
+  if (toggleEnabled("vulnerabilities.A03_injection.raw_query_by_id")) {
     const sql = `select id, org_id, name, description, description_html from public.projects where id = '${id}' limit 1;`;
-    const rows = await unsafeSql<any>(sql);
+    const rows = await runQuery<any>(sql);
     return NextResponse.json({ project: rows[0] ?? null }, { headers: corsHeaders(origin) });
   }
 
-  const sb = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const sb = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? supabaseAnon()
     : supabaseAdmin();
 
-  const skipOwnershipCheck = vulnEnabled("vulnerabilities.A01_broken_access_control.idor_get_project");
+  const skipOwnershipCheck = toggleEnabled("vulnerabilities.A01_broken_access_control.project_access_gate");
 
   if (skipOwnershipCheck) {
     const { data, error } = await sb

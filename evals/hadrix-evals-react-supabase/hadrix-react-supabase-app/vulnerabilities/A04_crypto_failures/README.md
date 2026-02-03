@@ -1,19 +1,18 @@
-# A04 — Cryptographic Failures (Orbit Projects)
+# A04 — Cryptography Handling Scenarios (Orbit Projects)
 
-This fixture models common crypto mistakes in modern apps:
+This fixture models crypto-handling patterns in modern apps:
 
-- Predictable token generation
-- Secrets stored in plaintext database columns
-- Weak/fallback secrets in operational flows (webhooks)
-- “Magic link”/session assumptions that ignore expiry (modeled at the app layer)
+- Predictable token generation paths
+- Secrets stored directly in database columns
+- Fallback secrets in operational flows (webhooks)
+- "Magic link"/session flows that skip expiry checks
 
 ## Where it exists
 
-- Insecure token generation:
+- Token generation path:
   - `backend/supabase/functions/create-api-token.ts` uses `Math.random()` + timestamp
-- Plaintext secrets in DB:
+- Direct secret storage in DB:
   - `backend/supabase/migrations/001_schema.sql` (`api_tokens.token_plaintext`)
   - `backend/supabase/migrations/003_seeds.sql` includes plaintext token examples
-- Weak fallback secrets:
+- Webhook secret fallback:
   - `backend/supabase/functions/webhook.ts` defaults `WEBHOOK_SECRET` to `dev-secret`
-

@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   const password = String((body as any).password ?? "");
 
   if (!email || !password) {
-    return NextResponse.json({ error: "missing credentials" }, { status: 400 });
+    return NextResponse.json({ error: "missing fields" }, { status: 400 });
   }
 
   const token = signSession({ sub: "user-123", email, role: "member" });

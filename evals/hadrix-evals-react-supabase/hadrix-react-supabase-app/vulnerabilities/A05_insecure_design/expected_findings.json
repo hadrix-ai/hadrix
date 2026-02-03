@@ -2,26 +2,25 @@
   {
     "category": "A05_Insecure_Design",
     "file": "backend/supabase/functions/create-project.ts",
-    "description": "Insecure tenant routing: trusts client-provided orgId for project creation",
+    "description": "Project creation uses client-provided orgId",
     "severity": "high"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "backend/supabase/functions/list-projects.ts",
-    "description": "Insecure multi-tenant design: orgId drives listing without membership verification when enabled",
+    "description": "Project listing uses client-provided orgId when enabled",
     "severity": "high"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "backend/supabase/functions/create-api-token.ts",
-    "description": "No rate limiting for issuing API tokens",
+    "description": "API token issuance without rate limiting",
     "severity": "medium"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "backend/supabase/migrations/002_rls.sql",
-    "description": "Toggleable policy allowing arbitrary org membership insertion (org_members_insert_any)",
+    "description": "Policy allows org membership insertion when enabled (org_members_insert_any)",
     "severity": "high"
   }
 ]
-

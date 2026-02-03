@@ -1,4 +1,4 @@
-# Enabling / disabling DoS/resilience fixtures
+# Enabling / disabling load-handling fixtures
 
 Edit `hadrix.config.json`:
 

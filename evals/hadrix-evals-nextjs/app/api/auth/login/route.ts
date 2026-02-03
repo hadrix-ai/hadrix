@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signSession } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const email = String((body as any).email ?? "");
   const password = String((body as any).password ?? "");
 
-  if (!vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts")) {
+  if (!toggleEnabled("vulnerabilities.A06_authentication_failures.login_attempt_flow")) {
   }
 
   if (!email || !password) {

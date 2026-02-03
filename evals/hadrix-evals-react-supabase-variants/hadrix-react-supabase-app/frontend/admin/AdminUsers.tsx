@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { callEdgeFunction } from "@/utils/api";
 import { supabase } from "@/auth/supabaseClient";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
-const FRONTEND_ONLY_ROLE_FLAG = "vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement";
+const FRONTEND_ONLY_ROLE_FLAG = "vulnerabilities.A01_broken_access_control.client_role_gate";
 const ADMIN_ROLE = "admin";
 const ADMIN_LIST_FUNCTION = "admin-list-users";
 const ADMIN_DELETE_FUNCTION = "admin-delete-user";
@@ -45,7 +45,7 @@ export function AdminUsers() {
     const loadUsers = async () => {
       try {
         const role = await getClientRole();
-        const blockedByClient = vulnEnabled(FRONTEND_ONLY_ROLE_FLAG) && role !== ADMIN_ROLE;
+        const blockedByClient = toggleEnabled(FRONTEND_ONLY_ROLE_FLAG) && role !== ADMIN_ROLE;
 
         if (blockedByClient) {
           setError("You are not an admin (client-side check).");
@@ -89,7 +89,7 @@ export function AdminUsers() {
         ))}
       </ul>
       <p style={{ color: "#777" }}>
-        Admin actions are intentionally unsafe depending on toggles.
+        Admin actions are controlled by feature toggles.
       </p>
     </section>
   );

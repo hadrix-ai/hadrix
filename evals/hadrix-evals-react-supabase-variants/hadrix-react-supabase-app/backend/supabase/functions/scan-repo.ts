@@ -1,5 +1,5 @@
 import { corsHeaders } from "./_shared/cors.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 type ShellResult = {
   code: number;
@@ -57,12 +57,12 @@ Deno.serve(async (req) => {
   }
 
 
-  const allowRaw = vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo");
-  const allowBurst = vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms");
+  const allowRaw = toggleEnabled("vulnerabilities.A03_injection.scan_repo_shell_exec");
+  const allowBurst = toggleEnabled("vulnerabilities.A09_dos_and_resilience.extra_retry_rounds");
   const cmd = buildListCommand(remoteUrl, allowRaw);
   const result = await runListing(cmd, allowBurst);
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("scan-repo cmd:", cmd);
     console.log("scan-repo result:", result);
   }

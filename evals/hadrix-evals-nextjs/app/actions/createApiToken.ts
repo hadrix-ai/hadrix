@@ -1,6 +1,6 @@
 "use server";
 
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function createApiTokenAction(formData: FormData) {
@@ -8,7 +8,7 @@ export async function createApiTokenAction(formData: FormData) {
   const label = String(formData.get("label") ?? "");
 
 
-  const token = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens")
+  const token = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_generation_basic")
     ? `tok_${Math.random().toString(36).slice(2)}_${Date.now()}`
     : "placeholder-token";
 
@@ -16,6 +16,6 @@ export async function createApiTokenAction(formData: FormData) {
   await sb.from("api_tokens").insert({
     user_id: userId || null,
     label: label || "default",
-    token_plaintext: vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db") ? token : null
+    token_plaintext: toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_storage_direct") ? token : null
   });
 }

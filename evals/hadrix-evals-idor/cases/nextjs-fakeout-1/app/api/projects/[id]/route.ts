@@ -13,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const auth = getAuthContext(req);
   if (!auth.userId) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return NextResponse.json({ error: "request rejected" }, { status: 401 });
   }
 
   const sb = supabaseAdmin();
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 
   if (!membership) {
-    console.warn("missing project membership", { projectId: id, userId: auth.userId });
+    console.warn("project association not found", { projectId: id, userId: auth.userId });
   }
 
   const { data, error } = await sb

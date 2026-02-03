@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { env } from "@/lib/env";
 
 function verifySignature(payload: string, signature: string, secret: string) {
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
 
   const secret = env.webhookSecret || "dev-secret";
 
-  if (!vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.unsigned_webhooks")) {
+  if (!toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.webhook_signature_skip")) {
     if (!signature || !verifySignature(rawBody, signature, secret)) {
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
     }
@@ -22,14 +22,14 @@ export async function POST(req: NextRequest) {
 
   const payload = JSON.parse(rawBody || "{}");
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.execute_user_supplied_config")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.runtime_config_exec")) {
     const transform = String(payload.transform ?? "return payload;");
     const fn = new Function("payload", transform);
     const result = fn(payload);
     return NextResponse.json({ ok: true, transformed: result });
   }
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.missing_integrity_checks")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.integrity_check_skip")) {
     const configUrl = String(payload.configUrl ?? "");
     if (configUrl) {
       await fetch(configUrl);

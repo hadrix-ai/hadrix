@@ -8,25 +8,25 @@
   {
     "category": "A02_Security_Misconfiguration",
     "file": "app/api/debug/route.ts",
-    "description": "Debug endpoint returns headers and environment secrets",
+    "description": "Debug endpoint returns headers and environment details",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "app/api/admin/users/[id]/route.ts",
-    "description": "Sensitive authorization headers logged",
+    "description": "Authorization headers logged",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/supabase.ts",
-    "description": "Over-privileged key usage (anon key used as admin)",
+    "description": "Anon key used for admin-level operations",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/storage.ts",
-    "description": "Public storage bucket configured without access control",
+    "description": "Public storage bucket configured for open access",
     "severity": "medium"
   },
   {

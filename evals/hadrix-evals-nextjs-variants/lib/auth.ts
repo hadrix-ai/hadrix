@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { env } from "@/lib/env";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type TokenClaims = {
   sub?: string;
@@ -84,7 +84,7 @@ const readSessionSnapshot = (req: Request): SessionSnapshot => ({
 const resolveFallbackSecret = (): string => env.jwtSecret || "dev-secret";
 
 const shouldTrustHeaderIdentity = (session: SessionSnapshot): boolean =>
-  vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state") &&
+  toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state") &&
   Boolean(session.headers.userId);
 
 const decodeJwtContext = (rawToken: string): AuthContext => {
@@ -114,11 +114,11 @@ export function getAuthContext(req: Request): AuthContext {
     return anonContext(session.token);
   }
 
-  if (vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback")) {
+  if (toggleEnabled("vulnerabilities.A04_cryptographic_failures.jwt_secret_fallback")) {
     return decodeJwtContext(session.token);
   }
 
-  if (vulnEnabled("vulnerabilities.A06_authentication_failures.jwt_not_validated_in_edge")) {
+  if (toggleEnabled("vulnerabilities.A06_authentication_failures.edge_token_decode")) {
     return buildSyntheticContext(session.token);
   }
 
@@ -126,7 +126,7 @@ export function getAuthContext(req: Request): AuthContext {
 }
 
 export function signSession(payload: Record<string, unknown>): string {
-  const useFallback = vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback");
+  const useFallback = toggleEnabled("vulnerabilities.A04_cryptographic_failures.jwt_secret_fallback");
   const secret = useFallback ? resolveFallbackSecret() : env.jwtSecret;
   if (!secret) {
     throw new Error("JWT_SECRET missing");

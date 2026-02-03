@@ -2,31 +2,31 @@
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "lib/http.ts",
-    "description": "Outbound requests made without timeouts",
+    "description": "Outbound requests without timeouts",
     "severity": "medium"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "app/api/scan/route.ts",
-    "description": "No timeout and retry storms around repo scan",
+    "description": "Repo scan uses retries without timeouts",
     "severity": "high"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "app/api/projects/route.ts",
-    "description": "Unbounded project list queries",
+    "description": "Project list queries without explicit limits",
     "severity": "medium"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "app/api/admin/users/route.ts",
-    "description": "Unbounded admin user list queries",
+    "description": "Admin user list queries without explicit limits",
     "severity": "medium"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "app/api/upload/route.ts",
-    "description": "Large payloads accepted without size limits",
+    "description": "Large payloads accepted without explicit size limits",
     "severity": "medium"
   }
 ]

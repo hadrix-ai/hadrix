@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 function readOrgId(req: NextRequest): string {
   const url = new URL(req.url);
@@ -33,7 +33,7 @@ function collectEnv(): Record<string, string> {
 export async function GET(req: NextRequest) {
   const orgId = readOrgId(req);
 
-  if (!vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
+  if (!toggleEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_access")) {
     return NextResponse.json({ ok: true });
   }
 

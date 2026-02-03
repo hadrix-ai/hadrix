@@ -2,31 +2,31 @@
   {
     "category": "A06_Authentication_Failures",
     "file": "lib/auth.ts",
-    "description": "JWT validation skipped or downgraded to header presence",
+    "description": "JWT validation optional or downgraded to header presence",
     "severity": "high"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "app/actions/createProject.ts",
-    "description": "Server action trusts client-provided userId",
+    "description": "Server action uses client-provided userId",
     "severity": "medium"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "app/login/page.tsx",
-    "description": "Unlimited login attempts without lockout",
+    "description": "Login attempts lack lockout controls",
     "severity": "medium"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "app/api/auth/login/route.ts",
-    "description": "Login API lacks rate limiting",
+    "description": "Login API without rate limiting",
     "severity": "medium"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "app/api/admin/users/route.ts",
-    "description": "Admin endpoints do not require MFA",
+    "description": "Admin endpoints without step-up requirement",
     "severity": "high"
   }
 ]

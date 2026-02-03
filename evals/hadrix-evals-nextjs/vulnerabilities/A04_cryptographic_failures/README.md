@@ -1,21 +1,21 @@
-# A04 — Cryptographic Failures (Orbit Next)
+# A04 — Cryptography Handling Scenarios (Orbit Next)
 
-This fixture models common crypto mistakes in modern apps:
+This fixture models crypto-handling patterns in modern apps:
 
-- Predictable token generation
-- Secrets stored in plaintext database columns
-- Weak/fallback secrets in operational flows (JWTs, webhooks)
-- “Magic link”/session assumptions that ignore expiry
+- Predictable token generation paths
+- Secrets stored directly in database columns
+- Fallback secrets in operational flows (JWTs, webhooks)
+- "Magic link"/session flows that skip expiry checks
 
 ## Where it exists
 
-- Weak/fallback JWT secrets:
-  - `lib/auth.ts` uses fallback secrets and decodes without verification when enabled
-- Insecure token generation:
+- JWT secret fallback:
+  - `lib/auth.ts` uses fallback secrets and can decode without verification when enabled
+- Token generation path:
   - `app/api/tokens/route.ts` and `app/actions/createApiToken.ts` use `Math.random()` + timestamp
-- Plaintext secrets in DB:
+- Direct secret storage in DB:
   - `db/schema.sql` (`api_tokens.token_plaintext`)
-- Magic link expiry ignored:
+- Magic link expiry handling:
   - `app/login/page.tsx`
-- Weak webhook secret fallback:
+- Webhook secret fallback:
   - `app/api/webhook/route.ts`

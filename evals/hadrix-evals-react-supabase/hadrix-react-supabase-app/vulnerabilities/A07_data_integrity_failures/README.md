@@ -1,15 +1,14 @@
-# A07 — Software & Data Integrity Failures (Orbit Projects)
+# A07 — Integrity & Automation Flow Scenarios (Orbit Projects)
 
-This fixture models integrity failures that commonly appear in webhook and automation pipelines:
+This fixture models automation pipeline behaviors that affect data integrity:
 
-- Unsigned webhooks accepted
-- Execution of user-supplied “transform” logic
-- Missing integrity checks around external data ingestion
+- Webhook signature validation optional
+- Execution of user-supplied transform logic
+- External data ingestion with optional verification
 
 ## Where it exists
 
-- Unsigned webhook handling:
-  - `backend/supabase/functions/webhook.ts` can skip signature validation when enabled
+- Webhook signature validation toggle:
+  - `backend/supabase/functions/webhook.ts` can skip signature verification when enabled
 - Executing user-supplied config as code:
   - `backend/supabase/functions/webhook.ts` uses `new Function(...)` when enabled
-

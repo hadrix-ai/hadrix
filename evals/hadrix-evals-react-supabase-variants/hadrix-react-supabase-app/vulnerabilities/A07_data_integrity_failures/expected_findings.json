@@ -2,14 +2,13 @@
   {
     "category": "A07_Software_And_Data_Integrity_Failures",
     "file": "backend/supabase/functions/webhook.ts",
-    "description": "Unsigned webhooks accepted when signature validation is disabled by toggle",
+    "description": "Webhook signature verification toggle allows unverified payloads",
     "severity": "high"
   },
   {
     "category": "A07_Software_And_Data_Integrity_Failures",
     "file": "backend/supabase/functions/webhook.ts",
-    "description": "User-supplied transform executed via new Function (code execution / integrity failure) when toggle enabled",
+    "description": "User-supplied transform logic executed with new Function",
     "severity": "critical"
   }
 ]
-

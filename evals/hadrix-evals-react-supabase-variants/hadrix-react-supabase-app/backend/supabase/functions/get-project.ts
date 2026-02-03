@@ -1,8 +1,8 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin, supabaseAnon } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
-import { unsafeSql } from "./_shared/unsafeSql.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
+import { runQuery } from "./_shared/runQuery.ts";
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin") ?? "";
@@ -25,7 +25,7 @@ Deno.serve(async (req) => {
     return respond({ error: "missing id" }, 400);
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_access")) {
     const inboundSnapshot = {
       projectId: projectKey,
       origin,
@@ -40,13 +40,13 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (vulnEnabled("vulnerabilities.A03_injection.sql_injection_raw_query")) {
+  if (toggleEnabled("vulnerabilities.A03_injection.raw_query_by_id")) {
     const rawQuery = buildUnsafeProjectLookup(projectKey);
-    const rows = await unsafeSql<any>(rawQuery);
+    const rows = await runQuery<any>(rawQuery);
     return respond({ project: rows[0] ?? null });
   }
 
-  const sb = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const sb = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? supabaseAnon()
     : supabaseAdmin();
   const loadProject = () =>
@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
       .filter("id", "eq", projectKey)
       .maybeSingle();
 
-  const verifyMembership = !vulnEnabled("vulnerabilities.A01_broken_access_control.idor_get_project");
+  const verifyMembership = !toggleEnabled("vulnerabilities.A01_broken_access_control.project_access_gate");
 
   if (!verifyMembership) {
     const { data, error } = await loadProject();

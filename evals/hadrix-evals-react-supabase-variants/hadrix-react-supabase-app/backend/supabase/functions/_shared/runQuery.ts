@@ -13,7 +13,7 @@ async function withClient<T>(action: (client: Client) => Promise<T>): Promise<T>
   }
 }
 
-export async function unsafeSql<T = unknown>(sqlText: string): Promise<T[]> {
+export async function runQuery<T = unknown>(sqlText: string): Promise<T[]> {
   return withClient(async (client) => {
     const res = await client.queryObject<T>(sqlText);
     return res.rows;

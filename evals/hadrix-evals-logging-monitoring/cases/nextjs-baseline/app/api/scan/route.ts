@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { NextRequest, NextResponse } from "next/server";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
   const { stdout, stderr } = await execFileAsync("git", ["ls-remote", "--heads", repoUrl]);
   const output = `${stdout}${stderr}`;
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("scan output:", output);
   }
 

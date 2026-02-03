@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const baseClientOptions = () => ({
   auth: { persistSession: false }
@@ -16,7 +16,7 @@ function resolveAdminKey() {
     fallback: env.supabaseAnonKey
   };
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")) {
     return keys.fallback;
   }
 

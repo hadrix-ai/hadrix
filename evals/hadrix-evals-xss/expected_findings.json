@@ -2,37 +2,37 @@
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-baseline/app/projects/[id]/page.tsx",
-    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
+    "description": "dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nextjs-fakeout-1/app/projects/[id]/page.tsx",
-    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html after only stripping script tags",
+    "description": "dangerouslySetInnerHTML renders project.description_html after only stripping script tags",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/supabase-baseline/frontend/app/projects/[id]/page.tsx",
-    "description": "Stored XSS: dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
+    "description": "dangerouslySetInnerHTML renders project.description_html without sanitization when the toggle is enabled",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/brokencrystals-baseline/client/TestimonialCard.tsx",
-    "description": "Stored XSS: dangerouslySetInnerHTML renders testimonial body without sanitization",
+    "description": "dangerouslySetInnerHTML renders testimonial body without sanitization",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nodegoat-baseline/server/routes/search.ts",
-    "description": "Reflected XSS: query string is rendered into an HTML response without sanitization",
+    "description": "Query string is rendered into an HTML response without sanitization",
     "severity": "high"
   },
   {
     "category": "A03_Injection",
     "file": "cases/nodevulnerable-baseline/server/routes/preview.ts",
-    "description": "Reflected XSS: untrusted message content is injected into an HTML response",
+    "description": "Untrusted message content is inserted into an HTML response",
     "severity": "high"
   }
 ]

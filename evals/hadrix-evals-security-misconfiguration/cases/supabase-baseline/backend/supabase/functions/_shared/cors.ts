@@ -1,7 +1,7 @@
-import { vulnEnabled } from "./hadrix.ts";
+import { toggleEnabled } from "./hadrix.ts";
 
 export function corsHeaders(origin?: string): Record<string, string> {
-  const allowAll = vulnEnabled("vulnerabilities.A02_security_misconfiguration.cors_allow_all");
+  const allowAll = toggleEnabled("vulnerabilities.A02_security_misconfiguration.cors_any_origin");
 
   return {
     "access-control-allow-origin": allowAll ? "*" : origin ?? "",
@@ -10,4 +10,3 @@ export function corsHeaders(origin?: string): Record<string, string> {
     "access-control-max-age": "86400"
   };
 }
-

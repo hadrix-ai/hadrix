@@ -1,13 +1,13 @@
 import { env } from "@/env";
 import { supabase } from "@/auth/supabaseClient";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type Json = Record<string, unknown> | Array<unknown> | string | number | boolean | null;
 
 const jsonContentType = "application/json";
 const tokenKeyParts = ["access", "token"];
 const accessTokenKey = tokenKeyParts.join("_");
-const OVERPRIVILEGED_ANON_FLAG = "vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage";
+const OVERPRIVILEGED_ANON_FLAG = "vulnerabilities.A02_security_misconfiguration.anon_key_role_override";
 
 type ClientAuthSnapshot = {
   token: string;
@@ -26,7 +26,7 @@ async function refreshClientAuthSnapshot(): Promise<ClientAuthSnapshot> {
 
 function resolveBearerToken(snapshot: ClientAuthSnapshot): string {
   const { supabaseAnonKey: publicKey } = env;
-  const usePublicKey = vulnEnabled(OVERPRIVILEGED_ANON_FLAG);
+  const usePublicKey = toggleEnabled(OVERPRIVILEGED_ANON_FLAG);
   return usePublicKey ? publicKey : snapshot.token;
 }
 

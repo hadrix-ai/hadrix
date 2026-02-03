@@ -8,7 +8,7 @@
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "app/api/scan/route.ts",
-    "description": "No timeout and retry storms around repo scan",
+    "description": "Repo scan runs without timeouts and can retry repeatedly",
     "severity": "high"
   },
   {

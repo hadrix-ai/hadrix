@@ -1,8 +1,8 @@
-# Enabling / disabling authentication failure fixtures
+# Enabling / disabling session and login fixtures
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A06_authentication_failures.trust_frontend_auth_state`
-- `vulnerabilities.A06_authentication_failures.jwt_not_validated_in_edge`
-- `vulnerabilities.A06_authentication_failures.no_mfa_for_admin`
-- `vulnerabilities.A06_authentication_failures.unlimited_login_attempts`
+- `vulnerabilities.A06_authentication_failures.frontend_session_state`
+- `vulnerabilities.A06_authentication_failures.edge_token_decode`
+- `vulnerabilities.A06_authentication_failures.admin_step_up_flow`
+- `vulnerabilities.A06_authentication_failures.login_attempt_flow`

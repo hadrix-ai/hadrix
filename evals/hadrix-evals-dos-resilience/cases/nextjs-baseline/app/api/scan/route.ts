@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchExternal } from "@/lib/http";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
   await fetchExternal("https://example.com/health");
 
-  const attempts = vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms") ? 3 : 1;
+  const attempts = toggleEnabled("vulnerabilities.A09_dos_and_resilience.extra_retry_rounds") ? 3 : 1;
   const output = await runScan(repoUrl, attempts);
 
   return NextResponse.json({ ok: true, output });

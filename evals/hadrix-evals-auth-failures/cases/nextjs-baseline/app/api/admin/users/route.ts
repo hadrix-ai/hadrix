@@ -9,11 +9,11 @@ export async function GET(req: NextRequest) {
   const auth = getAuthContext(req);
 
   if (!auth.userId) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return NextResponse.json({ error: "request rejected" }, { status: 401 });
   }
 
   if (auth.role !== "admin") {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return NextResponse.json({ error: "request blocked" }, { status: 403 });
   }
 
   const sb = supabaseAdmin();

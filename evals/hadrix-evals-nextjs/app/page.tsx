@@ -8,7 +8,7 @@ export default function HomePage() {
         <a href="/login">Login</a>
       </nav>
       <h1>Orbit Next</h1>
-      <p>Intentionally vulnerable Next.js fixture for Hadrix evals.</p>
+      <p>Next.js evaluation fixture for Hadrix.</p>
       <section>
         <h2>Project tracker</h2>
         <p>Multi-tenant orgs, projects, API tokens, and webhooks.</p>

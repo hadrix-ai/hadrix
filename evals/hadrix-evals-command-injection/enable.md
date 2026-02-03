@@ -1,7 +1,7 @@
-# Enabling / disabling command injection fixtures
+# Enabling / disabling shell-exec fixtures
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A03_injection.command_injection_scan_repo`
+- `vulnerabilities.A03_injection.scan_repo_shell_exec`
 
 This toggle covers the BrokenCrystals, NodeGoat, and NodeVulnerable baselines.

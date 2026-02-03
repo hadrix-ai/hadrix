@@ -2,10 +2,10 @@
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A05_insecure_design.no_rate_limit_sensitive_actions`
-- `vulnerabilities.A05_insecure_design.no_tenant_isolation_by_design`
-- `vulnerabilities.A05_insecure_design.no_separation_of_duties`
-- `vulnerabilities.A05_insecure_design.trust_client_org_id`
-- `vulnerabilities.A05_insecure_design.frontend_direct_db_write`
+- `vulnerabilities.A05_insecure_design.rate_limit_override`
+- `vulnerabilities.A05_insecure_design.org_scope_optional`
+- `vulnerabilities.A05_insecure_design.role_split_skip`
+- `vulnerabilities.A05_insecure_design.client_org_id_source`
+- `vulnerabilities.A05_insecure_design.client_write_flow`
 
-Database-side: see `backend/supabase/migrations/002_rls.sql` for toggleable insecure policies.
+Database-side: see `backend/supabase/migrations/002_rls.sql` for toggleable membership policies.

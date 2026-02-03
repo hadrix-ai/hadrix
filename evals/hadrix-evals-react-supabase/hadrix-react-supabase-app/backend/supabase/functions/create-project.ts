@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(req.headers.get("origin") ?? "") });
@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
   }
 
 
-  if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
+  if (!auth.userId && !toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state")) {
     return new Response(JSON.stringify({ error: "unauthenticated" }), {
       status: 401,
       headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
@@ -30,8 +30,8 @@ Deno.serve(async (req) => {
   }
 
   const trustClientOrgId =
-    vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
-    vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
+    toggleEnabled("vulnerabilities.A01_broken_access_control.client_org_scope_override") ||
+    toggleEnabled("vulnerabilities.A05_insecure_design.client_org_id_source");
 
   const finalOrgId = trustClientOrgId ? orgId : "";
 
@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
     .select("id, org_id, name")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("create-project body:", body);
   }
 

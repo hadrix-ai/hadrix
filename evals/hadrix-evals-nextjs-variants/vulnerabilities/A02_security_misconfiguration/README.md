@@ -1,24 +1,24 @@
-# A02 — Security Misconfiguration (Orbit Next)
+# A02 — Configuration & Exposure (Orbit Next)
 
-This fixture includes common misconfigurations for Next.js fullstack deployments:
+This fixture includes common configuration choices for Next.js fullstack deployments:
 
-- Overly permissive CORS
+- Permissive CORS
 - Debug endpoints enabled in production paths
-- Logging secrets / tokens
-- Over-privileged key usage patterns
+- Logging tokens/headers
+- Elevated key usage patterns
 - Public storage bucket usage
 
 ## Where it exists
 
 - CORS allow-all:
   - `lib/cors.ts`
-- Debug response leaking headers and env:
+- Debug response returns headers and env:
   - `app/api/debug/route.ts`
-- Secrets logged:
+- Tokens logged:
   - `app/api/admin/users/[id]/route.ts`
-- Over-privileged anon key usage:
+- Elevated anon key usage:
   - `lib/supabase.ts`
 - Public storage bucket assumption:
   - `lib/storage.ts`
-- Publicly exposed service role key:
+- Service role key exposed:
   - `lib/env.ts`

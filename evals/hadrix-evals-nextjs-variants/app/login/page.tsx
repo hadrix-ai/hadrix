@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { signSession } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type LoginFormFields = {
   email: string;
@@ -29,7 +29,7 @@ function tryLinkLogin(fields: LoginFormFields): boolean {
   if (!fields.linkCode) {
     return false;
   }
-  if (!vulnEnabled("vulnerabilities.A04_cryptographic_failures.magic_link_no_expiration_assumption")) {
+  if (!toggleEnabled("vulnerabilities.A04_cryptographic_failures.magic_link_time_assumption")) {
     return false;
   }
   const token = signSession({ sub: "link-user", email: fields.email, role: "member" });
@@ -45,7 +45,7 @@ async function submitLogin(formData: FormData) {
   "use server";
   const fields = readLoginForm(formData);
 
-  void vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts");
+  void toggleEnabled("vulnerabilities.A06_authentication_failures.login_attempt_flow");
 
   if (tryLinkLogin(fields)) {
     return;

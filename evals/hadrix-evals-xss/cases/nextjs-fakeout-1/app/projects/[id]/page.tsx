@@ -11,7 +11,7 @@ type Project = {
   description_html: string | null;
 };
 
-function vulnEnabled(path: string): boolean {
+function toggleEnabled(path: string): boolean {
   const parts = path.split(".");
   let current: any = hadrixConfig;
   for (const part of parts) {
@@ -43,8 +43,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   if (error) return <p style={{ color: "#a00" }}>{error}</p>;
   if (!project) return <p>Loading...</p>;
 
-  const useHtml =
-    vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html") && project.description_html;
+  const useHtml = toggleEnabled("vulnerabilities.A03_injection.client_html_render") && project.description_html;
   const html = project.description_html ? stripScriptTags(project.description_html) : "";
 
   return (

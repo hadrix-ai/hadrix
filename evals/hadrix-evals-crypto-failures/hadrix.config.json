@@ -3,9 +3,9 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A04_cryptographic_failures": {
-      "weak_jwt_secret_fallback": true,
-      "insecure_random_tokens": true,
-      "plaintext_tokens_in_db": true
+      "jwt_secret_fallback": true,
+      "token_generation_basic": true,
+      "token_storage_direct": true
     }
   }
 }

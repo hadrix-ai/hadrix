@@ -3,7 +3,7 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A01_broken_access_control": {
-      "frontend_only_role_enforcement": true
+      "client_role_gate": true
     }
   }
 }

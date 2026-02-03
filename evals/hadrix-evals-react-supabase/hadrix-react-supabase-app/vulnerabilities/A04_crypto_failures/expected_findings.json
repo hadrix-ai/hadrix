@@ -2,26 +2,25 @@
   {
     "category": "A04_Cryptographic_Failures",
     "file": "backend/supabase/functions/create-api-token.ts",
-    "description": "Insecure token generation using Math.random + timestamp",
+    "description": "Token generation uses Math.random and timestamp",
     "severity": "high"
   },
   {
     "category": "A04_Cryptographic_Failures",
     "file": "backend/supabase/migrations/001_schema.sql",
-    "description": "Plaintext secret storage: api_tokens.token_plaintext column stores tokens unencrypted/unsalted",
+    "description": "Token column stored as direct text in schema",
     "severity": "high"
   },
   {
     "category": "A04_Cryptographic_Failures",
     "file": "backend/supabase/migrations/003_seeds.sql",
-    "description": "Plaintext tokens seeded into database",
+    "description": "Token examples stored as direct text in seed data",
     "severity": "medium"
   },
   {
     "category": "A04_Cryptographic_Failures",
     "file": "backend/supabase/functions/webhook.ts",
-    "description": "Weak/fallback secret value ('dev-secret') used for webhook signature flow",
+    "description": "Webhook signature verification uses fallback secret value ('dev-secret')",
     "severity": "medium"
   }
 ]
-

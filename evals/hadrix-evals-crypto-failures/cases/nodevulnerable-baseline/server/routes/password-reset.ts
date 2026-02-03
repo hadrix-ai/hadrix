@@ -4,7 +4,7 @@ type Db = {
   query: (sql: string, params: unknown[]) => Promise<unknown>;
 };
 
-function weakResetToken(userId: string) {
+function seededResetToken(userId: string) {
   const seed = `${userId}:${Date.now()}:${Math.random()}`;
   return Buffer.from(seed).toString("base64url");
 }
@@ -17,10 +17,10 @@ export async function requestPasswordReset(req: Request, res: Response) {
     return;
   }
 
-  const token = weakResetToken(userId);
+  const token = seededResetToken(userId);
   const db = req.app.get("db") as Db;
   await db.query(
-    "insert into password_resets (user_id, token_plaintext) values ($1, $2)",
+    "insert into password_resets (user_id, token_value) values ($1, $2)",
     [userId, token]
   );
 

@@ -2,20 +2,19 @@
   {
     "category": "A06_Authentication_Failures",
     "file": "backend/supabase/functions/_shared/auth.ts",
-    "description": "JWT validation bypass: auth context created from presence of Authorization header when toggle enabled",
+    "description": "JWT validation optional or downgraded to header presence when toggle enabled",
     "severity": "critical"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "frontend/utils/api.ts",
-    "description": "Trusting frontend session state; can send requests with empty/forged access tokens depending on toggles",
+    "description": "Frontend session state used to populate access tokens depending on toggles",
     "severity": "high"
   },
   {
     "category": "A06_Authentication_Failures",
     "file": "frontend/app/login/page.tsx",
-    "description": "Unlimited login attempts: no lockout/rate limiting UX for password login",
+    "description": "Login attempts lack lockout controls",
     "severity": "medium"
   }
 ]
-

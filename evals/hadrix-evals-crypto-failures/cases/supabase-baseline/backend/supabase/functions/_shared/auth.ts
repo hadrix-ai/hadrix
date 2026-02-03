@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { vulnEnabled } from "./hadrix.ts";
+import { toggleEnabled } from "./hadrix.ts";
 
 export type AuthContext = {
   userId: string | null;
@@ -18,7 +18,7 @@ export async function getAuthContext(req: Request): Promise<AuthContext> {
   const authHeader = req.headers.get("authorization");
   const rawToken = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
 
-  if (rawToken && vulnEnabled("vulnerabilities.A04_cryptographic_failures.weak_jwt_secret_fallback")) {
+  if (rawToken && toggleEnabled("vulnerabilities.A04_cryptographic_failures.jwt_secret_fallback")) {
     const jwtSecret = Deno.env.get("JWT_SECRET") ?? "changeme";
     console.log("jwt secret (fallback):", jwtSecret);
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signSession } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type LoginPayload = {
   email: string;
@@ -35,7 +35,7 @@ function hasLoginFields(payload: LoginPayload): boolean {
 export async function POST(req: NextRequest) {
   const payload = parseLoginPayload(await readJsonPayload(req));
 
-  void vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts");
+  void toggleEnabled("vulnerabilities.A06_authentication_failures.login_attempt_flow");
 
   if (!hasLoginFields(payload)) {
     return NextResponse.json({ error: "missing credentials" }, { status: 400 });

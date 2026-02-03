@@ -1,4 +1,4 @@
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type BucketConfig = {
   name: string;
@@ -13,11 +13,11 @@ const bucketOptions: Record<BucketConfig["access"], BucketConfig> = {
 const publicBucketToggle = [
   "vulnerabilities",
   "A02_security_misconfiguration",
-  "public_storage_bucket",
+  "storage_bucket_open_access",
 ].join(".");
 
 function getBucketAccess(): BucketConfig["access"] {
-  return vulnEnabled(publicBucketToggle) ? "public" : "private";
+  return toggleEnabled(publicBucketToggle) ? "public" : "private";
 }
 
 export function getBucketName(): string {

@@ -1,12 +1,12 @@
 "use server";
 
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const readFormValue = (formData: FormData, key: string) => String(formData.get(key) ?? "");
 const shouldUseRequestedOrg = () =>
-  vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
-  vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
+  toggleEnabled("vulnerabilities.A01_broken_access_control.client_org_scope_override") ||
+  toggleEnabled("vulnerabilities.A05_insecure_design.client_org_id_source");
 const readClientSession = (formData: FormData) => ({
   userId: readFormValue(formData, "userId")
 });
@@ -23,7 +23,7 @@ export async function createProjectAction(formData: FormData) {
 
   if (!projectDraft.projectName) return;
 
-  if (!clientSession.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
+  if (!clientSession.userId && !toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state")) {
     return;
   }
 

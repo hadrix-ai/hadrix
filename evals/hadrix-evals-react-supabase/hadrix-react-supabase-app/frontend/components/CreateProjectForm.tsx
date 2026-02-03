@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { callEdgeFunction } from "@/utils/api";
 import { supabase } from "@/auth/supabaseClient";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type CreatedProject = { id: string; name: string; org_id: string | null };
 
@@ -18,7 +18,7 @@ export function CreateProjectForm({ onCreated }: { onCreated?: (p: CreatedProjec
     e.preventDefault();
     setStatus("Creating...");
     try {
-      if (vulnEnabled("vulnerabilities.A05_insecure_design.frontend_direct_db_write")) {
+      if (toggleEnabled("vulnerabilities.A05_insecure_design.client_write_flow")) {
         const { data, error } = await supabase.from("projects").insert({
           name,
           org_id: orgId,
@@ -46,7 +46,7 @@ export function CreateProjectForm({ onCreated }: { onCreated?: (p: CreatedProjec
     }
   }
 
-  const showHtmlField = vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html");
+  const showHtmlField = toggleEnabled("vulnerabilities.A03_injection.client_html_render");
 
   return (
     <form onSubmit={onSubmit} style={{ display: "grid", gap: 8, padding: 12, border: "1px solid #eee" }}>
@@ -60,7 +60,7 @@ export function CreateProjectForm({ onCreated }: { onCreated?: (p: CreatedProjec
       />
       {showHtmlField ? (
         <textarea
-          placeholder="Description HTML (rendered unsafely when enabled)"
+          placeholder="Description HTML (rendered when enabled)"
           value={descriptionHtml}
           onChange={(e) => setDescriptionHtml(e.target.value)}
         />

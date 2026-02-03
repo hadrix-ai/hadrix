@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 const weakEntropySource: () => number = Math["random"];
 
@@ -59,11 +59,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  const useLegacyTokens = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens");
+  const useLegacyTokens = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_generation_basic");
   const token = useLegacyTokens ? legacyToken() : secureToken();
   const sb = supabaseAdmin();
 
-  const storePlaintext = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db");
+  const storePlaintext = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_storage_direct");
   const storedValue = storePlaintext ? token : await sha256Hex(token);
   const secretPayload = { material: storedValue };
 
@@ -73,7 +73,7 @@ Deno.serve(async (req) => {
     .select("id, user_id, secret_payload, created_at")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("issued token:", token);
   }
 

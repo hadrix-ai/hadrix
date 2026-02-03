@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin") ?? "";
@@ -15,12 +15,12 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders(origin), "content-type": "application/json" }
     });
 
-  const requireAdmin = !vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check");
+  const requireAdmin = !toggleEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_role_header");
   if (requireAdmin && auth.role !== "admin") {
     return respond({ error: "forbidden" }, 403);
   }
 
-  const unbounded = vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries");
+  const unbounded = toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override");
   const applyBounds = (query: any, maxRows: number) => {
     if (unbounded) return query;
     const endIndex = Math.max(0, maxRows - 1);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type ProjectRecord = {
   id: string;
@@ -46,7 +46,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
 
   const view = toProjectView(project);
   const showRichText =
-    vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html") && view.richText;
+    toggleEnabled("vulnerabilities.A03_injection.client_html_render") && view.richText;
   const richTextMarkup = { __html: view.richText };
 
   return (

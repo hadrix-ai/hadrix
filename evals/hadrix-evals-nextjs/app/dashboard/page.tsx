@@ -1,6 +1,6 @@
 import { createProjectAction } from "@/app/actions/createProject";
 import { createApiTokenAction } from "@/app/actions/createApiToken";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { ClientCreateProject } from "@/components/ClientCreateProject";
 
 async function getProjects(orgId: string) {
@@ -25,7 +25,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
 
   const projects = Array.isArray(data.projects) ? data.projects : [];
 
-  const showAllOrgs = vulnEnabled("vulnerabilities.A05_insecure_design.no_tenant_isolation_by_design");
+  const showAllOrgs = toggleEnabled("vulnerabilities.A05_insecure_design.org_scope_optional");
 
   return (
     <main>
@@ -57,8 +57,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
             <textarea name="description" />
           </label>
           <label>
-            Description HTML (unsafe)
-            <textarea name="descriptionHtml" placeholder="<b>Stored XSS</b>" />
+            Description HTML (rich text)
+            <textarea name="descriptionHtml" placeholder="<b>Project update</b>" />
           </label>
           <button type="submit">Create</button>
         </form>

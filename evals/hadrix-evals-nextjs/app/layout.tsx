@@ -2,7 +2,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Orbit Next",
-  description: "Intentionally vulnerable Next.js fixture for Hadrix evals."
+  description: "Next.js evaluation fixture for Hadrix."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
@@ -27,7 +27,7 @@ export function ClientCreateProject() {
     e.preventDefault();
     setStatus("Creating...");
     try {
-      if (vulnEnabled("vulnerabilities.A05_insecure_design.frontend_direct_db_write")) {
+      if (toggleEnabled("vulnerabilities.A05_insecure_design.client_write_flow")) {
         const { data, error } = await supabase.from("projects").insert({
           name,
           org_id: orgId,

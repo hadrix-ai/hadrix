@@ -2,20 +2,19 @@
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "backend/supabase/functions/scan-repo.ts",
-    "description": "No timeouts on shell execution + retry storm behavior on failures when toggle enabled",
+    "description": "Shell execution runs without timeouts and adds retry rounds when toggle enabled",
     "severity": "high"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "backend/supabase/functions/list-projects.ts",
-    "description": "Unbounded DB query risk when toggle enabled (no limit applied)",
+    "description": "Project list query without explicit limits when toggle enabled",
     "severity": "medium"
   },
   {
     "category": "A09_Denial_Of_Service_And_Resilience",
     "file": "backend/supabase/functions/admin-list-users.ts",
-    "description": "Unbounded user listing query when toggle enabled (no limit applied)",
+    "description": "Admin user list query without explicit limits when toggle enabled",
     "severity": "medium"
   }
 ]
-

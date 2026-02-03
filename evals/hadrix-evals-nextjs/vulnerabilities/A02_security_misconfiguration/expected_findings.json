@@ -2,37 +2,37 @@
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/cors.ts",
-    "description": "CORS allow-all configuration",
+    "description": "CORS configured for allow-all",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "app/api/debug/route.ts",
-    "description": "Debug endpoint returns headers and environment secrets",
+    "description": "Debug endpoint returns headers and environment values",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "app/api/admin/users/[id]/route.ts",
-    "description": "Sensitive authorization headers logged",
+    "description": "Authorization headers logged",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/supabase.ts",
-    "description": "Over-privileged key usage (anon key used as admin)",
+    "description": "Anon key used in admin-capable context",
     "severity": "high"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/storage.ts",
-    "description": "Public storage bucket configured without access control",
+    "description": "Storage bucket configured for public access",
     "severity": "medium"
   },
   {
     "category": "A02_Security_Misconfiguration",
     "file": "lib/env.ts",
-    "description": "Service role key exposed via NEXT_PUBLIC environment variable",
+    "description": "Service role key placed in NEXT_PUBLIC environment variable",
     "severity": "high"
   }
 ]

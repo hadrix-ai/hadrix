@@ -1,23 +1,22 @@
-# A02 — Security Misconfiguration (Orbit Projects)
+# A02 — Deployment Configuration Scenarios (Orbit Projects)
 
-This fixture includes common misconfigurations for Supabase + Edge Functions + Next.js deployments:
+This fixture includes configuration patterns common in Supabase + Edge Functions + Next.js deployments:
 
-- Overly permissive CORS
+- Broad CORS settings
 - Debug endpoints enabled in production paths
-- Logging secrets / tokens
-- Over-privileged key usage patterns (anon key used like a privileged credential)
+- Header/context logging
+- Admin-capable key usage patterns (anon key used like a privileged credential)
 - Public data surfaces (webhook event logs, storage buckets)
 
 ## Where it exists
 
-- CORS allow-all:
+- CORS allow-all configuration:
   - `backend/supabase/functions/_shared/cors.ts`
-- Debug response leaking headers and auth context:
+- Debug response includes headers and request context:
   - `backend/supabase/functions/get-project.ts`
-- Secrets logged:
+- Request headers logged:
   - `backend/supabase/functions/admin-delete-user.ts`
-- Over-privileged anon key usage:
+- Admin-capable anon key usage:
   - `frontend/utils/api.ts`
 - Public operational logs via RLS policy:
   - `backend/supabase/migrations/002_rls.sql` (`webhook_events_select_public`)
-

@@ -2,7 +2,7 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "app/api/webhook/route.ts",
-    "description": "Unsigned webhooks accepted and signature verification can be skipped",
+    "description": "Webhook signature verification toggle allows unverified payloads",
     "severity": "high"
   },
   {
@@ -14,7 +14,7 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "app/api/webhook/route.ts",
-    "description": "External config fetched without integrity checks",
+    "description": "External config fetched without verification",
     "severity": "medium"
   }
 ]

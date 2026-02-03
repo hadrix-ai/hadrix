@@ -15,7 +15,7 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const unsafeOrFilter = String((body as any).or ?? "");
+  const orFilter = String((body as any).or ?? "");
 
   const sb = supabaseAdmin();
   const { data: memberships } = await sb.from("org_members").select("org_id").eq("user_id", auth.userId);
@@ -27,8 +27,8 @@ Deno.serve(async (req) => {
     .in("org_id", orgIds)
     .order("created_at", { ascending: false });
 
-  if (unsafeOrFilter) {
-    query = query.or(unsafeOrFilter);
+  if (orFilter) {
+    query = query.or(orFilter);
   }
 
   const { data, error } = await query.limit(50);

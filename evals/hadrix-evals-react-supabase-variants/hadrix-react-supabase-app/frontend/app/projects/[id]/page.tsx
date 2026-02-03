@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { callEdgeFunction } from "@/utils/api";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type ProjectRecord = {
   id: string;
@@ -47,7 +47,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   if (!project) return <p>Loading...</p>;
 
   const view = toProjectView(project);
-  const useHtml = vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html") && view.richText;
+  const useHtml = toggleEnabled("vulnerabilities.A03_injection.client_html_render") && view.richText;
 
   return (
     <main>

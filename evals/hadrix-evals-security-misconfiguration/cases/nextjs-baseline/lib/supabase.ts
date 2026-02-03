@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export function supabaseAnon() {
   return createClient(env.supabaseUrl, env.supabaseAnonKey, {
@@ -9,7 +9,7 @@ export function supabaseAnon() {
 }
 
 export function supabaseAdmin() {
-  const key = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const key = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? env.supabaseAnonKey
     : env.supabaseServiceRoleKey;
 

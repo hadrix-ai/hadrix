@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { callEdgeFunction } from "@/utils/api";
 import { supabase } from "@/auth/supabaseClient";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type AdminUser = {
   id: string;
@@ -23,7 +23,7 @@ export function AdminUsers() {
         const { data } = await supabase.auth.getUser();
         const role = (data.user?.user_metadata as any)?.role ?? "member";
 
-        if (vulnEnabled("vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement") && role !== "admin") {
+        if (toggleEnabled("vulnerabilities.A01_broken_access_control.client_role_gate") && role !== "admin") {
           setError("You are not an admin (client-side check).");
           return;
         }
@@ -63,9 +63,8 @@ export function AdminUsers() {
         ))}
       </ul>
       <p style={{ color: "#777" }}>
-        Admin actions are intentionally unsafe depending on toggles.
+        Admin actions vary based on feature toggles.
       </p>
     </section>
   );
 }
-

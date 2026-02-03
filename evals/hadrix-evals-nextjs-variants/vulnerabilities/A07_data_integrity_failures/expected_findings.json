@@ -2,7 +2,7 @@
   {
     "category": "A07_Software_Data_Integrity_Failures",
     "file": "app/api/webhook/route.ts",
-    "description": "Unsigned webhooks accepted and signature verification can be skipped",
+    "description": "Webhook requests accepted when signature verification is skipped",
     "severity": "high"
   },
   {

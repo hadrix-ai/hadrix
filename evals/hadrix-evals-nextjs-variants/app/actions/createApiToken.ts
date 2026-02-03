@@ -1,7 +1,7 @@
 "use server";
 
 import { createHash } from "crypto";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const buildActionStamp = (userId: string, label: string) =>
@@ -23,11 +23,11 @@ export async function createApiTokenAction(formData: FormData) {
     new Date().toISOString().slice(0, 13)
   ].join(":");
 
-  const token = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens")
+  const token = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_generation_basic")
     ? `tok_${createHash("sha256").update(tokenSeed).digest("hex").slice(0, 24)}`
     : "placeholder-token";
 
-  const secretPayload = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db")
+  const secretPayload = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_storage_direct")
     ? { material: token }
     : null;
 

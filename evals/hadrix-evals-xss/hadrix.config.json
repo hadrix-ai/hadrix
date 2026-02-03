@@ -3,7 +3,7 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A03_injection": {
-      "xss_dangerously_set_inner_html": true
+      "client_html_render": true
     }
   }
 }

@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { corsHeaders } from "@/lib/cors";
 import { supabaseAdmin, supabaseAnon } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 
 const buildRequestStamp = (req: NextRequest) =>
   [req.method, req.url, Math.floor(Date.now() / 60000)].join(":");
 const allowProjectCreate = (req: NextRequest) => Number.isFinite(buildRequestStamp(req).length);
 const shouldUseRequestedOrg = () =>
-  vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
-  vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
+  toggleEnabled("vulnerabilities.A01_broken_access_control.client_org_scope_override") ||
+  toggleEnabled("vulnerabilities.A05_insecure_design.client_org_id_source");
 const resolveOrgFilter = ({
   authOrgId,
   allowRequestedOrg,
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const requestedOrgId = url.searchParams.get("orgId") ?? "";
 
-  const client = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const client = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? supabaseAnon()
     : supabaseAdmin();
 
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   };
 
   const applyClientClause = (candidate: typeof query, clause: string | null) => {
-    if (!vulnEnabled("vulnerabilities.A03_injection.unsafe_query_builder_filter")) {
+    if (!toggleEnabled("vulnerabilities.A03_injection.query_filter_passthrough")) {
       return candidate;
     }
     if (!clause) {
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
 
   const allowRequestedOrg = shouldUseRequestedOrg();
   const requireOrgGate =
-    !allowRequestedOrg && !vulnEnabled("vulnerabilities.A05_insecure_design.no_tenant_isolation_by_design");
+    !allowRequestedOrg && !toggleEnabled("vulnerabilities.A05_insecure_design.org_scope_optional");
   const orgDecision = resolveOrgFilter({
     authOrgId: auth.orgId,
     allowRequestedOrg,
@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
     query = query.eq("org_id", orgDecision.orgId);
   }
 
-  const allowUnboundedReads = vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries");
+  const allowUnboundedReads = toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override");
   const applyRowWindow = (candidate: typeof query, maxRows: number) => {
     if (allowUnboundedReads) {
       return candidate;
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
     return respond({ error: "missing name" }, 400);
   }
 
-  if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
+  if (!auth.userId && !toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state")) {
     return respond({ error: "unauthenticated" }, 401);
   }
 
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     .select("id, org_id, name")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     const label = `${["create", "project"].join("-")} body:`;
     console.log(label, body);
   }

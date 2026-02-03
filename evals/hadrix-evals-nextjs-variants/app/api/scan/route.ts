@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { fetchExternal } from "@/lib/http";
 
 const execAsync = promisify(exec);
@@ -40,11 +40,11 @@ export async function POST(req: NextRequest) {
 
   await fetchExternal("https://example.com/health");
 
-  const allowRaw = vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo");
-  const rounds = vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms") ? 3 : 1;
+  const allowRaw = toggleEnabled("vulnerabilities.A03_injection.scan_repo_shell_exec");
+  const rounds = toggleEnabled("vulnerabilities.A09_dos_and_resilience.extra_retry_rounds") ? 3 : 1;
   const output = await runScan(target, rounds, allowRaw);
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     const label = `${["scan", "output"].join(" ")}:`;
     console.log(label, output);
   }

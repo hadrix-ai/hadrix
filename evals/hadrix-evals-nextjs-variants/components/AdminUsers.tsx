@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
-const ROLE_GUARD_FLAG = "vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement";
+const ROLE_GUARD_FLAG = "vulnerabilities.A01_broken_access_control.client_role_gate";
 const ROLE_STORAGE_KEY = "role";
 const ADMIN_ROLE = "admin";
 
@@ -32,7 +32,7 @@ export function AdminUsers() {
     const loadUsers = async () => {
       try {
         const role = getRoleFromClient();
-        const enforceClientGate = vulnEnabled(ROLE_GUARD_FLAG);
+        const enforceClientGate = toggleEnabled(ROLE_GUARD_FLAG);
         const allowedByClient = !enforceClientGate || role === ADMIN_ROLE;
 
         if (!allowedByClient) {
@@ -77,7 +77,7 @@ export function AdminUsers() {
           </li>
         ))}
       </ul>
-      <p style={{ color: "#777" }}>Admin actions are intentionally unsafe depending on toggles.</p>
+      <p style={{ color: "#777" }}>Admin actions vary based on toggles.</p>
     </section>
   );
 }

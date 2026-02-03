@@ -3,9 +3,9 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A07_software_data_integrity_failures": {
-      "unsigned_webhooks": true,
-      "execute_user_supplied_config": true,
-      "missing_integrity_checks": true
+      "webhook_signature_skip": true,
+      "runtime_config_exec": true,
+      "integrity_check_skip": true
     }
   }
 }

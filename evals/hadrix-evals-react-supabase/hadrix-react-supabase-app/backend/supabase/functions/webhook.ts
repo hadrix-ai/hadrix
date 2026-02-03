@@ -1,6 +1,6 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 function timingSafeEqual(a: string, b: string) {
   if (a.length !== b.length) return false;
@@ -16,7 +16,7 @@ Deno.serve(async (req) => {
   const signature = req.headers.get("x-webhook-signature") ?? "";
   const secret = Deno.env.get("WEBHOOK_SECRET") ?? "dev-secret";
 
-  const requireSig = !vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.unsigned_webhooks");
+  const requireSig = !toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.webhook_signature_skip");
   if (requireSig) {
     const expected = await crypto.subtle
       .digest("SHA-256", new TextEncoder().encode(`${secret}.${raw}`))
@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
     raw_payload: payload
   });
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.execute_user_supplied_config")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.runtime_config_exec")) {
     const transform = String(payload.transform ?? "");
     if (transform) {
       // eslint-disable-next-line no-new-func

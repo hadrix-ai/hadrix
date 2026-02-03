@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin") ?? "";
@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
 
   const sb = supabaseAdmin();
 
-  const unbounded = vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries");
+  const unbounded = toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override");
   const applyBounds = (query: any, maxRows: number) => {
     if (unbounded) return query;
     const endIndex = Math.max(0, maxRows - 1);
@@ -25,9 +25,9 @@ Deno.serve(async (req) => {
   };
 
   const allowClientScope =
-    vulnEnabled("vulnerabilities.A01_broken_access_control.cross_org_leakage_trusting_org_id") ||
-    vulnEnabled("vulnerabilities.A05_insecure_design.no_tenant_isolation_by_design") ||
-    vulnEnabled("vulnerabilities.A05_insecure_design.trust_client_org_id");
+    toggleEnabled("vulnerabilities.A01_broken_access_control.client_org_scope_override") ||
+    toggleEnabled("vulnerabilities.A05_insecure_design.org_scope_optional") ||
+    toggleEnabled("vulnerabilities.A05_insecure_design.client_org_id_source");
 
   const respond = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), {
@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
       .eq("org_id", scopeKey)
       .order("created_at", { ascending: false });
 
-    if (vulnEnabled("vulnerabilities.A03_injection.unsafe_query_builder_filter") && clientOrFilter) {
+    if (toggleEnabled("vulnerabilities.A03_injection.query_filter_passthrough") && clientOrFilter) {
       q = q.or(clientOrFilter);
     }
 

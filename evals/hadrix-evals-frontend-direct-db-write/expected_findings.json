@@ -2,25 +2,25 @@
   {
     "category": "A05_Insecure_Design",
     "file": "cases/nextjs-baseline/components/ClientCreateProject.tsx",
-    "description": "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+    "description": "Client component writes to Supabase from the browser; expected flow is to route writes through an edge/API layer with row-level policies.",
     "severity": "medium"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "cases/nextjs-fakeout-1/components/ClientCreateProject.tsx",
-    "description": "Frontend performs direct Supabase writes after a client-side preflight; the write still happens in the browser without server/edge gating.",
+    "description": "Client component runs a browser preflight then writes to Supabase from the browser; expected flow is edge/API mediated.",
     "severity": "medium"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "cases/supabase-baseline/frontend/components/CreateProjectForm.tsx",
-    "description": "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+    "description": "Client component writes to Supabase from the browser; expected flow is to route writes through an edge/API layer with row-level policies.",
     "severity": "medium"
   },
   {
     "category": "A05_Insecure_Design",
     "file": "cases/brokencrystals-baseline/components/ClientCreateOrder.tsx",
-    "description": "Frontend performs direct Supabase writes without server/edge gating; enforce RLS and move writes behind edge/API functions.",
+    "description": "Client component writes to Supabase from the browser; expected flow is to route writes through an edge/API layer with row-level policies.",
     "severity": "medium"
   }
 ]

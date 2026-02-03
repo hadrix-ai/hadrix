@@ -1,21 +1,21 @@
-# A03 — Injection (Orbit Next)
+# A03 — Input Handling Paths (Orbit Next)
 
-The fixture includes injection issues spanning:
+The fixture includes input-handling behaviors spanning:
 
 - Raw SQL execution
-- Unsafe query-string composition in Supabase client filters
-- Command injection in a repo scanning feature
-- Stored XSS from HTML content rendering
+- Query-string composition in Supabase client filters
+- Shell command assembly in a repo scanning feature
+- HTML content rendering from stored data
 
 ## Where it exists
 
-- SQL injection (raw query concatenation):
+- Raw SQL query concatenation:
   - `app/api/projects/[id]/route.ts`
-  - `lib/unsafeSql.ts`
-- Unsafe query builder filter injection:
+  - `lib/runQuery.ts`
+- Query builder filter passthrough:
   - `app/api/projects/route.ts` uses a client-supplied `.or()` string when enabled
-- Command injection:
+- Shell command assembly:
   - `app/api/scan/route.ts`
-- Stored XSS:
+- HTML rendering from stored content:
   - `app/projects/[id]/page.tsx` renders `description_html` via `dangerouslySetInnerHTML` when enabled
   - Seed payload in `db/seeds.sql`

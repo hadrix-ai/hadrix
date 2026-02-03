@@ -25,7 +25,7 @@
     {
       "schemaname": "storage",
       "tablename": "objects",
-      "policyname": "public_read",
+      "policyname": "storage_select_policy",
       "permissive": true,
       "roles": "{public}",
       "cmd": "SELECT",

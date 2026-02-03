@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const projectColumns = "id, org_id, name, description, description_html";
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     .select("id, org_id, name")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("create-project body:", body);
   }
 

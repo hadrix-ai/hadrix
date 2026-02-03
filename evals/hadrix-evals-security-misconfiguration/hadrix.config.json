@@ -3,10 +3,10 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A02_security_misconfiguration": {
-      "cors_allow_all": true,
-      "debug_endpoint_enabled": true,
-      "overprivileged_anon_key_usage": true,
-      "public_storage_bucket": true
+      "cors_any_origin": true,
+      "debug_endpoint_access": true,
+      "anon_key_role_override": true,
+      "storage_bucket_open_access": true
     }
   }
 }

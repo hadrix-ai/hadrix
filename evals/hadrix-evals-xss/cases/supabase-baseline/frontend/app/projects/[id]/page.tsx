@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { callEdgeFunction } from "@/utils/api";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type Project = {
   id: string;
@@ -30,8 +30,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   if (error) return <p style={{ color: "#a00" }}>{error}</p>;
   if (!project) return <p>Loading...</p>;
 
-  const useHtml =
-    vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html") && project.description_html;
+  const useHtml = toggleEnabled("vulnerabilities.A03_injection.client_html_render") && project.description_html;
 
   return (
     <main>
@@ -46,4 +45,3 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
     </main>
   );
 }
-

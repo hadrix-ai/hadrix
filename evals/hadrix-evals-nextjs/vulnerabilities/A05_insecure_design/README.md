@@ -1,21 +1,21 @@
-# A05 — Insecure Design (Orbit Next)
+# A05 — Design-Level Control Scenarios (Orbit Next)
 
-This category focuses on design-level weaknesses that lead to systemic issues:
+This category focuses on design-level tradeoffs that shape system behavior:
 
-- Tenant isolation relies on client-provided identifiers
-- Sensitive actions lack rate limiting by design
-- No separation of duties (membership changes can be self-served)
+- Org scoping relies on client-provided identifiers
+- Rate limiting omitted in baseline flows
+- Membership changes are self-served in the same role
 
 ## Where it exists
 
-- Trust client orgId to route writes/reads:
+- Client orgId used to route writes/reads:
   - `app/api/projects/route.ts`
   - `app/actions/createProject.ts`
-- No rate limiting on sensitive actions:
+- Rate limiting omitted for project and token creation:
   - `app/api/projects/route.ts`
   - `app/api/tokens/route.ts`
   - `app/actions/createApiToken.ts`
-- No tenant isolation by design:
+- Org scoping in dashboard:
   - `app/dashboard/page.tsx`
-- No separation of duties:
+- Membership changes are self-served:
   - `app/api/orgs/members/route.ts`

@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getAuthContext } from "@/lib/auth";
 
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   const auth = getAuthContext(req);
   const body = await req.json().catch(() => ({}));
 
-  if (!auth.userId && !vulnEnabled("vulnerabilities.A06_authentication_failures.trust_frontend_auth_state")) {
+  if (!auth.userId && !toggleEnabled("vulnerabilities.A06_authentication_failures.frontend_session_state")) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
@@ -26,11 +26,11 @@ export async function POST(req: NextRequest) {
     new Date().toISOString().slice(0, 13)
   ].join(":");
 
-  const token = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens")
+  const token = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_generation_basic")
     ? `tok_${createHash("sha256").update(tokenSeed).digest("hex").slice(0, 24)}`
     : "placeholder-token";
 
-  const secretPayload = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db")
+  const secretPayload = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_storage_direct")
     ? { material: token }
     : null;
 
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     secret_payload: secretPayload
   });
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     const label = `${["api", "token"].join(" ")}:`;
     console.log(label, token);
   }

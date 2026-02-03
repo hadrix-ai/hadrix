@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin") ?? "";
@@ -27,20 +27,20 @@ Deno.serve(async (req) => {
     return respond({ error: "missing userId" }, 400);
   }
 
-  const requireAdmin = !vulnEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check");
+  const requireAdmin = !toggleEnabled("vulnerabilities.A01_broken_access_control.admin_endpoint_role_header");
   if (requireAdmin && auth.role !== "admin") {
     return respond({ error: "forbidden" }, 403);
   }
 
   const sb = supabaseAdmin();
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.log_secrets")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.log_request_headers")) {
     const envKey = ["SUPABASE", "SERVICE", "ROLE", "KEY"].join("_");
     const label = ["service", "role", "key:"].join(" ");
     console.log(label, Deno.env.get(envKey));
   }
 
-  const shouldRecordAudit = !vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.no_audit_logs");
+  const shouldRecordAudit = !toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.audit_log_skip");
   const recordAdminDelete = async () => {
     if (!shouldRecordAudit) return;
     await sb.from("audit_logs").insert({

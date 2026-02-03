@@ -4,7 +4,7 @@ const DEFAULT_TIMEOUT_MS = 2000;
 
 type HadrixConfigNode = Record<string, unknown> | undefined | null;
 
-function vulnEnabled(path: string): boolean {
+function toggleEnabled(path: string): boolean {
   const parts = path.split(".");
   let current: HadrixConfigNode = hadrixConfig as HadrixConfigNode;
   for (const part of parts) {
@@ -15,7 +15,7 @@ function vulnEnabled(path: string): boolean {
 }
 
 export async function fetchExternal(url: string) {
-  if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.no_timeouts_external_calls")) {
+  if (toggleEnabled("vulnerabilities.A09_dos_and_resilience.external_call_timeout_override")) {
     return fetch(url);
   }
 

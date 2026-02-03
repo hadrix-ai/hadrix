@@ -1,7 +1,7 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin, supabaseAnon } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(req.headers.get("origin") ?? "") });
@@ -17,7 +17,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_access")) {
     return new Response(
       JSON.stringify({
         debug: true,
@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
     );
   }
 
-  const sb = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const sb = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? supabaseAnon()
     : supabaseAdmin();
 

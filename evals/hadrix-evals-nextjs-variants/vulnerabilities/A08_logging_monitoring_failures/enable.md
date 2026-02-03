@@ -1,8 +1,8 @@
-# Enabling / disabling A08
+# Toggles for A08
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A08_logging_monitoring_failures.no_audit_logs`
-- `vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs`
-- `vulnerabilities.A08_logging_monitoring_failures.no_alerts_for_privilege_escalation`
-- `vulnerabilities.A08_logging_monitoring_failures.logs_retention_too_short`
+- `vulnerabilities.A08_logging_monitoring_failures.audit_log_skip`
+- `vulnerabilities.A08_logging_monitoring_failures.log_extended_details`
+- `vulnerabilities.A08_logging_monitoring_failures.admin_action_alerts_skip`
+- `vulnerabilities.A08_logging_monitoring_failures.log_retention_override`

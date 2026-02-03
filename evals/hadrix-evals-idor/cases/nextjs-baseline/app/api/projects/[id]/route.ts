@@ -13,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const auth = getAuthContext(req);
   if (!auth.userId) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    return NextResponse.json({ error: "request rejected" }, { status: 401 });
   }
 
   const sb = supabaseAdmin();

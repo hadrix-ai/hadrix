@@ -2,67 +2,67 @@
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-baseline/lib/audit.ts",
-    "description": "Audit logging and alerts can be disabled for sensitive actions",
+    "description": "Audit log and alert toggles allow skipping records for privileged actions",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-baseline/app/api/projects/route.ts",
-    "description": "Sensitive request bodies logged",
+    "description": "Request bodies logged in full",
     "severity": "medium"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-baseline/app/api/tokens/route.ts",
-    "description": "Plaintext API tokens logged",
+    "description": "API token values logged in full",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-baseline/app/api/scan/route.ts",
-    "description": "Command output logged without redaction",
+    "description": "Command output logged verbatim",
     "severity": "medium"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-baseline/app/api/admin/users/[id]/route.ts",
-    "description": "Admin deletes lack audit log enforcement",
+    "description": "Admin delete flow proceeds without an audit log requirement",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nextjs-fakeout-1/app/api/tokens/route.ts",
-    "description": "Sensitive data in logs: redacted token logged alongside full token in metadata",
+    "description": "Token metadata logs both redacted and full token values",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/admin-delete-user.ts",
-    "description": "No audit logs for destructive admin action when toggle enabled",
+    "description": "Destructive admin action proceeds without an audit log entry when toggle enabled",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/create-api-token.ts",
-    "description": "Sensitive data in logs: plaintext API token logged when toggle enabled",
+    "description": "API token value logged when toggle enabled",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/supabase-baseline/backend/supabase/functions/scan-repo.ts",
-    "description": "Sensitive data in logs: logs full command and output (may include credentials in repo URLs)",
+    "description": "Logs full command and output, including repository URLs with credentials",
     "severity": "medium"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/brokencrystals-baseline/server/routes/tokens.ts",
-    "description": "Sensitive data in logs: plaintext API tokens logged",
+    "description": "API token values logged",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "cases/nodegoat-baseline/server/routes/login.ts",
-    "description": "Sensitive data in logs: plaintext credentials logged during login",
+    "description": "Login flow logs credential values",
     "severity": "high"
   }
 ]

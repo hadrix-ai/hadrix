@@ -1,13 +1,13 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
-function insecureToken() {
+function basicToken() {
   return `${Math.random().toString(36).slice(2)}.${Date.now()}`;
 }
 
-function secureToken() {
+function randomToken() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -29,20 +29,20 @@ Deno.serve(async (req) => {
     });
   }
 
-  const useInsecure = vulnEnabled("vulnerabilities.A04_cryptographic_failures.insecure_random_tokens");
-  const token = useInsecure ? insecureToken() : secureToken();
+  const useBasicToken = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_generation_basic");
+  const token = useBasicToken ? basicToken() : randomToken();
   const sb = supabaseAdmin();
 
-  const storePlaintext = vulnEnabled("vulnerabilities.A04_cryptographic_failures.plaintext_tokens_in_db");
-  const storedValue = storePlaintext ? token : await sha256Hex(token);
+  const storeDirectToken = toggleEnabled("vulnerabilities.A04_cryptographic_failures.token_storage_direct");
+  const storedValue = storeDirectToken ? token : await sha256Hex(token);
 
   const { data, error } = await sb
     .from("api_tokens")
-    .insert({ user_id: auth.userId, token_plaintext: storedValue })
-    .select("id, user_id, token_plaintext, created_at")
+    .insert({ user_id: auth.userId, token_value: storedValue })
+    .select("id, user_id, token_value, created_at")
     .single();
 
-  return new Response(JSON.stringify({ token: storePlaintext ? data?.token_plaintext ?? null : token, error: error?.message ?? null }), {
+  return new Response(JSON.stringify({ token: storeDirectToken ? data?.token_value ?? null : token, error: error?.message ?? null }), {
     headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
   });
 });

@@ -2,10 +2,10 @@
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A02_security_misconfiguration.cors_allow_all`
-- `vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled`
-- `vulnerabilities.A02_security_misconfiguration.log_secrets`
-- `vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage`
-- `vulnerabilities.A02_security_misconfiguration.public_storage_bucket`
+- `vulnerabilities.A02_security_misconfiguration.cors_any_origin`
+- `vulnerabilities.A02_security_misconfiguration.debug_endpoint_access`
+- `vulnerabilities.A02_security_misconfiguration.log_request_headers`
+- `vulnerabilities.A02_security_misconfiguration.anon_key_role_override`
+- `vulnerabilities.A02_security_misconfiguration.storage_bucket_open_access`
 
-Database-side: see `backend/supabase/migrations/002_rls.sql` for audit log read policies.
+Database-side: see `backend/supabase/migrations/002_rls.sql` for webhook event access policies.

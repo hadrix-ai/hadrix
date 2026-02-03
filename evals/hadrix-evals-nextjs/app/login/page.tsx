@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { signSession } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 async function loginAction(formData: FormData) {
   "use server";
@@ -8,10 +8,10 @@ async function loginAction(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const magicToken = String(formData.get("magicToken") ?? "");
 
-  if (!vulnEnabled("vulnerabilities.A06_authentication_failures.unlimited_login_attempts")) {
+  if (!toggleEnabled("vulnerabilities.A06_authentication_failures.login_attempt_flow")) {
   }
 
-  if (magicToken && vulnEnabled("vulnerabilities.A04_cryptographic_failures.magic_link_no_expiration_assumption")) {
+  if (magicToken && toggleEnabled("vulnerabilities.A04_cryptographic_failures.magic_link_time_assumption")) {
     const token = signSession({ sub: "magic-user", email, role: "member" });
     cookies().set("session", token);
     return;

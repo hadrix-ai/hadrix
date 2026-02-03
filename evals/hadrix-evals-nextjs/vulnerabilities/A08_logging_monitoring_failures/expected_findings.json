@@ -2,31 +2,31 @@
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "lib/audit.ts",
-    "description": "Audit logging and alerts can be disabled for sensitive actions",
+    "description": "Audit logging and alerts toggleable for admin actions",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/projects/route.ts",
-    "description": "Sensitive request bodies logged",
+    "description": "Request bodies logged",
     "severity": "medium"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/tokens/route.ts",
-    "description": "Plaintext API tokens logged",
+    "description": "API tokens logged",
     "severity": "high"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/scan/route.ts",
-    "description": "Command output logged without redaction",
+    "description": "Command output logged",
     "severity": "medium"
   },
   {
     "category": "A08_Logging_Monitoring_Failures",
     "file": "app/api/admin/users/[id]/route.ts",
-    "description": "Admin deletes lack audit log enforcement",
+    "description": "Admin deletes without audit log event",
     "severity": "high"
   }
 ]

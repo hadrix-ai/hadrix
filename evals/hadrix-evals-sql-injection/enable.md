@@ -1,8 +1,8 @@
-# Enabling / disabling SQL injection fixtures
+# Enabling / disabling raw-query fixtures
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A03_injection.sql_injection_raw_query`
-- `vulnerabilities.A03_injection.unsafe_query_builder_filter`
+- `vulnerabilities.A03_injection.raw_query_by_id`
+- `vulnerabilities.A03_injection.query_filter_passthrough`
 
-These toggles cover all SQL injection fixtures, including the NodeVulnerable baseline.
+These toggles cover all raw-query fixtures, including the Node baseline.

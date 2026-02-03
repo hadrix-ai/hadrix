@@ -4,9 +4,8 @@ export default function HomePage() {
       <h1>Orbit Projects</h1>
       <p>Ship faster with shared workspaces, project templates, and lightweight admin controls.</p>
       <p style={{ color: "#a00" }}>
-        This is an intentionally vulnerable demo repo for security scanning evals.
+        This is a demo repo used for scanning evals.
       </p>
     </main>
   );
 }
-

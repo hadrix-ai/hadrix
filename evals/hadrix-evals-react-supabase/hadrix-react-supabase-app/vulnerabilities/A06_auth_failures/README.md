@@ -1,18 +1,17 @@
-# A06 — Authentication Failures (Orbit Projects)
+# A06 — Authentication Flow Scenarios (Orbit Projects)
 
-This fixture demonstrates auth failures typical in SPAs + serverless backends:
+This fixture demonstrates authentication flow variations in SPAs + serverless backends:
 
-- Backend trusts client state instead of validating tokens
-- Edge Functions skip JWT validation when toggled
-- Unlimited login attempts (no lockout)
-- Admin functionality without MFA requirements
+- Backend can trust client state instead of validating tokens
+- Edge Functions can skip JWT validation when toggled
+- Login attempt controls omitted (no lockout)
+- Admin functionality without step-up requirements
 
 ## Where it exists
 
-- JWT not validated / synthetic auth context:
+- JWT validation optional / synthetic auth context:
   - `backend/supabase/functions/_shared/auth.ts`
 - Frontend trusts its own session state:
   - `frontend/utils/api.ts` and usage across pages
-- Unlimited login attempts:
+- Login attempt controls omitted:
   - `frontend/app/login/page.tsx`
-

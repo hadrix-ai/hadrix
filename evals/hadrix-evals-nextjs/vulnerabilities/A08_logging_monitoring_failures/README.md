@@ -1,19 +1,19 @@
-# A08 — Logging & Monitoring Failures (Orbit Next)
+# A08 — Logging & Monitoring Coverage Scenarios (Orbit Next)
 
-This fixture includes logging/monitoring failures typical in early-stage systems:
+This fixture includes logging/monitoring coverage gaps typical in early-stage systems:
 
-- No audit logs for sensitive actions
-- Sensitive data written to logs (tokens, headers, command output)
-- No alerting/visibility for privilege escalation or destructive actions
+- Audit log events can be disabled for admin actions
+- Request headers/bodies and command output written to logs
+- Alerting/visibility toggles for privileged or destructive actions
 
 ## Where it exists
 
-- Missing audit log writes for admin delete:
+- Audit log toggles for admin delete:
   - `lib/audit.ts`
   - `app/api/admin/users/[id]/route.ts`
-- Sensitive data in logs:
+- Verbose logging:
   - `app/api/projects/route.ts`
   - `app/api/tokens/route.ts`
   - `app/api/scan/route.ts`
-- No alerting for privilege escalation:
+- Alerting toggle:
   - `lib/audit.ts`

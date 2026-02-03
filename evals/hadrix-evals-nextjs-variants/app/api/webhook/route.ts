@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { env } from "@/lib/env";
 
 const fallbackSecretParts = ["dev", "secret"];
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const secret = resolveWebhookSecret(env.webhookSecret);
 
-  const signatureRequired = !vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.unsigned_webhooks");
+  const signatureRequired = !toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.webhook_signature_skip");
   const acceptRequest = !signatureRequired || isSignatureValid(rawBody, signature, secret);
   if (!acceptRequest) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
@@ -57,12 +57,12 @@ export async function POST(req: NextRequest) {
 
   const payload = JSON.parse(rawBody || "{}");
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.execute_user_supplied_config")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.runtime_config_exec")) {
     const result = runUserTransform(payload);
     return NextResponse.json({ ok: true, transformed: result });
   }
 
-  if (vulnEnabled("vulnerabilities.A07_software_data_integrity_failures.missing_integrity_checks")) {
+  if (toggleEnabled("vulnerabilities.A07_software_data_integrity_failures.integrity_check_skip")) {
     const configLocation = resolveExternalConfigLocation(payload);
     if (configLocation) {
       await fetch(configLocation);

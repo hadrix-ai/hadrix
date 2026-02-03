@@ -1,5 +1,5 @@
 import { corsHeaders } from "./_shared/cors.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 async function runShell(args: string[]) {
   const p = new Deno.Command("git", { args, stdout: "piped", stderr: "piped" }).spawn();
@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
   const args = ["ls-remote", "--heads", "--", repoUrl];
   const result = await runShell(args);
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("scan-repo cmd:", args.join(" "));
     console.log("scan-repo result:", result);
   }

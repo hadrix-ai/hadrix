@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type Project = {
   id: string;
@@ -31,7 +31,7 @@ export default function ProjectPage({ params }: { params: { id: string } }) {
   if (!project) return <p>Loading...</p>;
 
   const useHtml =
-    vulnEnabled("vulnerabilities.A03_injection.xss_dangerously_set_inner_html") && project.description_html;
+    toggleEnabled("vulnerabilities.A03_injection.client_html_render") && project.description_html;
 
   return (
     <main>

@@ -3,10 +3,10 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A10_vulnerable_dependencies": {
-      "axios_redos": true,
-      "lodash_command_injection": true,
-      "lodash_prototype_pollution": true,
-      "jsonwebtoken_key_confusion": true
+      "axios_regex_perf_case": true,
+      "lodash_command_exec": true,
+      "lodash_object_merge": true,
+      "jsonwebtoken_alg_mode": true
     }
   }
 }

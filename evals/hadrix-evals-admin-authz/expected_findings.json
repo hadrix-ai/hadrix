@@ -2,37 +2,37 @@
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/nextjs-baseline/app/api/admin/users/route.ts",
-    "description": "Admin list endpoint missing role checks",
+    "description": "Admin list endpoint returns the full user list for the request",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/nextjs-baseline/app/api/admin/users/[id]/route.ts",
-    "description": "Admin delete endpoint missing role checks",
+    "description": "Admin delete endpoint performs user deletion based on request input",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/nextjs-fakeout-1/app/api/admin/users/route.ts",
-    "description": "Admin list endpoint trusts client-supplied role header instead of enforcing server-side admin checks",
+    "description": "Admin list endpoint gates access on a client-supplied role header",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/supabase-baseline/backend/supabase/functions/admin-delete-user.ts",
-    "description": "Admin action without role check: deletes arbitrary users",
+    "description": "Admin delete function deletes user ids supplied in the request",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/supabase-baseline/backend/supabase/functions/admin-list-users.ts",
-    "description": "Admin data exposure: lists all profiles without server-side role check",
+    "description": "Admin list function returns all profiles for the request",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/brokencrystals-baseline/server/routes/adminUsers.ts",
-    "description": "Admin endpoint updates user roles without verifying admin privileges",
+    "description": "Admin endpoint updates user roles based on request input",
     "severity": "high"
   }
 ]

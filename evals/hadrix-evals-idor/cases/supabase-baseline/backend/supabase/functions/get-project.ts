@@ -8,7 +8,7 @@ Deno.serve(async (req) => {
 
   const auth = await getAuthContext(req);
   if (!auth.userId) {
-    return new Response(JSON.stringify({ error: "unauthenticated" }), {
+    return new Response(JSON.stringify({ error: "request rejected" }), {
       status: 401,
       headers: jsonHeaders
     });

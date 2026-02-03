@@ -1,5 +1,5 @@
 import { corsHeaders } from "./_shared/cors.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 
 async function runShell(command: string) {
   const p = new Deno.Command("sh", { args: ["-c", command], stdout: "piped", stderr: "piped" }).spawn();
@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
   }
 
 
-  const injected = vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo");
+  const injected = toggleEnabled("vulnerabilities.A03_injection.scan_repo_shell_exec");
 
   const cmd = injected
     ? `git ls-remote ${repoUrl} | head -n 20`
@@ -34,12 +34,12 @@ Deno.serve(async (req) => {
 
   const result = await runShell(cmd);
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("scan-repo cmd:", cmd);
     console.log("scan-repo result:", result);
   }
 
-  if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms") && result.code !== 0) {
+  if (toggleEnabled("vulnerabilities.A09_dos_and_resilience.extra_retry_rounds") && result.code !== 0) {
     for (let i = 0; i < 5; i++) {
       await runShell(cmd);
     }

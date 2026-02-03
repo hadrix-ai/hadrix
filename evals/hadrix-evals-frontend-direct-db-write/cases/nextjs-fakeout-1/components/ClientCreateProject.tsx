@@ -23,7 +23,7 @@ type PreflightResult = {
   reason?: string;
 };
 
-function vulnEnabled(path: string): boolean {
+function toggleEnabled(path: string): boolean {
   const parts = path.split(".");
   let current: any = hadrixConfig;
   for (const part of parts) {
@@ -60,7 +60,7 @@ export function ClientCreateProject() {
     setStatus("Creating...");
     try {
       const preflight = await preflightWrite(orgId);
-      if (vulnEnabled("vulnerabilities.A05_insecure_design.frontend_direct_db_write") && preflight.allowed) {
+      if (toggleEnabled("vulnerabilities.A05_insecure_design.client_write_flow") && preflight.allowed) {
         const { data, error } = await supabase
           .from("projects")
           .insert({

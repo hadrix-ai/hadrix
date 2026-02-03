@@ -2,37 +2,37 @@
   {
     "category": "A01_Broken_Access_Control",
     "file": "backend/supabase/functions/get-project.ts",
-    "description": "IDOR: project fetched by ID without verifying org membership/ownership when toggle is enabled",
+    "description": "Project fetched by ID; tenant membership gate is toggle-controlled",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "backend/supabase/functions/list-projects.ts",
-    "description": "Cross-tenant data leakage: client-controlled orgId and optional raw .or() filter influence listing without membership verification",
+    "description": "Client-supplied orgId and optional `.or()` filter influence listing when enabled",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "backend/supabase/functions/admin-delete-user.ts",
-    "description": "Admin action without role check: deletes arbitrary users when authorization toggle is enabled",
+    "description": "Admin delete endpoint relies on header-based role gate when enabled",
     "severity": "critical"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "backend/supabase/functions/admin-list-users.ts",
-    "description": "Admin data exposure: lists all profiles without server-side role check when toggle is enabled",
+    "description": "Admin list endpoint relies on header-based role gate when enabled",
     "severity": "high"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "frontend/admin/AdminUsers.tsx",
-    "description": "Frontend-only admin gating: hides admin UI based on client metadata rather than server authorization",
+    "description": "Client-side role gate based on user metadata",
     "severity": "medium"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "backend/supabase/migrations/002_rls.sql",
-    "description": "Projects RLS policies only verify the user belongs to some org, missing org scoping and allowing cross-tenant reads/writes",
+    "description": "RLS policies configured for broad access when enabled",
     "severity": "critical"
   }
 ]

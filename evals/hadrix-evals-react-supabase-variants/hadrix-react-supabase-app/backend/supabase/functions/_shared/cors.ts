@@ -1,4 +1,4 @@
-import { vulnEnabled } from "./hadrix.ts";
+import { toggleEnabled } from "./hadrix.ts";
 
 const corsHeaderNames = {
   allowOrigin: "access-control-allow-origin",
@@ -12,7 +12,7 @@ const defaultAllowedMethods = "POST, OPTIONS";
 const defaultMaxAgeSeconds = "86400";
 
 function resolveAllowedOrigin(origin?: string): string {
-  const openOrigin = vulnEnabled("vulnerabilities.A02_security_misconfiguration.cors_allow_all");
+  const openOrigin = toggleEnabled("vulnerabilities.A02_security_misconfiguration.cors_any_origin");
   if (openOrigin) {
     return "*";
   }

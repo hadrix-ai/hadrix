@@ -47,7 +47,7 @@ create table if not exists public.audit_logs (
 create table if not exists public.api_tokens (
   id bigserial primary key,
   user_id uuid references public.profiles(id) on delete cascade,
-  token_plaintext text not null,
+  token_value text not null,
   created_at timestamptz not null default now()
 );
 

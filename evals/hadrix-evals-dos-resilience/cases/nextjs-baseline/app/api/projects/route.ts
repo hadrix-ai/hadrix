@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const projectColumns = "id, org_id, name, description, description_html";
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   let query = supabaseAdmin().from("projects").select(projectColumns).eq("org_id", auth.orgId);
 
-  if (!vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries")) {
+  if (!toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override")) {
     query = query.limit(maxProjects);
   }
 

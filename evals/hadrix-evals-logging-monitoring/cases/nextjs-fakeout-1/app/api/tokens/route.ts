@@ -10,7 +10,7 @@ function getAuthContext(req: NextRequest): AuthContext {
   return { userId: req.headers.get("x-user-id") };
 }
 
-function vulnEnabled(path: string): boolean {
+function toggleEnabled(path: string): boolean {
   const parts = path.split(".");
   let current: any = hadrixConfig;
   for (const part of parts) {
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   const token = `tok_${randomUUID()}`;
   const redacted = redactToken(token);
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     const meta = {
       userId: auth.userId,
       token

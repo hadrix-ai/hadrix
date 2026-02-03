@@ -1,5 +1,5 @@
-# Enabling / disabling frontend-only authorization fixtures
+# Enabling / disabling client-side role-gating fixtures
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement`
+- `vulnerabilities.A01_broken_access_control.client_role_gate`

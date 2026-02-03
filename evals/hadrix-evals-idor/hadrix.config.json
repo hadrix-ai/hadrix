@@ -3,7 +3,7 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A01_broken_access_control": {
-      "idor_get_project": true
+      "project_access_gate": true
     }
   }
 }

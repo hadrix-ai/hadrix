@@ -3,10 +3,10 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A06_authentication_failures": {
-      "trust_frontend_auth_state": true,
-      "jwt_not_validated_in_edge": true,
-      "no_mfa_for_admin": true,
-      "unlimited_login_attempts": true
+      "frontend_session_state": true,
+      "edge_token_decode": true,
+      "admin_step_up_flow": true,
+      "login_attempt_flow": true
     }
   }
 }

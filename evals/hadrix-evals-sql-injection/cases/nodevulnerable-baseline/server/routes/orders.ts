@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { unsafeSql } from "../db/unsafeSql";
+import { runQuery } from "../db/runQuery";
 
 type OrderRow = {
   id: string;
@@ -17,6 +17,6 @@ export async function listOrders(req: Request, res: Response) {
 
   const sql =
     `select id, user_id, total from orders where user_id = '${userId}' order by created_at desc`;
-  const rows = await unsafeSql<OrderRow>(sql);
+  const rows = await runQuery<OrderRow>(sql);
   res.json({ orders: rows });
 }

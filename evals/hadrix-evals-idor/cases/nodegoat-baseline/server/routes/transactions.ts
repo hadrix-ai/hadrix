@@ -10,7 +10,7 @@ export async function getTransactionById(req: Request, res: Response) {
   const userId = String(req.header("x-user-id") ?? "");
 
   if (!userId) {
-    res.status(401).json({ error: "unauthenticated" });
+    res.status(401).json({ error: "request rejected" });
     return;
   }
 

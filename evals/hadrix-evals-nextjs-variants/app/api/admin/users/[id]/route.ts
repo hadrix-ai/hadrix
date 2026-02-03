@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 import { isAuditTrailEnabled, notifySecurityOps, recordSecurityTrail } from "@/lib/audit";
 
@@ -17,8 +17,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const respond = (payload: unknown, status = 200) => NextResponse.json(payload, { status });
   const targetId = params.id;
 
-  const enforceRoleGate = !vulnEnabled(
-    "vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check"
+  const enforceRoleGate = !toggleEnabled(
+    "vulnerabilities.A01_broken_access_control.admin_endpoint_role_header"
   );
   const allowAdmin = !enforceRoleGate || auth.role === "admin";
 
@@ -26,7 +26,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return respond({ error: "forbidden" }, 403);
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.log_secrets")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.log_request_headers")) {
     logSensitiveRequestHeader(req);
   }
 

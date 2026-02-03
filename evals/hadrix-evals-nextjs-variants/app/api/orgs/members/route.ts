@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 
 type MemberRequest = {
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: missingError.error }, { status: missingError.status });
   }
 
-  const bypassAdmin = vulnEnabled("vulnerabilities.A05_insecure_design.no_separation_of_duties");
+  const bypassAdmin = toggleEnabled("vulnerabilities.A05_insecure_design.role_split_skip");
   const guardError = enforceAdminUnlessBypassed(auth.role, bypassAdmin);
   if (guardError) {
     return NextResponse.json({ error: guardError.error }, { status: guardError.status });

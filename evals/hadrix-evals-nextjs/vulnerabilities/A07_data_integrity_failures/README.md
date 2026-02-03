@@ -1,16 +1,16 @@
-# A07 — Software & Data Integrity Failures (Orbit Next)
+# A07 — Integrity & Automation Flow Scenarios (Orbit Next)
 
-This fixture models integrity failures that commonly appear in webhook and automation pipelines:
+This fixture models automation pipeline behaviors that affect data integrity:
 
-- Unsigned webhooks accepted
-- Execution of user-supplied “transform” logic
-- Missing integrity checks around external data ingestion
+- Webhook signature validation optional
+- Execution of user-supplied transform logic
+- External data ingestion without integrity checks
 
 ## Where it exists
 
-- Unsigned webhook handling:
-  - `app/api/webhook/route.ts` can skip signature validation when enabled
+- Webhook signature validation toggle:
+  - `app/api/webhook/route.ts` can skip signature verification when enabled
 - Executing user-supplied config as code:
   - `app/api/webhook/route.ts` uses `new Function(...)` when enabled
-- Missing integrity checks for external config payloads:
+- External config ingestion without verification:
   - `app/api/webhook/route.ts` fetches config URLs without verification

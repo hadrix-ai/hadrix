@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { fetchExternal } from "@/lib/http";
 
 const execAsync = promisify(exec);
@@ -17,13 +17,13 @@ export async function POST(req: NextRequest) {
   await fetchExternal("https://example.com/health");
 
   let attempts = 1;
-  if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.retry_storms")) {
+  if (toggleEnabled("vulnerabilities.A09_dos_and_resilience.extra_retry_rounds")) {
     attempts = 3;
   }
 
   let output = "";
   for (let i = 0; i < attempts; i += 1) {
-    if (vulnEnabled("vulnerabilities.A03_injection.command_injection_scan_repo")) {
+    if (toggleEnabled("vulnerabilities.A03_injection.scan_repo_shell_exec")) {
       const { stdout, stderr } = await execAsync(`git ls-remote ${repoUrl}`);
       output += stdout + stderr;
     } else {
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_scan_output")) {
     console.log("scan output:", output);
   }
 

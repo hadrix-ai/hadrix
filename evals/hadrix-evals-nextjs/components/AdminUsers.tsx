@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 type AdminUser = {
   id: string;
@@ -20,8 +20,8 @@ export function AdminUsers() {
       try {
         const role = window.localStorage.getItem("role") ?? "member";
 
-        if (vulnEnabled("vulnerabilities.A01_broken_access_control.frontend_only_role_enforcement") && role !== "admin") {
-          setError("You are not an admin (client-side check).");
+        if (toggleEnabled("vulnerabilities.A01_broken_access_control.client_role_gate") && role !== "admin") {
+          setError("You do not have admin access.");
           return;
         }
 
@@ -60,7 +60,7 @@ export function AdminUsers() {
           </li>
         ))}
       </ul>
-      <p style={{ color: "#777" }}>Admin actions are intentionally unsafe depending on toggles.</p>
+      <p style={{ color: "#777" }}>Admin actions are controlled by runtime toggles.</p>
     </section>
   );
 }

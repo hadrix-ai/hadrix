@@ -1,21 +1,20 @@
-# A10: Vulnerable and Outdated Components
+# A10 — Dependency Advisory Scenarios
 
-This category tests detection of known vulnerabilities in third-party dependencies using OSV-Scanner.
+This category tests detection of known advisories in third-party dependencies using OSV-Scanner.
 
-## Vulnerable Packages
+## Packages under test
 
-| Package | Version | Vulnerability | Severity |
-|---------|---------|---------------|----------|
-| `axios` | 0.21.1 | ReDoS in trim function (GHSA-cph5-m8f7-6c5x) | High |
-| `lodash` | 4.17.20 | Command Injection via template (GHSA-35jh-r3h4-6jhm) | High |
-| `jsonwebtoken` | 8.5.1 | Unrestricted key type (GHSA-hjrf-2m68-5959) | High |
+| Package | Version | Advisory | Severity |
+|---------|---------|----------|----------|
+| `axios` | 0.21.1 | Regex performance issue in trim function (GHSA-cph5-m8f7-6c5x) | High |
+| `lodash` | 4.17.20 | Template function advisory (GHSA-35jh-r3h4-6jhm) | High |
+| `jsonwebtoken` | 8.5.1 | Key type handling advisory (GHSA-hjrf-2m68-5959) | High |
 
 ## Detection Method
 
-OSV-Scanner analyzes `package-lock.json` and queries the OSV database (aggregates CVEs from npm, GitHub Advisories, etc.) to identify packages with known vulnerabilities.
+OSV-Scanner analyzes `package-lock.json` and queries the OSV database (aggregates CVEs from npm, GitHub Advisories, etc.) to identify packages with known advisories.
 
 ## References
 
-- [OWASP A06:2021 - Vulnerable and Outdated Components](https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/)
 - [OSV Database](https://osv.dev/)
 - [npm Security Advisories](https://www.npmjs.com/advisories)

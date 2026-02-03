@@ -3,7 +3,7 @@
   "mode": "vulnerable",
   "vulnerabilities": {
     "A03_injection": {
-      "command_injection_scan_repo": true
+      "scan_repo_shell_exec": true
     }
   }
 }

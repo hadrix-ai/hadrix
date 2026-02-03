@@ -2,25 +2,25 @@
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/nextjs-baseline/components/AdminUsers.tsx",
-    "description": "Frontend-only role enforcement based on client-side state",
+    "description": "Client-side role gating based on local state",
     "severity": "medium"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/nextjs-fakeout-1/components/AdminUsers.tsx",
-    "description": "Frontend-only admin gating based on unverified client token claims",
+    "description": "Client-side admin gating based on unverified token claims",
     "severity": "medium"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/supabase-baseline/frontend/admin/AdminUsers.tsx",
-    "description": "Frontend-only admin gating: hides admin UI based on client metadata rather than server authorization",
+    "description": "Client-side admin gating: hides admin UI based on client metadata rather than server checks",
     "severity": "medium"
   },
   {
     "category": "A01_Broken_Access_Control",
     "file": "cases/brokencrystals-baseline/client/AdminPanel.tsx",
-    "description": "Frontend-only admin gating based on client state",
+    "description": "Client-side admin gating based on local state",
     "severity": "medium"
   }
 ]

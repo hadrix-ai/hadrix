@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing orgId/userId" }, { status: 400 });
   }
 
-  if (!vulnEnabled("vulnerabilities.A05_insecure_design.no_separation_of_duties")) {
+  if (!toggleEnabled("vulnerabilities.A05_insecure_design.role_split_skip")) {
     if (auth.role !== "admin") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }

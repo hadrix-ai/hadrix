@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 import { getAuthContext } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   const auth = getAuthContext(req);
   const respond = (payload: unknown, status = 200) => NextResponse.json(payload, { status });
 
-  const enforceRoleGate = !vulnEnabled(
-    "vulnerabilities.A01_broken_access_control.admin_endpoint_missing_role_check"
+  const enforceRoleGate = !toggleEnabled(
+    "vulnerabilities.A01_broken_access_control.admin_endpoint_role_header"
   );
   const requireMfa =
-    enforceRoleGate && !vulnEnabled("vulnerabilities.A06_authentication_failures.no_mfa_for_admin");
+    enforceRoleGate && !toggleEnabled("vulnerabilities.A06_authentication_failures.admin_step_up_flow");
 
   const guardrails = [
     {
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   const adminClient = supabaseAdmin();
   let query = adminClient.from("users").select("id, email, role, org_id");
 
-  const allowUnboundedReads = vulnEnabled("vulnerabilities.A09_dos_and_resilience.unbounded_db_queries");
+  const allowUnboundedReads = toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override");
   if (!allowUnboundedReads) {
     const endIndex = Math.max(0, 100 - 1);
     query = query.range(0, endIndex);

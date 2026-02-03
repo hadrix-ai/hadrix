@@ -1,6 +1,6 @@
 import { env } from "@/env";
 import { supabase } from "@/auth/supabaseClient";
-import { vulnEnabled } from "@/utils/hadrix";
+import { toggleEnabled } from "@/utils/hadrix";
 
 type Json = Record<string, unknown> | Array<unknown> | string | number | boolean | null;
 
@@ -13,7 +13,7 @@ export async function callEdgeFunction<T = unknown>(
 
   const accessToken = session?.access_token ?? "";
 
-  const bearer = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const bearer = toggleEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
     ? env.supabaseAnonKey
     : accessToken;
 

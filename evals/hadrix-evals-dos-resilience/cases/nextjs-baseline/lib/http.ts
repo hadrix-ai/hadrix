@@ -1,8 +1,8 @@
 import axios from "axios";
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export async function fetchExternal(url: string) {
-  if (vulnEnabled("vulnerabilities.A09_dos_and_resilience.no_timeouts_external_calls")) {
+  if (toggleEnabled("vulnerabilities.A09_dos_and_resilience.external_call_timeout_override")) {
     return axios.get(url);
   }
 

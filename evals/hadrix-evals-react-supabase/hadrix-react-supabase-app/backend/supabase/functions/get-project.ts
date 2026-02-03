@@ -1,8 +1,8 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
 import { supabaseAdmin, supabaseAnon } from "./_shared/supabase.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
-import { unsafeSql } from "./_shared/unsafeSql.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
+import { runQuery } from "./_shared/runQuery.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(req.headers.get("origin") ?? "") });
@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (vulnEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_enabled")) {
+  if (toggleEnabled("vulnerabilities.A02_security_misconfiguration.debug_endpoint_access")) {
     return new Response(
       JSON.stringify({
         debug: true,
@@ -30,19 +30,19 @@ Deno.serve(async (req) => {
     );
   }
 
-  if (vulnEnabled("vulnerabilities.A03_injection.sql_injection_raw_query")) {
+  if (toggleEnabled("vulnerabilities.A03_injection.raw_query_by_id")) {
     const sql = `select id, org_id, name, description, description_html from public.projects where id = '${id}' limit 1;`;
-    const rows = await unsafeSql<any>(sql);
+    const rows = await runQuery<any>(sql);
     return new Response(JSON.stringify({ project: rows[0] ?? null }), {
       headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
     });
   }
 
-  const sb = vulnEnabled("vulnerabilities.A02_security_misconfiguration.overprivileged_anon_key_usage")
+  const sb = toggleEnabled("vulnerabilities.A02_security_misconfiguration.anon_key_role_override")
     ? supabaseAnon()
     : supabaseAdmin();
 
-  const skipOwnershipCheck = vulnEnabled("vulnerabilities.A01_broken_access_control.idor_get_project");
+  const skipOwnershipCheck = toggleEnabled("vulnerabilities.A01_broken_access_control.project_access_gate");
 
   if (skipOwnershipCheck) {
     const { data, error } = await sb

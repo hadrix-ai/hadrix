@@ -1,7 +1,7 @@
-import { vulnEnabled } from "@/lib/hadrix";
+import { toggleEnabled } from "@/lib/hadrix";
 
 export function corsHeaders(origin: string): Record<string, string> {
-  const allowAll = vulnEnabled("vulnerabilities.A02_security_misconfiguration.cors_allow_all");
+  const allowAll = toggleEnabled("vulnerabilities.A02_security_misconfiguration.cors_any_origin");
   return {
     "access-control-allow-origin": allowAll ? "*" : origin,
     "access-control-allow-credentials": "true",

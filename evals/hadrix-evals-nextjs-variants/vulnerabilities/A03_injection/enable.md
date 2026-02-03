@@ -1,8 +1,8 @@
-# Enabling / disabling A03
+# Toggles for A03
 
 Edit `hadrix.config.json`:
 
-- `vulnerabilities.A03_injection.sql_injection_raw_query`
-- `vulnerabilities.A03_injection.unsafe_query_builder_filter`
-- `vulnerabilities.A03_injection.command_injection_scan_repo`
-- `vulnerabilities.A03_injection.xss_dangerously_set_inner_html`
+- `vulnerabilities.A03_injection.raw_query_by_id`
+- `vulnerabilities.A03_injection.query_filter_passthrough`
+- `vulnerabilities.A03_injection.scan_repo_shell_exec`
+- `vulnerabilities.A03_injection.client_html_render`

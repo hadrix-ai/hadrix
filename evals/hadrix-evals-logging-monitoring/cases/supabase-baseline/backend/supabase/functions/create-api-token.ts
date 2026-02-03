@@ -1,6 +1,6 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { getAuthContext } from "./_shared/auth.ts";
-import { vulnEnabled } from "./_shared/hadrix.ts";
+import { toggleEnabled } from "./_shared/hadrix.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
 
 function secureToken() {
@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
     .select("id, user_id, token_plaintext, created_at")
     .single();
 
-  if (vulnEnabled("vulnerabilities.A08_logging_monitoring_failures.sensitive_data_in_logs")) {
+  if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {
     console.log("issued token:", token);
   }
 
