@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title><%= title %> | Hadrix Journal</title>
+    <link rel="stylesheet" href="/main.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">Hadrix Journal</div>
+      <nav class="nav">
+        <a href="/">Home</a>
+        <a href="/profile?user=maria">Profile</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <article class="post-detail">
+        <h1><%= post.title %></h1>
+        <p class="meta">Published <%= post.created_at %></p>
+        <p><%= post.body %></p>
+      </article>
+    </main>
+
+    <footer class="site-footer">Built for demos.</footer>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "hadrix-eval-example",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.6",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "lodash": "4.17.11",
+    "morgan": "^1.10.0",
+    "sqlite3": "^5.1.6"
+  }
+}

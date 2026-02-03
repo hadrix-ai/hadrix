@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title><%= title %> | Hadrix Journal</title>
+    <link rel="stylesheet" href="/main.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">Hadrix Journal</div>
+      <nav class="nav">
+        <a href="/">Home</a>
+        <a href="/profile?user=<%= user.username %>">Profile</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="profile-card">
+        <h1><%= user.display_name %></h1>
+        <p class="meta">@<%= user.username %></p>
+        <div class="bio">
+          <%- user.bio %>
+        </div>
+      </section>
+
+      <section class="editor-card">
+        <h2>Update bio</h2>
+        <form action="/profile" method="post" class="profile-form">
+          <input type="hidden" name="user" value="<%= user.username %>" />
+          <textarea name="bio" rows="5" placeholder="Tell the team about yourself"><%= user.bio %></textarea>
+          <button type="submit">Save</button>
+        </form>
+      </section>
+    </main>
+
+    <footer class="site-footer">Built for demos.</footer>
+    <script src="/app.js"></script>
+  </body>
+</html>
