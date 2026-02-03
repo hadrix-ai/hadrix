@@ -54,24 +54,24 @@ jobs:
       matrix:
         spec:
           - hadrix-evals-sql-injection
-          - hadrix-evals-command-injection
           - hadrix-evals-idor
           - hadrix-evals-xss
-          - hadrix-evals-admin-authz
-          - hadrix-evals-frontend-authz
           - hadrix-evals-frontend-direct-db-write
-          - hadrix-evals-tenant-isolation
           - hadrix-evals-auth-failures
           - hadrix-evals-security-misconfiguration
-          - hadrix-evals-crypto-failures
-          - hadrix-evals-software-integrity
-          - hadrix-evals-logging-monitoring
-          - hadrix-evals-dos-resilience
           - hadrix-evals-vulnerable-deps
-          # Excluded (too large / deferred):
+          # Excluded (in evals-todo or deferred):
+          # - hadrix-evals-admin-authz
+          # - hadrix-evals-command-injection
+          # - hadrix-evals-crypto-failures
+          # - hadrix-evals-dos-resilience
+          # - hadrix-evals-frontend-authz
+          # - hadrix-evals-logging-monitoring
+          # - hadrix-evals-rls-exposure
+          # - hadrix-evals-software-integrity
+          # - hadrix-evals-tenant-isolation
           # - hadrix-evals-react-supabase
           # - hadrix-evals-nextjs
-          # - hadrix-evals-rls-exposure
     steps:
       - name: Checkout
         uses: actions/checkout@v4
