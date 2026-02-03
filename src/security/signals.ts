@@ -17,6 +17,7 @@ export const SIGNAL_IDS = [
   "file_write_sink",
   "secrets_access",
   "public_api_key_usage",
+  "public_api_key_bearer",
   "logs_sensitive",
   "debug_endpoint",
   "authn_present",
@@ -98,6 +99,9 @@ export const SIGNAL_DEFINITIONS: Record<SignalId, { description: string }> = {
   },
   public_api_key_usage: {
     description: "Uses a public or anon API key for client/service access."
+  },
+  public_api_key_bearer: {
+    description: "Public/anon API key is used directly as a bearer token."
   },
   logs_sensitive: {
     description: "Logs potentially sensitive data."

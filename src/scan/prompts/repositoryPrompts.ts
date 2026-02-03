@@ -106,7 +106,9 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "Public/anon key guidance:",
         "- Report when a public/anon API key is used as a bearer token or to initialize a privileged server client.",
         "- Evidence can be: Authorization: Bearer with an anon/public key, or createClient(...) using an anon/public key for admin data access.",
-        "- Public/anon keys are meant for low-privilege access; privileged actions should use scoped service credentials."
+        "- Public/anon keys are meant for low-privilege access; privileged actions should use scoped service credentials.",
+        "- If code conditionally selects an anon/public key for Authorization: Bearer (feature flag/toggle/ternary), still report the anon key usage.",
+        "- When applicable, explicitly mention \"anon key\" in the finding summary."
       ];
     case "public_storage_bucket":
       return [

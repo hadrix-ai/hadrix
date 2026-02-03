@@ -28,6 +28,9 @@ import {
 import type { DedupeDebug } from "./debugLog.js";
 import { SIGNAL_IDS, type SignalId } from "../security/signals.js";
 import { detectPublicEnvSecretUsage } from "./signals/detectors/secretExposure.js";
+import { detectPublicApiKeySignals } from "./signals/detectors/publicApiKeyUsage.js";
+import { detectClientSuppliedIdentifiers } from "./signals/detectors/clientSuppliedIdentifiers.js";
+import { detectApiHandler } from "./signals/detectors/apiHandler.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -291,38 +294,9 @@ const DEBUG_FLAG_PATTERN = /\bdebug\s*:\s*true\b/i;
 const HEADERS_DUMP_PATTERN =
   /headers\.entries\(\)|Object\.fromEntries\([^)]*headers\.entries\(\)\)/i;
 const ENV_DUMP_PATTERN = /\bprocess\.env\b|\bDeno\.env\b/i;
-const PUBLIC_API_KEY_PATTERN =
-  /\bSUPABASE_ANON_KEY\b|\bNEXT_PUBLIC_SUPABASE_ANON_KEY\b|\bsupabaseAnonKey\b/i;
-const SUPABASE_ANON_HELPER_PATTERN = /\bsupabaseAnon\b/i;
-const SUPABASE_CLIENT_USAGE_PATTERN =
-  /\bcreateClient\s*\(|\bfrom\(\s*["'`][^"'`]+["'`]\s*\)/i;
-const AUTH_HEADER_PATTERN = /\bauthorization\b/i;
-const BEARER_TOKEN_PATTERN = /\bBearer\b/i;
 const STORAGE_BUCKET_PATTERN = /bucket/i;
 const PUBLIC_BUCKET_NAME_PATTERN = /["'`][^"'`]*public[^"'`]*["'`]/i;
 const PUBLIC_BUCKET_CONFIG_PATTERN = /\bpublic\s*:\s*true\b/i;
-const REQUEST_PARAM_CAPTURE_PATTERN = /\breq\.(?:params|query)\.([A-Za-z0-9_]+)\b/g;
-const SEARCH_PARAM_CAPTURE_PATTERN = /searchParams\.get\(\s*["']([A-Za-z0-9_]+)["']\s*\)/g;
-const ID_LIKE_PARAM_NAMES = new Set([
-  "id",
-  "userid",
-  "user_id",
-  "email",
-  "orgid",
-  "org_id",
-  "accountid",
-  "account_id",
-  "projectid",
-  "project_id",
-  "tenantid",
-  "tenant_id",
-  "resourceid",
-  "resource_id",
-  "orderid",
-  "order_id"
-]);
-const USER_ID_PARAM_NAMES = new Set(["userid", "user_id", "email"]);
-const ORG_ID_PARAM_NAMES = new Set(["orgid", "org_id", "tenantid", "tenant_id"]);
 const SQL_PARAM_PATTERN = /\bsql\s*:\s*string\b/i;
 const SQL_EXEC_LOG_PATTERN = /\bExecuting SQL\b|\bRunning SQL\b/i;
 const SQL_LOG_WITH_VAR_PATTERN =
@@ -387,17 +361,6 @@ function detectDebugAuthLeak(content: string): boolean {
   return HEADERS_DUMP_PATTERN.test(content) || ENV_DUMP_PATTERN.test(content);
 }
 
-function detectPublicApiKeyUsage(content: string): boolean {
-  if (!content) return false;
-  const hasAnonKey = PUBLIC_API_KEY_PATTERN.test(content);
-  const hasAnonHelper = SUPABASE_ANON_HELPER_PATTERN.test(content);
-  const hasClientUsage = SUPABASE_CLIENT_USAGE_PATTERN.test(content);
-  const hasBearer = AUTH_HEADER_PATTERN.test(content) && BEARER_TOKEN_PATTERN.test(content);
-  if (hasAnonKey && (hasClientUsage || hasBearer)) return true;
-  if (hasAnonHelper && hasClientUsage) return true;
-  return false;
-}
-
 function detectPublicStorageBucket(content: string): boolean {
   if (!content) return false;
   if (PUBLIC_BUCKET_CONFIG_PATTERN.test(content)) return true;
@@ -439,45 +402,6 @@ function detectHardcodedSecret(content: string): boolean {
   return SECRET_ASSIGN_PATTERN.test(content);
 }
 
-function normalizeParamName(value: string): string {
-  return value.replace(/[^A-Za-z0-9_]/g, "").toLowerCase();
-}
-
-function detectClientSuppliedIdentifiers(content: string): {
-  hasId: boolean;
-  hasUserId: boolean;
-  hasOrgId: boolean;
-} {
-  if (!content) return { hasId: false, hasUserId: false, hasOrgId: false };
-  const names = new Set<string>();
-  for (const match of content.matchAll(REQUEST_PARAM_CAPTURE_PATTERN)) {
-    if (match[1]) names.add(normalizeParamName(match[1]));
-  }
-  for (const match of content.matchAll(SEARCH_PARAM_CAPTURE_PATTERN)) {
-    if (match[1]) names.add(normalizeParamName(match[1]));
-  }
-  if (names.size === 0) return { hasId: false, hasUserId: false, hasOrgId: false };
-  let hasId = false;
-  let hasUserId = false;
-  let hasOrgId = false;
-  for (const name of names) {
-    if (USER_ID_PARAM_NAMES.has(name)) {
-      hasUserId = true;
-      hasId = true;
-      continue;
-    }
-    if (ORG_ID_PARAM_NAMES.has(name)) {
-      hasOrgId = true;
-      hasId = true;
-      continue;
-    }
-    if (ID_LIKE_PARAM_NAMES.has(name)) {
-      hasId = true;
-    }
-  }
-  return { hasId, hasUserId, hasOrgId };
-}
-
 function detectClientDbWrite(content: string): boolean {
   if (!content) return false;
   if (!CLIENT_DIRECTIVE_PATTERN.test(content)) return false;
@@ -496,6 +420,14 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       id: "login_attempt_present",
       evidence: "password login attempt detected",
       confidence: 0.72
+    });
+  }
+  const apiHandlerEvidence = detectApiHandler(content);
+  if (apiHandlerEvidence) {
+    signals.push({
+      id: "api_handler",
+      evidence: apiHandlerEvidence,
+      confidence: 0.76
     });
   }
   if (detectOptionalBearerToken(content)) {
@@ -531,12 +463,16 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       confidence: 0.72
     });
   }
-  if (detectPublicApiKeyUsage(content)) {
-    signals.push({
-      id: "public_api_key_usage",
-      evidence: "public/anon API key used for client or bearer access",
-      confidence: 0.74
-    });
+  const publicApiKeySignals = detectPublicApiKeySignals(content);
+  if (publicApiKeySignals.length > 0) {
+    for (const signal of publicApiKeySignals) {
+      if (signals.some((entry) => entry.id === signal.id)) continue;
+      signals.push({
+        id: signal.id,
+        evidence: signal.evidence || "public/anon API key used for client or bearer access",
+        confidence: signal.id === "public_api_key_bearer" ? 0.82 : 0.74
+      });
+    }
   }
   if (detectPublicStorageBucket(content)) {
     signals.push({
@@ -580,25 +516,32 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
     });
   }
   const idSignals = detectClientSuppliedIdentifiers(content);
-  if (idSignals.hasId) {
+  if (idSignals.hasPathOrQueryId) {
     signals.push({
       id: "id_in_path_or_query",
-      evidence: "identifier read from request params or query",
+      evidence: idSignals.evidence.pathOrQuery ?? "identifier read from request params or query",
       confidence: 0.74
     });
   }
   if (idSignals.hasUserId) {
     signals.push({
       id: "client_supplied_user_id",
-      evidence: "user identifier read from request params or query",
+      evidence: idSignals.evidence.userId ?? "user identifier read from request params or query",
       confidence: 0.76
     });
   }
   if (idSignals.hasOrgId) {
     signals.push({
       id: "client_supplied_org_id",
-      evidence: "org/tenant identifier read from request params or query",
+      evidence: idSignals.evidence.orgId ?? "org/tenant identifier read from request params or query",
       confidence: 0.76
+    });
+  }
+  if (idSignals.hasId) {
+    signals.push({
+      id: "client_supplied_identifier",
+      evidence: idSignals.evidence.id ?? "identifier read from request params or query",
+      confidence: 0.72
     });
   }
   if (detectClientDbWrite(content)) {
@@ -2662,6 +2605,10 @@ function scoreRuleBySignals(
     score += 0.15;
   } else if (role === "job_worker") {
     score += 0.1;
+  }
+
+  if (rule.id === "anon_key_bearer" && signalSet.has("public_api_key_bearer")) {
+    score += 2;
   }
 
   return score;

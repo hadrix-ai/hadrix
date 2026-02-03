@@ -82,7 +82,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     optionalSignals: ["authz_missing_or_unknown"],
     guidance: [
       "Verify queries scope records to the authenticated user or tenant.",
-      "Flag missing ownership checks when IDs come from user input."
+      "Flag missing ownership checks when IDs come from user input.",
+      "Authentication checks alone (e.g., just verifying a userId/header exists) do not count unless the query is scoped by that identity."
     ]
   },
   {
@@ -528,7 +529,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     description: "Public or anon API keys are used for privileged actions or bearer auth.",
     candidateTypes: ["anon_key_bearer"],
     requiredAnySignals: ["authn_present", "http_request_sink", "public_api_key_usage"],
-    optionalSignals: ["public_entrypoint", "public_api_key_usage"],
+    optionalSignals: ["public_entrypoint", "public_api_key_usage", "public_api_key_bearer"],
     guidance: [
       "Report when a public/anon key is used as a bearer token or to initialize a privileged server client.",
       "Evidence can be: Authorization: Bearer with a public/anon key, or createClient(...) wired to an anon/public key for admin data access.",
