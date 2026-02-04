@@ -38,7 +38,7 @@ hadrix scan
     -f, --format <format> Output format (text|json|core-json)
     --json Shortcut for --format json
     --skip-static Skip running static scanners
-    --cheap Cheap mode switches the model from the default (gpt-5.2-codex, claude-opus-4-5) to a more lightweight model (gpt-5.1-codex-mini, claude-haiku-4-5).
+    --power Power mode switches the model from the default lightweight models (gpt-5.1-codex-mini, claude-haiku-4-5) to more capable models (gpt-5.2-codex, claude-opus-4-5); power mode gives more thorough results at higher cost.
     --debug Enable debug logging
 ```
 Optional: provide a path to scan a specific directory. hadrix scan path/to/repo. Defaults to the current directory if no path is provided.
