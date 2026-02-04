@@ -31,10 +31,8 @@ Run scan
 hadrix scan
 ```
 Flags supported by the CLI
-hadrix scan [target]
-Target defaults to the current directory when omitted.
 ```bash
-hadrix scan
+hadrix scan [target] # Target defaults to the current directory when omitted.
     -f, --format <format> Output format (text|json|core-json)
     --json Shortcut for --format json
     --skip-static Skip running static scanners
