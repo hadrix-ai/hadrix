@@ -1,5 +1,5 @@
 import type { EvalFinding, EvalGroupResult, EvalRepoSpec, ExpectedFinding, SummaryComparator, SummaryComparison } from "./types.js";
-import { buildFindingIdentityKeyV2, buildIdentityKeyV2 } from "../scan/dedupeKey.js";
+import { buildFindingIdentityKeyV2, buildIdentityKeyV2 } from "../../src/scan/dedupeKey.js";
 
 const normalizePath = (value: string): string =>
   value

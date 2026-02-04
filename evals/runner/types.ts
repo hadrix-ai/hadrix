@@ -1,4 +1,4 @@
-import type { CoreFinding, Severity } from "../types.js";
+import type { CoreFinding, Severity } from "../../src/types.js";
 
 export type EvalFinding = Pick<
   CoreFinding,

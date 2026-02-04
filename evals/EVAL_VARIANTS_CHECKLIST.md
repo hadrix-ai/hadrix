@@ -25,7 +25,7 @@
   generalization uses a `-variants` suffix for spec ids/fixture roots (e.g., `hadrix-evals-nextjs-variants`).
 - [x] Create a canonical-to-variant index (table below or separate file).
 - [x] Confirm expected findings update strategy and keep rule ids stable.
-  Decision: `src/evals/specs/hadrixEvals/*/groups.ts` is the source of truth for eval matching;
+  Decision: `evals/runner/specs/hadrixEvals/*/groups.ts` is the source of truth for eval matching;
   keep `vulnerabilities/**/expected_findings.json` in fixture repos as a human-readable mirror.
   When adding variants, update both and preserve existing `ruleId` values (RLS, OSV, static)
   for stable comparator hints; leave `ruleId` unset for heuristic-only findings.

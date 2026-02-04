@@ -2,11 +2,11 @@ import path from "node:path";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
-import { readEnv } from "../config/env.js";
-import { enableCheapMode } from "../config/cheapMode.js";
-import { runScan } from "../scan/runScan.js";
-import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
-import type { CoreFinding, ScanResult } from "../types.js";
+import { readEnv } from "../../src/config/env.js";
+import { enableCheapMode } from "../../src/config/cheapMode.js";
+import { runScan } from "../../src/scan/runScan.js";
+import { buildFindingIdentityKey } from "../../src/scan/dedupeKey.js";
+import type { CoreFinding, ScanResult } from "../../src/types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
 import { ALL_EVAL_SPECS } from "./specs.js";
 import type {

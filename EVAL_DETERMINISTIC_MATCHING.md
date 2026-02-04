@@ -4,12 +4,10 @@
 
 Hadrix evals currently match `ExpectedFinding` entries (human-written `expectation` text) against actual scan findings by comparing `expected.expectation` to `actual.summary`.
 
-Today this matching is not deterministic and adds significant latency:
+Today matching is deterministic and handled entirely in the eval runner:
 
-- `src/evals/runEvals.ts` always constructs `createOpenAiSummaryComparator()` and passes it into the evaluator.
-- `src/evals/openAiComparator.ts` calls the OpenAI API to judge whether two summaries “mean the same thing”, with heuristic fallbacks (including token/Jaccard) when the model output cannot be parsed.
-- The match outcome can vary with model choice, model updates, retries/timeouts, and small phrasing differences in either expected text or the scanner’s summary text.
-- It also adds network round-trips during eval runs, increasing wall-clock time and introducing external failure modes.
+- `evals/runner/runEvals.ts` invokes `evaluateRepoSpec()` to compare expected vs actual findings.
+- `evals/runner/evaluator.ts` matches on `identityKeyV2` first and falls back to rule-id/OSV alias heuristics when identity keys are missing.
 
 Separately, Hadrix already computes a stable-ish identifier for findings for deduplication:
 
@@ -137,7 +135,7 @@ This design assumes Strategy A for simplicity and robustness.
 
 Extend the expected finding schema to carry identity information:
 
-- Add `identityKeyV2?: string` to `ExpectedFinding` in `src/evals/types.ts`.
+- Add `identityKeyV2?: string` to `ExpectedFinding` in `evals/runner/types.ts`.
 - Require `ruleId` for deterministic eval suites. (Expectation text can remain for readability, but it won’t be used for matching.)
 - Optionally allow structured identity input as an alternative to a precomputed key:
   - `startLine`, `endLine` (already exist on `ExpectedFinding`)
@@ -213,4 +211,3 @@ Identity matching is local and fast:
 - Do we want to require `anchorNodeId` for deterministic evals (strongest), or allow `lines:` anchors (more flexible but sensitive to line drift)?
 - Should identity include `tool/source` to distinguish static vs LLM findings when they share the same `ruleId` and location?
 - How should we treat aggregated/composite findings (multiple sources merged) in deterministic evals?
-

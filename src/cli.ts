@@ -15,7 +15,7 @@ import {
 } from "./config/cheapMode.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
-import { formatEvalsText, runEvals, writeEvalArtifacts } from "./evals/runEvals.js";
+import { formatEvalsText, runEvals, writeEvalArtifacts } from "../evals/runner/runEvals.js";
 import { runSetup } from "./setup/runSetup.js";
 import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
