@@ -31,6 +31,7 @@ import { detectPublicEnvSecretUsage } from "./signals/detectors/secretExposure.j
 import { detectPublicApiKeySignals } from "./signals/detectors/publicApiKeyUsage.js";
 import { detectClientSuppliedIdentifiers } from "./signals/detectors/clientSuppliedIdentifiers.js";
 import { detectApiHandler } from "./signals/detectors/apiHandler.js";
+import { detectUnsafeQueryBuilderSignals } from "./signals/detectors/unsafeQueryBuilder.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -305,9 +306,6 @@ const SQL_EXEC_CALL_PATTERN =
   /\b(queryObject|query|execute|raw|unsafeSql)\s*(?:<[^>]+>)?\s*\(\s*sql\b/i;
 const SQL_HELPER_NAME_PATTERN =
   /\b(runQuery|queryExecutor|executeSql|unsafeSql|queryRunner|runSql)\b/i;
-const SUPABASE_OR_FILTER_PATTERN = /\.or\(\s*([A-Za-z0-9_]+)\s*\)/g;
-const QUERY_PARAM_ASSIGN_PATTERN =
-  /\bconst\s+([A-Za-z0-9_]+)\s*=\s*[^;\n]*?\b(searchParams\.get\(|req\.(?:query|params)\.)/g;
 const STRIPE_SECRET_PATTERN = /\bsk_(?:live|test)_[A-Za-z0-9]{8,}\b/;
 const SLACK_BOT_TOKEN_PATTERN = /\bxoxb-\d{8,}-\d{8,}-[A-Za-z0-9]{10,}\b/;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}\b/;
@@ -375,22 +373,10 @@ function detectRawSqlHelper(content: string): boolean {
   return SQL_HELPER_NAME_PATTERN.test(content);
 }
 
-function detectUnsafeQueryBuilder(content: string): boolean {
-  if (!content) return false;
-  SUPABASE_OR_FILTER_PATTERN.lastIndex = 0;
-  const orMatches = Array.from(content.matchAll(SUPABASE_OR_FILTER_PATTERN));
-  if (orMatches.length === 0) return false;
-  QUERY_PARAM_ASSIGN_PATTERN.lastIndex = 0;
-  const queryVars = new Set<string>();
-  for (const match of content.matchAll(QUERY_PARAM_ASSIGN_PATTERN)) {
-    if (match[1]) queryVars.add(match[1]);
-  }
-  if (queryVars.size === 0) return false;
-  for (const match of orMatches) {
-    const varName = match[1];
-    if (varName && queryVars.has(varName)) return true;
-  }
-  return false;
+function detectUnsafeQueryBuilder(content: string): { ormEvidence: string; inputEvidence: string } | null {
+  const hit = detectUnsafeQueryBuilderSignals(content);
+  if (!hit) return null;
+  return { ormEvidence: hit.ormQueryEvidence, inputEvidence: hit.untrustedInputEvidence };
 }
 
 function detectHardcodedSecret(content: string): boolean {
@@ -488,15 +474,16 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       confidence: 0.78
     });
   }
-  if (detectUnsafeQueryBuilder(content)) {
+  const unsafeQueryBuilder = detectUnsafeQueryBuilder(content);
+  if (unsafeQueryBuilder) {
     signals.push({
       id: "orm_query_sink",
-      evidence: "query builder uses .or() with request-derived filter",
+      evidence: unsafeQueryBuilder.ormEvidence,
       confidence: 0.76
     });
     signals.push({
       id: "untrusted_input_present",
-      evidence: "filter derived from request params used in query builder",
+      evidence: unsafeQueryBuilder.inputEvidence,
       confidence: 0.72
     });
   }
@@ -1139,7 +1126,10 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
             startLine: file.startLine,
             endLine: file.endLine
           },
-          staticSignals: staticSignals.map((signal) => signal.id)
+          staticSignals: staticSignals.map((signal) => ({
+            id: signal.id,
+            evidence: signal.evidence
+          }))
         });
       }
     }
@@ -2160,23 +2150,15 @@ function coerceStringArray(value: unknown): string[] {
 
 function parseSignals(value: unknown): LlmChunkUnderstandingSignal[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) {
-    throw new Error("signals must be an array.");
-  }
+  if (!Array.isArray(value)) return [];
   const results: LlmChunkUnderstandingSignal[] = [];
   for (const entry of value) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error("signals entries must be objects.");
-    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const record = entry as Record<string, unknown>;
-    const rawId = typeof record.id === "string" ? record.id.trim() : "";
-    if (!rawId || !SIGNAL_ID_SET.has(rawId as SignalId)) {
-      throw new Error(`Invalid signal id: ${rawId || "unknown"}.`);
-    }
+    const rawId = typeof record.id === "string" ? record.id.trim().toLowerCase() : "";
+    if (!rawId || !SIGNAL_ID_SET.has(rawId as SignalId)) continue;
     const evidence = typeof record.evidence === "string" ? record.evidence.trim() : "";
-    if (!evidence) {
-      throw new Error(`Signal evidence missing for ${rawId}.`);
-    }
+    if (!evidence) continue;
     results.push({
       id: rawId as SignalId,
       evidence,

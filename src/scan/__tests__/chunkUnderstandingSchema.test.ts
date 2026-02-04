@@ -89,7 +89,7 @@ test("chunk understanding: signals + identifiers", () => {
   });
 });
 
-test("chunk understanding: rejects unknown signal id", () => {
+test("chunk understanding: ignores unknown signal id", () => {
   const record = {
     chunk_id: "chunk-3",
     file_path: "src/api/unknown.ts",
@@ -99,12 +99,21 @@ test("chunk understanding: rejects unknown signal id", () => {
         id: "not_a_signal",
         evidence: "made up",
         confidence: 0.2
+      },
+      {
+        id: "authn_present",
+        evidence: "checks Authorization header",
+        confidence: 0.7
       }
     ]
   };
 
-  assert.throws(
-    () => parseChunkUnderstandingRecord(record, fallback),
-    /Invalid signal id/
-  );
+  const parsed = parseChunkUnderstandingRecord(record, fallback);
+  assert.deepStrictEqual(parsed.signals, [
+    {
+      id: "authn_present",
+      evidence: "checks Authorization header",
+      confidence: 0.7
+    }
+  ]);
 });

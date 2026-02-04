@@ -45,7 +45,7 @@ function matchesAny(patterns: RegExp[], value: string): boolean {
 }
 
 function normalizeParamName(value: string): string {
-  return value.replace(/[^A-Za-z0-9_]/g, "").toLowerCase();
+  return value.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
 function extractDestructuredNames(list: string): string[] {

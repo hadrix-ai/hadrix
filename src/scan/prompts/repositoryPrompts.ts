@@ -48,6 +48,13 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Evidence can be: the function signature (takes sql: string) + log message implying execution (e.g., \"Executing SQL\", \"Running SQL\").",
         "- Do NOT require a real DB driver call to be present in the chunk to report this helper pattern."
       ];
+    case "unsafe_query_builder":
+      return [
+        "Unsafe query builder guidance:",
+        "- Report when a query builder accepts a raw filter/expression string derived from request input (query params, path params, headers, or JSON body) without strict validation/allowlisting.",
+        "- For Supabase/PostgREST-style clients, `.or(filterString)` takes a raw filter grammar string; if user-controlled, treat it as unsafe query-builder usage.",
+        "- Evidence should show both the request-derived filter string and the `.or(...)` call."
+      ];
     case "missing_lockout":
       return [
         "Lockout/bruteforce guidance:",
