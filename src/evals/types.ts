@@ -31,6 +31,8 @@ export type ExpectedFinding = {
   severity?: Severity | null;
   source?: string | null;
   ruleId?: string | null;
+  identityKeyV2?: string | null;
+  anchorNodeId?: string | null;
   startLine?: number | null;
   endLine?: number | null;
 };

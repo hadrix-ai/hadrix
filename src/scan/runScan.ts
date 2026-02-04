@@ -19,7 +19,7 @@ import { attachJellyAnchors, computeJellyAnchors } from "./jellyAnchors.js";
 import { isJellyAvailable } from "./jelly.js";
 import { discoverEntryPoints } from "./entryPoints.js";
 import { buildJellyReachabilityIndex } from "./jellyReachability.js";
-import { buildFindingIdentityKey } from "./dedupeKey.js";
+import { buildFindingIdentityKey, buildFindingIdentityKeyV2 } from "./dedupeKey.js";
 import { runSupabaseSchemaScan } from "../supabase/supabaseSchemaScan.js";
 import { ProviderRequestFailedError } from "../errors/provider.errors.js";
 import { clearScanResumeState, createScanResumeStore } from "./scanResume.js";
@@ -304,28 +304,45 @@ function applyFindingIdentityKey<T extends { details?: Record<string, unknown> |
     typeof details.identityKey === "string" ? details.identityKey.trim() : "";
   const existingDedupeKey =
     typeof details.dedupeKey === "string" ? details.dedupeKey.trim() : "";
-  if (existingIdentityKey || existingDedupeKey) {
-    if (existingIdentityKey) {
-      details.identityKey = existingIdentityKey;
-    }
-    if (existingDedupeKey) {
-      details.dedupeKey = existingDedupeKey;
-    }
-    if (existingIdentityKey && !existingDedupeKey) {
-      details.dedupeKey = existingIdentityKey;
-    }
-    if (existingDedupeKey && !existingIdentityKey) {
-      details.identityKey = existingDedupeKey;
-    }
-    return { ...finding, details };
+
+  if (existingIdentityKey) {
+    details.identityKey = existingIdentityKey;
   }
-  const identityKey = buildFindingIdentityKey(finding as any, {
+  if (existingDedupeKey) {
+    details.dedupeKey = existingDedupeKey;
+  }
+  if (existingIdentityKey && !existingDedupeKey) {
+    details.dedupeKey = existingIdentityKey;
+  }
+  if (existingDedupeKey && !existingIdentityKey) {
+    details.identityKey = existingDedupeKey;
+  }
+  if (!existingIdentityKey && !existingDedupeKey) {
+    const identityKey = buildFindingIdentityKey(finding as any, {
+      fallbackRepoPath: fallbackRepoPath ?? null
+    });
+    if (identityKey) {
+      details.dedupeKey = identityKey;
+      details.identityKey = identityKey;
+    }
+  }
+
+  const existingIdentityKeyV2 =
+    typeof (details as any).identityKeyV2 === "string"
+      ? ((details as any).identityKeyV2 as string).trim()
+      : typeof (details as any).identity_key_v2 === "string"
+        ? ((details as any).identity_key_v2 as string).trim()
+        : "";
+  if (existingIdentityKeyV2) {
+    (details as any).identityKeyV2 = existingIdentityKeyV2;
+  }
+  const computedIdentityKeyV2 = buildFindingIdentityKeyV2(finding as any, {
     fallbackRepoPath: fallbackRepoPath ?? null
   });
-  if (identityKey) {
-    details.dedupeKey = identityKey;
-    details.identityKey = identityKey;
+  if (computedIdentityKeyV2 && computedIdentityKeyV2 !== existingIdentityKeyV2) {
+    (details as any).identityKeyV2 = computedIdentityKeyV2;
   }
+
   return { ...finding, details };
 }
 
@@ -1514,7 +1531,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         if (summaryDropped > 0) {
           log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
         }
-        llmFindings = dedupedSummaryFindings;
+        llmFindings = dedupedSummaryFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
       }
   
       if (

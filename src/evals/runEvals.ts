@@ -8,7 +8,6 @@ import { runScan } from "../scan/runScan.js";
 import { buildFindingIdentityKey } from "../scan/dedupeKey.js";
 import type { CoreFinding, ScanResult } from "../types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
-import { createOpenAiSummaryComparator } from "./openAiComparator.js";
 import { ALL_EVAL_SPECS } from "./specs.js";
 import type {
   EvalFinding,
@@ -145,7 +144,7 @@ const toEvalFindings = (scanResult: ScanResult): EvalFinding[] => {
   if (coreFindings.length === 0) {
     return scanResult.findings.map((finding, index) => ({
       id: `fallback:${index}`,
-      type: null,
+      type: finding.source === "llm" ? "repository" : "static",
       source: finding.source,
       severity: finding.severity,
       category: null,
@@ -156,7 +155,7 @@ const toEvalFindings = (scanResult: ScanResult): EvalFinding[] => {
   }
   return coreFindings.map((finding, index) => ({
     id: buildEvalFindingId(finding, index),
-    type: finding.type ?? null,
+    type: finding.type,
     source: finding.source ?? null,
     severity: finding.severity,
     category: finding.category ?? null,
@@ -405,7 +404,6 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
   if (options.cheap || options.fast) {
     enableCheapMode();
   }
-  const comparator = createOpenAiSummaryComparator();
   const specsToRun = ALL_EVAL_SPECS.filter((spec) => matchesSpec(spec, options.specId));
   if (specsToRun.length === 0) {
     throw new Error(`No eval specs matched: ${options.specId ?? "(all)"}`);
@@ -465,7 +463,6 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
       const evalResponse = await evaluateRepoSpec({
         spec: { ...spec, groups: runnableGroups },
         actual: evalFindings,
-        comparator,
         groupId: null,
         summaryMatchThreshold: options.summaryMatchThreshold ?? DEFAULT_SUMMARY_MATCH_THRESHOLD,
         comparisonConcurrency: options.comparisonConcurrency,

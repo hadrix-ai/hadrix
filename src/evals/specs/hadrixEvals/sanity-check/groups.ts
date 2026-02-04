@@ -8,7 +8,11 @@ export const SANITY_CHECK_GROUPS: EvalGroupSpec[] = [
     expectedFindings: [
       {
         filepath: "src/unsafeSql.ts",
-        expectation: "Unsafe raw SQL execution helper without parameterization",
+        expectation: "SQL injection: getProjectById interpolates params.id into raw SQL",
+        ruleId: "sql_injection",
+        anchorNodeId: "jelly:src/unsafeSql.ts:16:8:19:2",
+        startLine: 16,
+        endLine: 19,
         severity: "high",
       },
     ],

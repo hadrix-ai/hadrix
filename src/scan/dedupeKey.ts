@@ -7,6 +7,16 @@ export type FindingIdentityInput = {
   details?: Record<string, unknown> | null;
 };
 
+export type IdentityKeyV2Parts = {
+  filepath: string;
+  repoPath?: string | null;
+  ruleId: string;
+  anchorNodeId?: string | null;
+  startLine?: number | null;
+  endLine?: number | null;
+  chunkIndex?: number | null;
+};
+
 const IDENTITY_KIND_ALIASES: Record<string, string> = {
   missing_rate_limiting: "rate_limiting",
   missing_rate_limit: "rate_limiting",
@@ -57,6 +67,10 @@ function normalizeKeyPart(value: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .replace(/\|/g, "/");
+}
+
+function sanitizeV2Part(value: string): string {
+  return value.trim().replace(/\|/g, "/");
 }
 
 function normalizeTypeToken(value: string): string {
@@ -136,6 +150,10 @@ function extractRuleIdIdentity(finding: FindingIdentityInput): string {
   const details = toRecord(finding.details);
   const raw = details.ruleId ?? details.rule_id ?? details.ruleID;
   return typeof raw === "string" ? raw.trim() : "";
+}
+
+function normalizeRuleIdV2(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function extractCandidateTypeToken(finding: FindingIdentityInput): string {
@@ -256,6 +274,110 @@ function extractLocationParts(
     endLine: normalizedEnd ?? null,
     chunkIndex
   };
+}
+
+export function buildIdentityKeyV2(parts: IdentityKeyV2Parts): string {
+  const repoPath = normalizeRepoPath(parts.repoPath ?? "");
+  let filepath = normalizeFilepath(parts.filepath);
+  if (!filepath) return "";
+  if (repoPath && !filepath.startsWith(`${repoPath}/`) && filepath !== repoPath) {
+    filepath = `${repoPath}/${filepath}`.replace(/\/+/g, "/");
+  }
+
+  const ruleId = normalizeRuleIdV2(parts.ruleId);
+  if (!ruleId) return "";
+
+  let anchor = "";
+  const anchorNodeId =
+    typeof parts.anchorNodeId === "string" ? parts.anchorNodeId.trim() : "";
+  if (anchorNodeId) {
+    anchor = `anchor:${anchorNodeId}`;
+  } else {
+    const startRaw = typeof parts.startLine === "number" && Number.isFinite(parts.startLine)
+      ? Math.trunc(parts.startLine)
+      : null;
+    const endRaw = typeof parts.endLine === "number" && Number.isFinite(parts.endLine)
+      ? Math.trunc(parts.endLine)
+      : null;
+    if (startRaw !== null || endRaw !== null) {
+      let start = startRaw ?? endRaw ?? 0;
+      if (start < 0) start = 0;
+      let end = endRaw ?? start;
+      if (end < start) end = start;
+      anchor = `lines:${start}-${end}`;
+    } else if (typeof parts.chunkIndex === "number" && Number.isFinite(parts.chunkIndex)) {
+      const chunkIndex = Math.trunc(parts.chunkIndex);
+      if (chunkIndex >= 0) {
+        anchor = `chunk:${chunkIndex}`;
+      }
+    }
+  }
+
+  if (!anchor) return "";
+
+  return [
+    "v2",
+    sanitizeV2Part(filepath),
+    sanitizeV2Part(ruleId),
+    sanitizeV2Part(anchor),
+  ].join("|");
+}
+
+export function buildFindingIdentityKeyV2(
+  finding: FindingIdentityInput,
+  options?: { fallbackRepoPath?: string | null }
+): string {
+  const details = toRecord(finding.details);
+  const location = toRecord(finding.location);
+  const repoPath = normalizeRepoPath(
+    location.repoPath ??
+      (location as any).repo_path ??
+      details.repoPath ??
+      (details as any).repo_path ??
+      options?.fallbackRepoPath ??
+      ""
+  );
+  const filepathRaw =
+    (location.filepath ??
+      (location as any).filePath ??
+      location.path ??
+      (location as any).file ??
+      details.filepath ??
+      (details as any).filePath ??
+      details.path ??
+      (details as any).file) as unknown;
+  const filepath = normalizeFilepath(filepathRaw);
+  if (!filepath) return "";
+
+  const findingType = typeof finding.type === "string" ? finding.type.trim() : "";
+  const fallbackRuleId =
+    findingType &&
+    findingType !== "static" &&
+    findingType !== "repository" &&
+    findingType !== "repository_composite"
+      ? findingType
+      : "";
+  const ruleId = extractRuleIdIdentity(finding) || fallbackRuleId;
+  if (!ruleId) return "";
+
+  const anchorNodeId = extractAnchorNodeId(finding);
+  const startLine = parseLineNumber(
+    location.startLine ?? (location as any).start_line ?? location.line ?? location.start
+  );
+  const endLine = parseLineNumber(
+    location.endLine ?? (location as any).end_line ?? (location as any).lineEnd ?? location.end
+  );
+  const chunkIndex = parseChunkIndex((location as any).chunkIndex ?? (location as any).chunk_index);
+
+  return buildIdentityKeyV2({
+    filepath,
+    repoPath: repoPath || null,
+    ruleId,
+    anchorNodeId: anchorNodeId || null,
+    startLine: startLine ?? endLine ?? null,
+    endLine: endLine ?? startLine ?? null,
+    chunkIndex,
+  });
 }
 
 export function buildFindingIdentityKey(

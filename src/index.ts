@@ -5,5 +5,4 @@ export * from "./report/formatters.js";
 export * from "./evals/runEvals.js";
 export * from "./evals/specs.js";
 export * from "./evals/types.js";
-export * from "./evals/openAiComparator.js";
 export * from "./types.js";
