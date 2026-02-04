@@ -2,7 +2,7 @@
 import path from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
 import { SUPABASE_SCHEMA_SCAN_FLAG, isSupabaseSchemaScanEnabled } from "./config/featureFlags.js";
@@ -228,27 +228,30 @@ program
 program
   .command("scan [target]")
   .description("Scan a project directory")
-  .option("-c, --config <path>", "Path to hadrix.config.json")
+  .addOption(new Option("-c, --config <path>", "Path to hadrix.config.json").hideHelp())
   .option("-f, --format <format>", "Output format (text|json|core-json)")
   .option("--json", "Shortcut for --format json")
-  .option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)")
-  .option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots")
+  .addOption(new Option("--repo-path <path>", "Scope scan to a subdirectory (monorepo)").hideHelp())
+  .addOption(
+    new Option("--no-repo-path-inference", "Disable repoPath inference for monorepo roots").hideHelp()
+  )
   .option("--skip-static", "Skip running static scanners")
-  .option("--supabase", "Connect to Supabase and include schema-based checks")
-  .option("--supabase-url <string>", "Supabase project URL")
-  .option("--supabase-password <password>", "Supabase DB password (replaces placeholder)")
-  .option("--supabase-schema <path>", "Supabase schema snapshot JSON (no DB connection)")
-  .option("--existing-findings <path>", "Existing findings JSON array or file path")
-  .option("--repo-full-name <name>", "Repository full name for metadata")
-  .option("--repo-id <id>", "Repository id for metadata")
-  .option("--commit-sha <sha>", "Commit SHA for metadata")
+  .addOption(new Option("--supabase", "Connect to Supabase and include schema-based checks").hideHelp())
+  .addOption(new Option("--supabase-url <string>", "Supabase project URL").hideHelp())
+  .addOption(new Option("--supabase-password <password>", "Supabase DB password (replaces placeholder)").hideHelp())
+  .addOption(new Option("--supabase-schema <path>", "Supabase schema snapshot JSON (no DB connection)").hideHelp())
+  .addOption(
+    new Option("--existing-findings <path>", "Existing findings JSON array or file path").hideHelp()
+  )
+  .addOption(new Option("--repo-full-name <name>", "Repository full name for metadata").hideHelp())
+  .addOption(new Option("--repo-id <id>", "Repository id for metadata").hideHelp())
+  .addOption(new Option("--commit-sha <sha>", "Commit SHA for metadata").hideHelp())
   .option(
     "--power",
-    `Use power LLM mode (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}); power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
+    `Power mode switches the model from the default lightweight models (${DEFAULT_LLM_MODEL_OPENAI}, ${DEFAULT_LLM_MODEL_ANTHROPIC}) to more capable models (${POWER_LLM_MODEL_OPENAI}, ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost. The default lightweight mode is optimal for more frequent scans or CI/CD use cases.`
   )
-  .option("--reasoning", "Enable LLM reasoning mode")
-  .option("--debug", "Enable debug logging to a file")
-  .option("--debug-log <path>", "Path to write debug log (implies --debug)")
+  .option("--debug", "Enable debug logging")
+  .addOption(new Option("--debug-log <path>", "Path to write debug log (implies --debug)").hideHelp())
   .action(async (
     target: string | undefined,
     options: {
@@ -267,7 +270,6 @@ program
       repoId?: string;
       commitSha?: string;
       power?: boolean;
-      reasoning?: boolean;
       debug?: boolean;
       debugLog?: string;
     }
@@ -280,10 +282,6 @@ program
     let scanStart = Date.now();
     let statusMessage = "Running scan...";
     const powerMode = Boolean(options.power);
-    const reasoningMode = Boolean(options.reasoning);
-    if (reasoningMode) {
-      process.env.HADRIX_LLM_REASONING = "1";
-    }
 
     const stateDir = path.join(projectRoot, ".hadrix");
     let resumeMode: "new" | "resume" = "new";
@@ -534,7 +532,6 @@ program
     "--power",
     `Use power LLM mode. OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}. Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
   )
-  .option("--reasoning", "Enable LLM reasoning mode")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
   .action(async (fixturesDir: string | undefined, options: {
@@ -552,7 +549,6 @@ program
     json?: boolean;
     skipStatic?: boolean;
     power?: boolean;
-    reasoning?: boolean;
     debug?: boolean;
     debugLog?: string;
   }) => {
@@ -567,10 +563,6 @@ program
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
     const powerMode = Boolean(options.power);
-    const reasoningMode = Boolean(options.reasoning);
-    if (reasoningMode) {
-      process.env.HADRIX_LLM_REASONING = "1";
-    }
 
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;

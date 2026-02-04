@@ -200,7 +200,8 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
 
   const llmReasoning =
     parseOptionalBoolean(readEnvRaw("HADRIX_LLM_REASONING")) ??
-    parseOptionalBoolean(configFile.llm?.reasoning);
+    parseOptionalBoolean(configFile.llm?.reasoning) ??
+    true;
 
   const llmReasoningModelRaw =
     readEnv("HADRIX_LLM_REASONING_MODEL") || configFile.llm?.reasoningModel;
