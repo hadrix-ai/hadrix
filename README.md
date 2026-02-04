@@ -10,7 +10,7 @@ We do a combination of static scanning and LLM-powered scanning. Please see http
 
 Install
 ```bash
-npm install -g hadrix-ai/cli
+npm install -g hadrix
 ```
 
 Setup - installs required binaries - static scanners
