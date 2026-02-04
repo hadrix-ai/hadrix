@@ -39,6 +39,7 @@ export const SIGNAL_IDS = [
   "login_attempt_present",
   "bearer_token_optional",
   "auth_header_present",
+  "jwt_decode_present",
   "client_db_write",
   "public_storage_bucket"
 ] as const;
@@ -165,6 +166,9 @@ export const SIGNAL_DEFINITIONS: Record<SignalId, { description: string }> = {
   },
   auth_header_present: {
     description: "Authorization header is read to establish authentication context."
+  },
+  jwt_decode_present: {
+    description: "JWT payload is decoded or parsed."
   },
   client_db_write: {
     description: "Client-side code performs direct database writes via a browser SDK."

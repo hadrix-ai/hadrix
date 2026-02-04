@@ -32,6 +32,8 @@ import { detectPublicApiKeySignals } from "./signals/detectors/publicApiKeyUsage
 import { detectClientSuppliedIdentifiers } from "./signals/detectors/clientSuppliedIdentifiers.js";
 import { detectApiHandler } from "./signals/detectors/apiHandler.js";
 import { detectUnsafeQueryBuilderSignals } from "./signals/detectors/unsafeQueryBuilder.js";
+import { detectJwtDecodeEvidence } from "./signals/detectors/jwtUsage.js";
+import { detectDebugAuthLeakSignals } from "./signals/detectors/debugAuthLeak.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -291,10 +293,6 @@ const CORS_ALLOW_ORIGIN_WILDCARD_PATTERN =
   /access-control-allow-origin[^\n]{0,80}["']?\*["']?/i;
 const CORS_SET_HEADER_PATTERN =
   /setHeader\(\s*["']Access-Control-Allow-Origin["']\s*,\s*["']\*["']\s*\)/i;
-const DEBUG_FLAG_PATTERN = /\bdebug\s*:\s*true\b/i;
-const HEADERS_DUMP_PATTERN =
-  /headers\.entries\(\)|Object\.fromEntries\([^)]*headers\.entries\(\)\)/i;
-const ENV_DUMP_PATTERN = /\bprocess\.env\b|\bDeno\.env\b/i;
 const STORAGE_BUCKET_PATTERN = /bucket/i;
 const PUBLIC_BUCKET_NAME_PATTERN = /["'`][^"'`]*public[^"'`]*["'`]/i;
 const PUBLIC_BUCKET_CONFIG_PATTERN = /\bpublic\s*:\s*true\b/i;
@@ -352,11 +350,6 @@ function detectPermissiveCors(content: string): boolean {
     CORS_SET_HEADER_PATTERN.test(content) ||
     CORS_ALLOW_ORIGIN_WILDCARD_PATTERN.test(content)
   );
-}
-
-function detectDebugAuthLeak(content: string): boolean {
-  if (!content || !DEBUG_FLAG_PATTERN.test(content)) return false;
-  return HEADERS_DUMP_PATTERN.test(content) || ENV_DUMP_PATTERN.test(content);
 }
 
 function detectPublicStorageBucket(content: string): boolean {
@@ -430,6 +423,14 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       confidence: 0.74
     });
   }
+  const jwtDecodeEvidence = detectJwtDecodeEvidence(content);
+  if (jwtDecodeEvidence) {
+    signals.push({
+      id: "jwt_decode_present",
+      evidence: jwtDecodeEvidence,
+      confidence: 0.76
+    });
+  }
   if (detectPermissiveCors(content)) {
     signals.push({
       id: "cors_permissive_or_unknown",
@@ -437,17 +438,16 @@ function collectStaticSignals(file: RepositoryFileSample): LlmChunkUnderstanding
       confidence: 0.78
     });
   }
-  if (detectDebugAuthLeak(content)) {
-    signals.push({
-      id: "debug_endpoint",
-      evidence: "debug response exposes headers or env details",
-      confidence: 0.76
-    });
-    signals.push({
-      id: "logs_sensitive",
-      evidence: "debug response includes request headers or env values",
-      confidence: 0.72
-    });
+  const debugLeakSignals = detectDebugAuthLeakSignals(content);
+  if (debugLeakSignals.length > 0) {
+    for (const signal of debugLeakSignals) {
+      if (signals.some((entry) => entry.id === signal.id)) continue;
+      signals.push({
+        id: signal.id,
+        evidence: signal.evidence,
+        confidence: signal.id === "debug_endpoint" ? 0.76 : 0.72
+      });
+    }
   }
   const publicApiKeySignals = detectPublicApiKeySignals(content);
   if (publicApiKeySignals.length > 0) {
@@ -1117,6 +1117,24 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         truncationReason: packing.truncationReason ?? null,
         estimatedPromptTokens: packing.estimatedPromptTokens
       });
+      if (packing.truncated) {
+        const droppedRuleIds = candidateRuleIds.filter(
+          (ruleId) => !packedRuleIds.includes(ruleId)
+        );
+        if (droppedRuleIds.includes("idor")) {
+          logDebug(input.debug, {
+            event: "llm_rule_packing_drop",
+            file: {
+              path: file.path,
+              chunkIndex: file.chunkIndex,
+              startLine: file.startLine,
+              endLine: file.endLine
+            },
+            droppedCount: droppedRuleIds.length,
+            droppedRuleIds: droppedRuleIds.slice(0, 8)
+          });
+        }
+      }
       if (staticSignals.length > 0) {
         logDebug(input.debug, {
           event: "static_signal_detection",

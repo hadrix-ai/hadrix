@@ -70,7 +70,8 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     id: "idor",
     title: "Insecure direct object reference (IDOR)",
     category: "access_control",
-    description: "Resources are fetched or mutated by ID without ownership or tenant validation.",
+    description:
+      "Resources are fetched or mutated by user-supplied identifiers (IDs, emails, usernames) without ownership or tenant validation.",
     requiredControls: ["authorization:ownership_or_membership"],
     candidateTypes: ["idor"],
     requiredAnySignals: [
@@ -79,10 +80,13 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
       "client_supplied_user_id",
       "id_in_path_or_query"
     ],
-    optionalSignals: ["authz_missing_or_unknown"],
+    optionalSignals: ["authz_missing_or_unknown", "id_in_path_or_query", "api_handler"],
+    evidenceQuestions: [
+      "Does the handler fetch or return a record by a user-supplied identifier (ID/email/username) without scoping it to the authenticated user or tenant?"
+    ],
     guidance: [
       "Verify queries scope records to the authenticated user or tenant.",
-      "Flag missing ownership checks when IDs come from user input.",
+      "Flag missing ownership checks when IDs, emails, or usernames come from user input.",
       "Authentication checks alone (e.g., just verifying a userId/header exists) do not count unless the query is scoped by that identity."
     ]
   },
@@ -471,7 +475,7 @@ export const REPOSITORY_SCAN_RULES: RuleScanDefinition[] = [
     category: "authentication",
     description: "JWT verification can be bypassed or uses weak validation.",
     candidateTypes: ["jwt_validation_bypass"],
-    requiredAnySignals: ["authn_present", "auth_header_present"],
+    requiredAnySignals: ["authn_present", "auth_header_present", "jwt_decode_present"],
     optionalSignals: ["secrets_access"]
   },
   {

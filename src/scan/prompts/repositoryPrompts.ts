@@ -63,12 +63,19 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Evidence can be absence-of-control: there is no delay counters, no attempt tracking, no CAPTCHA, no lockout messaging or state.",
         "- Do not confuse missing credential validation bugs with lockout bugs; focus on brute-force defenses."
       ];
+    case "idor":
+      return [
+        "IDOR guidance:",
+        "- Authentication alone is not authorization; checking a userId/header does NOT satisfy ownership unless the data access is scoped by that identity.",
+        "- Report when a record is fetched by a client-supplied ID/email/username without an ownership or membership filter."
+      ];
     case "missing_rate_limiting":
       return [
         "Rate limiting guidance:",
         "- Report when a server-side handler performs login, token issuance, password reset, invite, delete, or other sensitive actions and there is no visible rate limiting/backoff/guard in the handler or referenced middleware.",
         "- Do NOT report on client-only helpers or UI components.",
         "- Login endpoints are expected to be public; do not confuse missing_authentication with missing_rate_limiting.",
+        "- It is valid to report based on the shown handler logic; you do not need proof of missing rate limiting elsewhere in the repo.",
         "- Comments/feature flags indicating a missing or disabled limiter count as missing."
       ];
     case "missing_timeout":
@@ -100,6 +107,14 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Do NOT report on login/signup/token issuance endpoints; those are public by design.",
         "- Only report when the handler performs sensitive actions without any auth/session validation."
       ];
+    case "idor":
+      return [
+        "IDOR guidance:",
+        "- Treat emails/usernames as identifiers when they are used to fetch or return records.",
+        "- If a handler reads a request param/query (id/email/userId/orgId) and uses it in a data lookup without scoping to the authenticated user or tenant, report IDOR.",
+        "- It is valid to report IDOR even if the handler shows no authentication at all; missing ownership/tenant validation still applies.",
+        "- Evidence can be: request param read + query/lookup using it + response returning the record."
+      ];
     case "missing_bearer_token":
       return [
         "Bearer token guidance:",
@@ -107,6 +122,13 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Treat frontend session tokens (from client auth SDKs or localStorage) as attacker-controlled; if they can be empty, report.",
         "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
         "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
+      ];
+    case "idor":
+      return [
+        "IDOR guidance:",
+        "- Treat user-supplied emails/usernames the same as IDs for IDOR purposes.",
+        "- Report when a handler fetches or returns a record using a user-supplied identifier without scoping it to the authenticated user/tenant.",
+        "- Authentication alone is insufficient unless the query is scoped by that identity."
       ];
     case "anon_key_bearer":
       return [
@@ -150,7 +172,7 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "JWT validation bypass guidance:",
         "- Report when code accepts a JWT/bearer token without verifying its signature (e.g., jwt.decode without verify, or constructing auth context purely from header presence).",
         "- Treat patterns like `if (rawToken) return { userId: ... }` before any verification as a bypass.",
-        "- Evidence can be: parsing `Authorization: Bearer ...` and returning a user context without verification."
+        "- Evidence can be: parsing `Authorization: Bearer ...` or a session cookie and returning a user context without verification."
       ];
     default:
       return [];
