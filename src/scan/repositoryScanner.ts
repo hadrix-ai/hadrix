@@ -34,6 +34,7 @@ import { detectApiHandler } from "./signals/detectors/apiHandler.js";
 import { detectUnsafeQueryBuilderSignals } from "./signals/detectors/unsafeQueryBuilder.js";
 import { detectJwtDecodeEvidence } from "./signals/detectors/jwtUsage.js";
 import { detectDebugAuthLeakSignals } from "./signals/detectors/debugAuthLeak.js";
+import type { ScanProgressHandler } from "./progress.js";
 
 export interface RepositoryDescriptor {
   fullName: string;
@@ -52,6 +53,7 @@ export interface RepositoryScanInput {
   debug?: DedupeDebug;
   resume?: ScanResumeStore;
   logger?: (message: string) => void;
+  progress?: ScanProgressHandler;
 }
 
 export interface CompositeScanInput {
@@ -1031,6 +1033,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     minBatchSize: understandingMinBatchSize,
     maxBatchChunks: understandingMaxBatchChunks
   });
+  const reportProgress = input.progress;
+  reportProgress?.({ phase: "llm_map", current: 0, total: mappingBatches.length });
 
   const buildMappingPayload = (file: RepositoryFileSample, chunkId: string) => ({
     chunk_id: chunkId,
@@ -1151,18 +1155,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         });
       }
     }
-    log(
-      [
-        "LLM map",
-        `${file.path}:${file.startLine}-${file.endLine}`,
-        `signals=${signalIds.length}`,
-        `families=${selection.families.length ? selection.families.join(",") : "none"}`,
-        `eligibleRules=${candidateRuleIds.length}`,
-        `packedRules=${packedRuleIds.length}`,
-        `highRisk=${selection.highRisk ? "yes" : "no"}`,
-        `strategy=${selection.strategy}`
-      ].join(" | ")
-    );
     return {
       file,
       chunkId,
@@ -1376,10 +1368,20 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     );
   };
 
+  let mappingCompleted = 0;
   const fileInsights = (await runWithConcurrency(
     mappingBatches,
     mapConcurrency,
-    mapBatch
+    async (batch) => {
+      const result = await mapBatch(batch);
+      mappingCompleted += 1;
+      reportProgress?.({
+        phase: "llm_map",
+        current: mappingCompleted,
+        total: mappingBatches.length
+      });
+      return result;
+    }
   )).flat();
 
   const tasks: RuleScanTask[] = [];
@@ -1440,6 +1442,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     };
   })();
 
+  reportProgress?.({ phase: "llm_rule", current: 0, total: tasks.length });
+  let ruleTasksCompleted = 0;
   const results = await runWithConcurrency(tasks, ruleScanConcurrency, async (task) => {
     const { ruleIds, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping } = task;
     const scoped = await runRuleBatchWithRetry(
@@ -1458,6 +1462,12 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
       return adjusted;
     }
     await input.resume?.recordRuleResult(taskKey, scoped);
+    ruleTasksCompleted += 1;
+    reportProgress?.({
+      phase: "llm_rule",
+      current: ruleTasksCompleted,
+      total: tasks.length
+    });
     return scoped;
   });
 
@@ -1548,6 +1558,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   );
 
   log("LLM scan (open scan)...");
+  reportProgress?.({ phase: "llm_open", current: 0, total: openScanTasks.length });
+  let openTasksCompleted = 0;
   const openScanResults = await runWithConcurrency(
     openScanTasks,
     ruleScanConcurrency,
@@ -1618,6 +1630,12 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           return adjusted;
         }
         await input.resume?.recordRuleResult(taskKey, scoped);
+        openTasksCompleted += 1;
+        reportProgress?.({
+          phase: "llm_open",
+          current: openTasksCompleted,
+          total: openScanTasks.length
+        });
         return scoped;
       } catch (err) {
         const savedPath = await writeLlmDebugArtifact(
@@ -1639,6 +1657,12 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           },
           message,
           savedPath,
+        });
+        openTasksCompleted += 1;
+        reportProgress?.({
+          phase: "llm_open",
+          current: openTasksCompleted,
+          total: openScanTasks.length
         });
         return [];
       }

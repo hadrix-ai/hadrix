@@ -220,7 +220,10 @@ export function resolveToolPath(
   return null;
 }
 
-export function assertStaticScannersAvailable(config: HadrixConfig): ToolPaths {
+export function resolveStaticScannersAvailable(config: HadrixConfig): {
+  tools: Partial<ToolPaths>;
+  missing: string[];
+} {
   const semgrep = resolveToolPath("semgrep", config.staticScanners.semgrep.path);
   const gitleaks = resolveToolPath("gitleaks", config.staticScanners.gitleaks.path);
   const osvScanner = resolveToolPath("osv-scanner", config.staticScanners.osvScanner.path);
@@ -230,13 +233,10 @@ export function assertStaticScannersAvailable(config: HadrixConfig): ToolPaths {
   if (!gitleaks) missing.push("gitleaks");
   if (!osvScanner) missing.push("osv-scanner");
 
-  if (missing.length) {
-    throw new Error(
-      `Missing required static scanners: ${missing.join(", ")}. Run 'hadrix setup' to install them.`
-    );
-  }
-
-  return { semgrep, gitleaks, osvScanner };
+  return {
+    tools: { semgrep, gitleaks, osvScanner },
+    missing
+  };
 }
 
 function mapSeverity(tool: StaticFinding["tool"], raw: string | number | undefined): Severity {
@@ -858,14 +858,39 @@ async function runOsvScanner(
 
 export async function runStaticScanners(config: HadrixConfig, scanRoot: string, logger?: (message: string) => void): Promise<StaticFinding[]> {
   mkdirSync(getToolsDir(), { recursive: true });
-  const tools = assertStaticScannersAvailable(config);
+  const { tools, missing } = resolveStaticScannersAvailable(config);
+
+  const logSkip = (tool: string, reason: string) => {
+    logger?.(`[hadrix] Skipping ${tool} static scanner: ${reason}`);
+  };
+  const runSafe = async (tool: string, runner: () => Promise<StaticFinding[]>): Promise<StaticFinding[]> => {
+    try {
+      return await runner();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger?.(`[hadrix] ${tool} static scanner failed; skipping. ${message}`);
+      return [];
+    }
+  };
+
+  if (missing.length) {
+    for (const tool of missing) {
+      logSkip(tool, "missing tool binary. Run 'hadrix setup' to install.");
+    }
+  }
 
   logger?.("Running static scanners (eslint, semgrep, gitleaks, osv-scanner)...");
   const [eslint, semgrep, gitleaks, osv] = await Promise.all([
-    runEslint(config, scanRoot, config.projectRoot),
-    runSemgrep(config, tools.semgrep, scanRoot, config.projectRoot),
-    runGitleaks(tools.gitleaks, scanRoot, config.projectRoot),
-    runOsvScanner(config, tools.osvScanner, scanRoot, config.projectRoot)
+    runSafe("eslint", () => runEslint(config, scanRoot, config.projectRoot)),
+    tools.semgrep
+      ? runSafe("semgrep", () => runSemgrep(config, tools.semgrep!, scanRoot, config.projectRoot))
+      : Promise.resolve([]),
+    tools.gitleaks
+      ? runSafe("gitleaks", () => runGitleaks(tools.gitleaks!, scanRoot, config.projectRoot))
+      : Promise.resolve([]),
+    tools.osvScanner
+      ? runSafe("osv-scanner", () => runOsvScanner(config, tools.osvScanner!, scanRoot, config.projectRoot))
+      : Promise.resolve([])
   ]);
 
   return [...eslint, ...semgrep, ...gitleaks, ...osv];

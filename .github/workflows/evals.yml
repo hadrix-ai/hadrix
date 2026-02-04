@@ -33,7 +33,7 @@ jobs:
           HADRIX_PROVIDER: openai
           HADRIX_API_KEY: ${{ secrets.HADRIX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: npm run dev -- evals --cheap --spec evals-sanity-check
+        run: npm run dev -- evals --cheap --reasoning --spec evals-sanity-check
 
       - name: Upload eval artifacts (sanity)
         if: always()
@@ -100,7 +100,7 @@ jobs:
           HADRIX_PROVIDER: openai
           HADRIX_API_KEY: ${{ secrets.HADRIX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: npm run dev -- evals --cheap --spec ${{ matrix.spec }}
+        run: npm run dev -- evals --cheap --reasoning --spec ${{ matrix.spec }}
 
       - name: Upload eval artifacts
         if: always()

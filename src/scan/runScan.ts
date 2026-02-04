@@ -44,6 +44,7 @@ import type {
   StaticFinding
 } from "../types.js";
 import type { DedupeDebug } from "./debugLog.js";
+import type { ScanProgressHandler } from "./progress.js";
 
 export interface RunScanOptions {
   projectRoot: string;
@@ -57,6 +58,7 @@ export interface RunScanOptions {
   repositoryId?: string | null;
   commitSha?: string | null;
   logger?: (message: string) => void;
+  progress?: ScanProgressHandler;
   debug?: boolean;
   debugLogPath?: string | null;
   supabase?: { connectionString?: string; schemaSnapshotPath?: string; useCli?: boolean } | null;
@@ -1112,9 +1114,19 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       supabaseFindings = supabaseResult.findings;
     }
 
+    if (options.progress) {
+      if (options.skipStatic) {
+        options.progress({ phase: "static_scanners", current: 0, total: 0, message: "skipped" });
+      } else {
+        options.progress({ phase: "static_scanners", current: 0, total: 1 });
+      }
+    }
     const rawStaticFindings = options.skipStatic
       ? [...supabaseFindings]
       : [...supabaseFindings, ...(await runStaticScanners(config, scanRoot, log))];
+    if (options.progress && !options.skipStatic) {
+      options.progress({ phase: "static_scanners", current: 1, total: 1 });
+    }
     log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
   
     let jellyResult: JellyAnchorComputation | null = null;
@@ -1470,7 +1482,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
               existingFindings,
               logger: log,
               debug: debugContext("llm_rule_pass"),
-              resume: resumeStore ?? undefined
+              resume: resumeStore ?? undefined,
+              progress: options.progress
             });
           } catch (err) {
             await handleResumeError(err, "rule");
@@ -1541,30 +1554,34 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       ) {
         if (!isCompositeScanEnabled()) {
           log("LLM composite pass disabled (HADRIX_DISABLE_COMPOSITE_SCAN=1).");
+          options.progress?.({ phase: "llm_composite", current: 0, total: 0, message: "disabled" });
         } else {
-        const resumedComposite = resumeStore?.getCompositeResults();
-        if (resumedComposite !== null && resumedComposite !== undefined) {
-          compositeFindings = resumedComposite;
-        } else {
-          if (resumeStore) {
-            await resumeStore.setStage("composite");
+          const resumedComposite = resumeStore?.getCompositeResults();
+          if (resumedComposite !== null && resumedComposite !== undefined) {
+            compositeFindings = resumedComposite;
+            options.progress?.({ phase: "llm_composite", current: 1, total: 1 });
+          } else {
+            if (resumeStore) {
+              await resumeStore.setStage("composite");
+            }
+            log("LLM scan (composite pass)...");
+            try {
+              options.progress?.({ phase: "llm_composite", current: 0, total: 1 });
+              compositeFindings = await scanRepositoryComposites({
+                config,
+                repository: repositoryDescriptor,
+                files: fileSamples,
+                existingFindings,
+                priorFindings: llmFindings,
+                debug: debugContext("llm_composite_pass")
+              });
+              await resumeStore?.recordCompositeResult(compositeFindings);
+              options.progress?.({ phase: "llm_composite", current: 1, total: 1 });
+            } catch (err) {
+              await handleResumeError(err, "composite");
+              throw err;
+            }
           }
-          log("LLM scan (composite pass)...");
-          try {
-            compositeFindings = await scanRepositoryComposites({
-              config,
-              repository: repositoryDescriptor,
-              files: fileSamples,
-              existingFindings,
-              priorFindings: llmFindings,
-              debug: debugContext("llm_composite_pass")
-            });
-            await resumeStore?.recordCompositeResult(compositeFindings);
-          } catch (err) {
-            await handleResumeError(err, "composite");
-            throw err;
-          }
-        }
         }
       }
   
@@ -1726,6 +1743,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       if (resumeStore) {
         await resumeStore.markCompleted();
       }
+      options.progress?.({ phase: "postprocess", current: 1, total: 1 });
       return scanResult;
     } finally {
       db.close();

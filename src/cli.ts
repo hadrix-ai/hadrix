@@ -19,6 +19,7 @@ import { formatEvalsText, runEvals, writeEvalArtifacts } from "../evals/runner/r
 import { runSetup } from "./setup/runSetup.js";
 import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
+import type { ScanProgressEvent, ScanProgressPhase, ScanProgressHandler } from "./scan/progress.js";
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
@@ -60,6 +61,67 @@ class Spinner {
     if (!this.stream.isTTY) return;
     this.stream.write("\r\x1b[2K");
   }
+}
+
+const PROGRESS_PHASE_LABELS: Record<ScanProgressPhase, string> = {
+  static_scanners: "Static scanners",
+  llm_map: "LLM map",
+  llm_rule: "LLM rule eval",
+  llm_open: "LLM open scan",
+  llm_composite: "LLM composite",
+  postprocess: "Post-processing"
+};
+
+const PROGRESS_PHASE_WEIGHTS: Record<ScanProgressPhase, number> = {
+  static_scanners: 1,
+  llm_map: 4,
+  llm_rule: 8,
+  llm_open: 3,
+  llm_composite: 1,
+  postprocess: 1
+};
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
+function renderProgressBar(value: number, width = 24): string {
+  const normalized = clampProgress(value);
+  const filled = Math.round(normalized * width);
+  const empty = Math.max(0, width - filled);
+  const bar = `${"#".repeat(filled)}${"-".repeat(empty)}`;
+  const percent = Math.round(normalized * 100);
+  return `[${bar}] ${percent}%`;
+}
+
+function createProgressReporter(update: (message: string) => void): ScanProgressHandler {
+  const fractions = new Map<ScanProgressPhase, number>();
+  const phases = Object.keys(PROGRESS_PHASE_WEIGHTS) as ScanProgressPhase[];
+  phases.forEach((phase) => fractions.set(phase, 0));
+
+  return (event: ScanProgressEvent) => {
+    const total = Math.max(0, Math.trunc(event.total));
+    const current = Math.max(0, Math.trunc(event.current));
+    const fraction = total === 0 ? 1 : clampProgress(current / total);
+    fractions.set(event.phase, fraction);
+
+    const weightedTotal = phases.reduce((sum, phase) => sum + PROGRESS_PHASE_WEIGHTS[phase], 0);
+    const weightedCompleted = phases.reduce(
+      (sum, phase) => sum + PROGRESS_PHASE_WEIGHTS[phase] * (fractions.get(phase) ?? 0),
+      0
+    );
+    const overall = weightedTotal ? weightedCompleted / weightedTotal : 0;
+    const bar = renderProgressBar(overall);
+    const label = PROGRESS_PHASE_LABELS[event.phase] ?? event.phase;
+    const detail =
+      total === 0
+        ? event.message ?? "skipped"
+        : `${Math.min(current, total)}/${total}`;
+    update(`${bar} ${label} (${detail})`);
+  };
 }
 
 async function loadExistingFindings(input?: string): Promise<ExistingScanFinding[] | undefined> {
@@ -356,6 +418,7 @@ program
         }, 1000);
       }
     };
+    const progress = spinner ? createProgressReporter(logger) : undefined;
     if (cheapMode) {
       logger(
         `Cheap mode enabled (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}). Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
@@ -384,6 +447,7 @@ program
           repositoryId: options.repoId,
           commitSha: options.commitSha,
           logger,
+          progress,
           debug: options.debug,
           debugLogPath: options.debugLog,
           resume: resumeMode,
