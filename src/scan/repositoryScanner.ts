@@ -1197,9 +1197,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         mappingResponse
       );
       const message = err instanceof Error ? err.message : String(err);
-      log(
-        `LLM understanding parse error for ${items.length} chunk(s). ${message}. Saved response: ${savedPath}`
-      );
       logDebug(input.debug, {
         event: "llm_understanding_parse_error",
         message,
@@ -1321,9 +1318,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         response
       );
       const message = err instanceof Error ? err.message : String(err);
-      log(
-        `LLM rule scan parse error (${ruleIds.join(",")}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
-      );
       logDebug(input.debug, {
         event: "llm_parse_error",
         ruleIds,
@@ -1644,9 +1638,6 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           response
         );
         const message = err instanceof Error ? err.message : String(err);
-        log(
-          `LLM open scan parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
-        );
         logDebug(input.debug, {
           event: "llm_open_scan_parse_error",
           file: {
