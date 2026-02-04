@@ -2166,6 +2166,104 @@ function stripJsonComments(input: string): string {
   return output;
 }
 
+function extractJsonValues(raw: string): string[] {
+  const text = raw.trim();
+  if (!text) {
+    return [];
+  }
+
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced?.[1] ? fenced[1].trim() : text;
+  const cleaned = stripJsonComments(candidate);
+
+  const values: string[] = [];
+  let inString = false;
+  let escape = false;
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const char = cleaned[i] ?? "";
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+
+    if (depth === 0 && (char === "{" || char === "[")) {
+      start = i;
+      depth = 1;
+      continue;
+    }
+
+    if (depth > 0 && (char === "{" || char === "[")) {
+      depth += 1;
+      continue;
+    }
+
+    if (depth > 0 && (char === "}" || char === "]")) {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        values.push(cleaned.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return values;
+}
+
+function recoverJsonValues(raw: string): unknown[] | null {
+  const values = extractJsonValues(raw);
+  if (values.length === 0) {
+    return null;
+  }
+  const parsed: unknown[] = [];
+  for (const value of values) {
+    try {
+      parsed.push(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return parsed;
+}
+
+function coerceUnderstandingRecords(value: unknown): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const pushRecord = (item: unknown) => {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      records.push(item as Record<string, unknown>);
+    }
+  };
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (Array.isArray(item)) {
+        for (const inner of item) {
+          pushRecord(inner);
+        }
+      } else {
+        pushRecord(item);
+      }
+    }
+    return records;
+  }
+
+  pushRecord(value);
+  return records;
+}
+
 function normalizeConfidence(value: unknown): number {
   const numeric =
     typeof value === "number"
@@ -2398,37 +2496,47 @@ function parseChunkUnderstandingBatch(
   raw: string,
   fallbacks: Array<{ chunkId: string; filePath: string }>
 ): LlmChunkUnderstanding[] {
-  const parsed = extractJson(raw);
+  let parsed: unknown;
+  try {
+    parsed = extractJson(raw);
+  } catch (err) {
+    const recovered = recoverJsonValues(raw);
+    if (!recovered) {
+      throw err;
+    }
+    parsed = recovered.length === 1 ? recovered[0] : recovered;
+  }
+
   if (!parsed || typeof parsed !== "object") {
     throw new Error("LLM returned invalid JSON for chunk understanding.");
   }
-  const isArray = Array.isArray(parsed);
-  if (fallbacks.length > 1 && !isArray) {
-    throw new Error("Expected JSON array for batched chunk understanding.");
+
+  const records = coerceUnderstandingRecords(parsed);
+  if (records.length === 0) {
+    throw new Error("LLM returned empty JSON for chunk understanding.");
   }
-  const records = isArray ? parsed : [parsed];
-  if (records.length !== fallbacks.length) {
-    throw new Error(`expected ${fallbacks.length} results, got ${records.length}`);
-  }
-  const results: LlmChunkUnderstanding[] = [];
-  for (let i = 0; i < records.length; i += 1) {
-    const record = records[i];
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error(`index ${i}: invalid record`);
-    }
+
+  const recordByChunkId = new Map<string, Record<string, unknown>>();
+  for (const record of records) {
     const rawChunkId =
-      typeof (record as Record<string, unknown>).chunk_id === "string"
-        ? (record as Record<string, unknown>).chunk_id
+      typeof record.chunk_id === "string" && record.chunk_id.trim()
+        ? record.chunk_id.trim()
         : "";
-    if (!rawChunkId || !rawChunkId.trim()) {
-      throw new Error(`index ${i}: missing chunk_id`);
+    if (!rawChunkId) {
+      continue;
     }
-    if (rawChunkId.trim() !== fallbacks[i].chunkId) {
-      throw new Error(`index ${i}: chunk_id mismatch`);
+    if (!recordByChunkId.has(rawChunkId)) {
+      recordByChunkId.set(rawChunkId, record);
     }
-    results.push(
-      parseChunkUnderstandingRecord(record as Record<string, unknown>, fallbacks[i])
-    );
+  }
+
+  const results: LlmChunkUnderstanding[] = [];
+  for (const fallback of fallbacks) {
+    const match = recordByChunkId.get(fallback.chunkId);
+    if (!match) {
+      throw new Error(`missing chunk_id ${fallback.chunkId}`);
+    }
+    results.push(parseChunkUnderstandingRecord(match, fallback));
   }
   return results;
 }

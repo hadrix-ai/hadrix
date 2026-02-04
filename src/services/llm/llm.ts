@@ -43,6 +43,9 @@ export interface LlmAdapterResult {
 const MAX_ATTEMPTS = 3;
 const RETRY_MAX_TOKENS_FLOOR = 8192;
 const RETRY_MAX_TOKENS_CAP = 16384;
+const TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 8000;
 const concurrencyLimiters = new Map<string, Semaphore>();
 const rateLimitManagers = new Map<string, RateLimitManager>();
 const SDK_ENDPOINT_SUFFIX = /\/v1\/(chat\/completions|responses|messages)\/?$/;
@@ -132,6 +135,8 @@ const estimateTokensFromMessages = (messages: ChatMessage[], maxOutputTokens: nu
   return Math.max(1, estimatedInput + Math.max(0, maxOutputTokens));
 };
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 const extractErrorStatus = (err: unknown): number | null => {
   if (!err || typeof err !== "object") return null;
   const direct = (err as { status?: unknown }).status;
@@ -167,6 +172,65 @@ const isLikelyNetworkError = (err: unknown): boolean => {
     if (combined.includes("socket") && combined.includes("hang up")) return true;
   }
   return false;
+};
+
+const isRetryableStatus = (status: number): boolean =>
+  status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+
+const isNonRetryableMessage = (message: string): boolean => {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("invalid api key") ||
+    lowered.includes("unauthorized") ||
+    lowered.includes("forbidden") ||
+    lowered.includes("insufficient_quota") ||
+    lowered.includes("insufficient quota") ||
+    lowered.includes("account") && lowered.includes("disabled")
+  );
+};
+
+const isRetryableMessage = (message: string): boolean => {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("rate limit") ||
+    lowered.includes("too many requests") ||
+    lowered.includes("overloaded") ||
+    lowered.includes("temporarily unavailable") ||
+    lowered.includes("timeout") ||
+    lowered.includes("timed out") ||
+    lowered.includes("socket hang up") ||
+    lowered.includes("connection reset") ||
+    lowered.includes("connection refused")
+  );
+};
+
+const isRetryableIncomplete = (err: LlmResponseIncompleteError): boolean => {
+  if (isRetryableOutputLimitError(err)) return false;
+  const reason = (err.reason ?? "").toLowerCase();
+  if (!reason) return true;
+  return !(reason.includes("content") || reason.includes("safety") || reason.includes("policy"));
+};
+
+const shouldRetryTransient = (err: unknown): boolean => {
+  if (err instanceof LlmResponseIncompleteError) {
+    return isRetryableIncomplete(err);
+  }
+  const status = extractErrorStatus(err);
+  if (status !== null) {
+    return isRetryableStatus(status);
+  }
+  if (isLikelyNetworkError(err)) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  if (isNonRetryableMessage(message)) return false;
+  return isRetryableMessage(message);
+};
+
+const computeBackoffMs = (attempt: number): number => {
+  const base = TRANSIENT_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1));
+  const extra = attempt >= 2 ? TRANSIENT_RETRY_BASE_DELAY_MS : 0;
+  const jitter = Math.random() * TRANSIENT_RETRY_BASE_DELAY_MS;
+  const delay = Math.min(TRANSIENT_RETRY_MAX_DELAY_MS, base + extra + jitter);
+  return Math.max(0, Math.round(delay));
 };
 
 const resolveRetryMaxTokens = (current: number): number => {
@@ -271,14 +335,33 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     }
   };
 
+  const runWithTransientRetry = async (maxTokens: number): Promise<LlmAdapterResult> => {
+    let attempt = 1;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        return await runAdapter(maxTokens, config.llm.reasoning);
+      } catch (err) {
+        if (!shouldRetryTransient(err) || attempt >= TRANSIENT_RETRY_MAX_ATTEMPTS) {
+          throw err;
+        }
+        const delayMs = computeBackoffMs(attempt);
+        attempt += 1;
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+    }
+  };
+
   try {
-    const result = await runAdapter(baseMaxTokens, config.llm.reasoning);
+    const result = await runWithTransientRetry(baseMaxTokens);
     return result.text;
   } catch (err) {
     if (isRetryableOutputLimitError(err)) {
       const retryMaxTokens = resolveRetryMaxTokens(baseMaxTokens);
       try {
-        const retryResult = await runAdapter(retryMaxTokens, config.llm.reasoning);
+        const retryResult = await runWithTransientRetry(retryMaxTokens);
         return retryResult.text;
       } catch (retryErr) {
         return throwAdapterError(retryErr, provider, baseUrl ?? config.llm.endpoint);
