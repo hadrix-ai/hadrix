@@ -38,20 +38,6 @@ export const DEFAULT_ESLINT_EXTENSIONS = [
   ".cjs"
 ];
 
-export const DEFAULT_SEMGREP_CONFIGS = [
-  "p/default",
-  "p/security-audit",
-  "p/owasp-top-ten",
-  "p/cwe-top-25",
-  "p/xss",
-  "p/sql-injection",
-  "p/jwt",
-  "p/secrets",
-  "p/javascript",
-  "p/typescript",
-  "p/react"
-];
-
 export const DEFAULT_QUERIES = [
   "authentication session token jwt api key",
   "sql query database orm raw query",

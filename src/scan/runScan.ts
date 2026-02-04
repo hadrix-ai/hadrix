@@ -8,7 +8,6 @@ import { isCompositeScanEnabled } from "../config/featureFlags.js";
 import { discoverFiles } from "../fs/discover.js";
 import { hashFile, toRelative } from "../chunking/chunker.js";
 import { securityChunkFile } from "../chunking/securityChunker.js";
-import type { SastFindingHint } from "../chunking/securityChunker.js";
 import { HadrixDb } from "../storage/db.js";
 // embeddings removed
 import { buildRepositoryFileSamples, toLocalChunk } from "./chunkSampling.js";
@@ -159,30 +158,6 @@ function normalizePath(value: string): string {
     .replace(/^\.?\/*/, "")
     .replace(/\/+/g, "/")
     .replace(/\/+$/, "");
-}
-
-function buildSemgrepSastHintMap(staticFindings: StaticFinding[]): Map<string, SastFindingHint[]> {
-  const hintsByFile = new Map<string, SastFindingHint[]>();
-  for (const finding of staticFindings) {
-    if (finding.tool !== "semgrep") continue;
-    const filepath = normalizePath(finding.filepath);
-    if (!filepath) continue;
-    if (!Number.isFinite(finding.startLine) || finding.startLine <= 0) continue;
-    const hint: SastFindingHint = {
-      filepath,
-      startLine: Math.trunc(finding.startLine),
-      endLine: Number.isFinite(finding.endLine) ? Math.trunc(finding.endLine) : undefined,
-      ruleId: finding.ruleId,
-      message: finding.message
-    };
-    const existing = hintsByFile.get(filepath);
-    if (existing) {
-      existing.push(hint);
-    } else {
-      hintsByFile.set(filepath, [hint]);
-    }
-  }
-  return hintsByFile;
 }
 
 function normalizeLineNumber(value: unknown, fallback: number): number {
@@ -734,7 +709,6 @@ function normalizeStaticTool(value: unknown): StaticFinding["tool"] | null {
     normalized = normalized.slice("static_".length);
   }
   if (normalized === "osv") normalized = "osv-scanner";
-  if (normalized === "semgrep") return "semgrep";
   if (normalized === "gitleaks") return "gitleaks";
   if (normalized === "osv-scanner") return "osv-scanner";
   if (normalized === "eslint") return "eslint";
@@ -765,7 +739,10 @@ function toStaticFindingFromExisting(finding: ExistingScanFinding): StaticFindin
       : typeof finding.source === "string"
         ? finding.source
         : "";
-  const tool = normalizeStaticTool(toolValue) ?? "semgrep";
+  const tool = normalizeStaticTool(toolValue);
+  if (!tool) {
+    return null;
+  }
   const ruleIdRaw =
     details.ruleId ?? details.rule_id ?? details.ruleID ?? finding.type ?? "";
   const ruleId =
@@ -1174,8 +1151,6 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       throw new Error(`Jelly call graph required but failed (${reason})${details}.`);
     }
   
-    const semgrepHintsByFile = buildSemgrepSastHintMap(rawStaticFindings);
-  
     let staticExistingFindings = toExistingFindings(
       rawStaticFindings,
       repoPath,
@@ -1303,7 +1278,6 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           idPath: relPath,
           repoPath,
           anchors: anchorNodes,
-          sastFindings: semgrepHintsByFile.get(normalizedRelPath) ?? null,
           reachabilityIndex,
           callGraph: jellyIndex?.callGraph ?? null
         });

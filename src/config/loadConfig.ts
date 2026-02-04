@@ -6,7 +6,6 @@ import {
   DEFAULT_ESLINT_EXTENSIONS,
   DEFAULT_EXCLUDES,
   DEFAULT_INCLUDE_EXTENSIONS,
-  DEFAULT_SEMGREP_CONFIGS,
   cheapLlmModel,
   defaultBaseUrl,
   defaultLlmModel
@@ -92,11 +91,6 @@ export interface HadrixConfig {
     maxChunksPerFile: number;
   };
   staticScanners: {
-    semgrep: {
-      path?: string | null;
-      configs: string[];
-      timeoutSeconds: number;
-    };
     gitleaks: {
       path?: string | null;
     };
@@ -346,14 +340,6 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       maxChunksPerFile: configFile.sampling?.maxChunksPerFile ?? 5
     },
     staticScanners: {
-      semgrep: {
-        path: readEnv("HADRIX_SEMGREP_PATH") || configFile.staticScanners?.semgrep?.path || null,
-        configs:
-          (readEnv("HADRIX_SEMGREP_CONFIG")?.split(",").map((v) => v.trim()).filter(Boolean)) ||
-          configFile.staticScanners?.semgrep?.configs ||
-          DEFAULT_SEMGREP_CONFIGS,
-        timeoutSeconds: configFile.staticScanners?.semgrep?.timeoutSeconds ?? 120
-      },
       gitleaks: {
         path: readEnv("HADRIX_GITLEAKS_PATH") || configFile.staticScanners?.gitleaks?.path || null
       },

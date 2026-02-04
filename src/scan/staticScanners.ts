@@ -8,7 +8,6 @@ import type { HadrixConfig } from "../config/loadConfig.js";
 import type { StaticFinding, Severity } from "../types.js";
 
 interface ToolPaths {
-  semgrep: string;
   gitleaks: string;
   osvScanner: string;
 }
@@ -82,7 +81,7 @@ function getToolsDirCandidates(): string[] {
   });
 }
 
-function findHomeInstalledTool(tool: "semgrep" | "gitleaks" | "osv-scanner"): string[] {
+function findHomeInstalledTool(tool: "gitleaks" | "osv-scanner"): string[] {
   // Best-effort: if the scanner is installed for some other user under /home/*/.hadrix/tools,
   // try to find it. This helps when the CLI is run under sudo/systemd but the tools were
   // installed as a regular user.
@@ -108,10 +107,7 @@ function findHomeInstalledTool(tool: "semgrep" | "gitleaks" | "osv-scanner"): st
     if (!stats.isDirectory()) continue;
 
     const toolsDir = path.join(userHome, ".hadrix", "tools");
-    const candidate =
-      tool === "semgrep"
-        ? getSemgrepManagedPath(toolsDir)
-        : getManagedBinPath(tool, toolsDir);
+    const candidate = getManagedBinPath(tool, toolsDir);
 
     if (existsSync(candidate)) {
       results.push(candidate);
@@ -134,14 +130,6 @@ function getManagedBinPath(name: string, toolsDir: string): string {
   const binDir = path.join(toolsDir, "bin");
   const ext = process.platform === "win32" ? ".exe" : "";
   return path.join(binDir, `${name}${ext}`);
-}
-
-function getSemgrepManagedPath(toolsDir: string): string {
-  const base = path.join(toolsDir, "semgrep");
-  if (process.platform === "win32") {
-    return path.join(base, "Scripts", "semgrep.exe");
-  }
-  return path.join(base, "bin", "semgrep");
 }
 
 function isExecutable(filePath: string): boolean {
@@ -193,14 +181,13 @@ function findOnPath(command: string): string | null {
 }
 
 export function resolveToolPath(
-  tool: "semgrep" | "gitleaks" | "osv-scanner",
+  tool: "gitleaks" | "osv-scanner",
   override?: string | null
 ): string | null {
   const candidates: string[] = [];
   if (override) candidates.push(override);
 
   for (const toolsDir of getToolsDirCandidates()) {
-    if (tool === "semgrep") candidates.push(getSemgrepManagedPath(toolsDir));
     candidates.push(getManagedBinPath(tool, toolsDir));
   }
 
@@ -224,17 +211,15 @@ export function resolveStaticScannersAvailable(config: HadrixConfig): {
   tools: Partial<ToolPaths>;
   missing: string[];
 } {
-  const semgrep = resolveToolPath("semgrep", config.staticScanners.semgrep.path);
   const gitleaks = resolveToolPath("gitleaks", config.staticScanners.gitleaks.path);
   const osvScanner = resolveToolPath("osv-scanner", config.staticScanners.osvScanner.path);
 
   const missing: string[] = [];
-  if (!semgrep) missing.push("semgrep");
   if (!gitleaks) missing.push("gitleaks");
   if (!osvScanner) missing.push("osv-scanner");
 
   return {
-    tools: { semgrep, gitleaks, osvScanner },
+    tools: { gitleaks, osvScanner },
     missing
   };
 }
@@ -246,12 +231,6 @@ function mapSeverity(tool: StaticFinding["tool"], raw: string | number | undefin
     return "info";
   }
   const value = (typeof raw === "string" ? raw : "").toLowerCase();
-  if (tool === "semgrep") {
-    if (value === "error") return "high";
-    if (value === "warning") return "medium";
-    if (value === "info") return "info";
-    return "info";
-  }
   if (tool === "osv-scanner") {
     if (value === "critical") return "critical";
     if (value === "high") return "high";
@@ -441,74 +420,6 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
         snippet: readSnippet(absPath, startLine, endLine)
       });
     }
-  }
-
-  return findings;
-}
-
-async function runSemgrep(config: HadrixConfig, toolPath: string, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
-  const args = [
-    "scan",
-    "--json",
-    "--metrics=off",
-    "--disable-version-check",
-    "--timeout",
-    String(config.staticScanners.semgrep.timeoutSeconds)
-  ];
-  for (const cfg of config.staticScanners.semgrep.configs) {
-    args.push("--config", cfg);
-  }
-  for (const exclude of config.chunking.exclude) {
-    args.push("--exclude", exclude);
-  }
-
-  const result = await spawnCapture(toolPath, args, scanRoot);
-  if (result.code !== 0 && result.code !== 1) {
-    throw new Error(`semgrep exited with ${result.code}: ${result.stderr.trim()}`);
-  }
-
-  const json = JSON.parse(result.stdout || "{}");
-  const results = Array.isArray(json?.results) ? json.results : [];
-  const fileCache = new Map<string, string>();
-
-  const readSnippet = (filePath: string, startLine: number, endLine: number): string | undefined => {
-    if (startLine <= 0) return undefined;
-    let content = fileCache.get(filePath);
-    if (!content) {
-      try {
-        content = readFileSync(filePath, "utf-8");
-        fileCache.set(filePath, content);
-      } catch {
-        return undefined;
-      }
-    }
-    const lines = content.split("\n");
-    const startIdx = Math.max(0, startLine - 1);
-    const endIdx = Math.min(lines.length, endLine);
-    return lines.slice(startIdx, endIdx).join("\n").slice(0, 400);
-  };
-
-  const findings: StaticFinding[] = [];
-  for (const entry of results) {
-    const filePathRaw = entry.path as string | undefined;
-    if (!filePathRaw) continue;
-    const absPath = path.isAbsolute(filePathRaw) ? filePathRaw : path.join(scanRoot, filePathRaw);
-    const filepath = path.relative(repoRoot, absPath);
-    const startLine = entry.start?.line ?? 0;
-    const endLine = entry.end?.line ?? startLine;
-    const message = entry.extra?.message ?? entry.check_id ?? "Semgrep issue";
-    const severity = mapSeverity("semgrep", entry.extra?.severity ?? "info");
-
-    findings.push({
-      tool: "semgrep",
-      ruleId: entry.check_id ?? "semgrep",
-      message,
-      severity,
-      filepath,
-      startLine,
-      endLine,
-      snippet: readSnippet(absPath, startLine, endLine)
-    });
   }
 
   return findings;
@@ -879,12 +790,9 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
     }
   }
 
-  logger?.("Running static scanners (eslint, semgrep, gitleaks, osv-scanner)...");
-  const [eslint, semgrep, gitleaks, osv] = await Promise.all([
+  logger?.("Running static scanners (eslint, gitleaks, osv-scanner)...");
+  const [eslint, gitleaks, osv] = await Promise.all([
     runSafe("eslint", () => runEslint(config, scanRoot, config.projectRoot)),
-    tools.semgrep
-      ? runSafe("semgrep", () => runSemgrep(config, tools.semgrep!, scanRoot, config.projectRoot))
-      : Promise.resolve([]),
     tools.gitleaks
       ? runSafe("gitleaks", () => runGitleaks(tools.gitleaks!, scanRoot, config.projectRoot))
       : Promise.resolve([]),
@@ -893,7 +801,7 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
       : Promise.resolve([])
   ]);
 
-  return [...eslint, ...semgrep, ...gitleaks, ...osv];
+  return [...eslint, ...gitleaks, ...osv];
 }
 
 export function summarizeStaticFindings(findings: StaticFinding[], maxItems = 50): string {

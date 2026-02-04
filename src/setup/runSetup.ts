@@ -2,7 +2,7 @@ import path from "node:path";
 import { mkdirSync, renameSync, chmodSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { getToolsDir, resolveToolPath } from "../scan/staticScanners.js";
 import { getJellyInstallDir, resolveJellyPath } from "../scan/jelly.js";
 import { promptYesNo as promptYesNoPrompt } from "../ui/prompts.js";
@@ -14,7 +14,6 @@ const AdmZip = require("adm-zip") as typeof import("adm-zip");
 const VERSIONS = {
   gitleaks: "8.18.1",
   osvScanner: "1.9.2",
-  semgrep: "1.83.0",
   jelly: "0.12.0"
 };
 
@@ -193,41 +192,6 @@ function getManagedBinPath(name: string): string {
   return path.join(binDir, `${name}${ext}`);
 }
 
-function findPython(): string | null {
-  const candidates = ["python3", "python"];
-  for (const name of candidates) {
-    const result = spawnSync(name, ["--version"], { stdio: "ignore" });
-    if (!result.error) return name;
-  }
-  return null;
-}
-
-async function installSemgrep(logger?: (message: string) => void): Promise<InstallResult> {
-  const python = findPython();
-  if (!python) {
-    throw new Error("Python not found. Install Python 3 to install semgrep.");
-  }
-  const semgrepDir = path.join(getToolsDir(), "semgrep");
-  mkdirSync(semgrepDir, { recursive: true });
-
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(python, ["-m", "venv", semgrepDir], { stdio: "inherit" });
-    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`venv exited ${code}`))));
-  });
-
-  const pipPath = process.platform === "win32"
-    ? path.join(semgrepDir, "Scripts", "pip.exe")
-    : path.join(semgrepDir, "bin", "pip");
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(pipPath, ["install", `semgrep==${VERSIONS.semgrep}`], { stdio: "inherit" });
-    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`pip exited ${code}`))));
-  });
-
-  const semgrepPath = resolveToolPath("semgrep", null) ?? path.join(semgrepDir, process.platform === "win32" ? "Scripts/semgrep.exe" : "bin/semgrep");
-  log(logger, `Installed semgrep to ${semgrepPath}`);
-  return { tool: "semgrep", installed: true, path: semgrepPath };
-}
-
 async function installJelly(logger?: (message: string) => void): Promise<InstallResult> {
   const jellyDir = getJellyInstallDir();
   mkdirSync(jellyDir, { recursive: true });
@@ -280,10 +244,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   }
 
   const tools: Array<{
-    name: "semgrep" | "gitleaks" | "osv-scanner";
+    name: "gitleaks" | "osv-scanner";
     install: () => Promise<InstallResult>;
   }> = [
-    { name: "semgrep", install: () => installSemgrep(logger) },
     { name: "gitleaks", install: () => installGitleaks(logger) },
     { name: "osv-scanner", install: () => installOsvScanner(logger) }
   ];
