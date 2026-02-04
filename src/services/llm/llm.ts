@@ -42,7 +42,10 @@ export interface LlmAdapterResult {
 
 const MAX_ATTEMPTS = 3;
 const RETRY_MAX_TOKENS_FLOOR = 8192;
-const RETRY_MAX_TOKENS_CAP = 16384;
+const RETRY_MAX_TOKENS_CAP = 65536;
+const REASONING_MIN_MAX_TOKENS = 24576;
+const REASONING_OUTPUT_RETRIES = 2;
+const FALLBACK_OUTPUT_RETRIES = 1;
 const TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 8000;
@@ -296,7 +299,11 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
           }
         };
   const isGpt5 = provider === LLMProviderId.OpenAI && model.toLowerCase().startsWith("gpt-5");
-  const baseMaxTokens = isGpt5 ? Math.max(config.llm.maxTokens, 4096) : config.llm.maxTokens;
+  const reasoningEnabled = config.llm.reasoning === true;
+  const gpt5MinMaxTokens = isGpt5 ? 4096 : 0;
+  const reasoningMinMaxTokens = reasoningEnabled && isGpt5 ? REASONING_MIN_MAX_TOKENS : 0;
+  const baseMaxTokens = Math.max(config.llm.maxTokens, gpt5MinMaxTokens, reasoningMinMaxTokens);
+  const fallbackMaxTokens = Math.max(config.llm.maxTokens, gpt5MinMaxTokens);
   const baseUrl = resolveSdkBaseUrl(config);
   const defaultHeaders = resolveAdapterHeaders(config);
   const rateLimitManager = resolveRateLimitManager(effectiveConfig, apiKey, baseUrl);
@@ -335,12 +342,34 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
     }
   };
 
-  const runWithTransientRetry = async (maxTokens: number): Promise<LlmAdapterResult> => {
+  const runWithOutputRetry = async (
+    maxTokens: number,
+    reasoning: boolean | undefined,
+    maxRetries: number
+  ): Promise<LlmAdapterResult> => {
+    let attempt = 0;
+    let currentMaxTokens = maxTokens;
+    while (true) {
+      try {
+        return await runAdapter(currentMaxTokens, reasoning);
+      } catch (err) {
+        if (!isRetryableOutputLimitError(err) || attempt >= maxRetries) {
+          throw err;
+        }
+        attempt += 1;
+        currentMaxTokens = resolveRetryMaxTokens(currentMaxTokens);
+      }
+    }
+  };
+
+  const runWithTransientRetry = async (
+    run: () => Promise<LlmAdapterResult>
+  ): Promise<LlmAdapterResult> => {
     let attempt = 1;
     // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
-        return await runAdapter(maxTokens, config.llm.reasoning);
+        return await run();
       } catch (err) {
         if (!shouldRetryTransient(err) || attempt >= TRANSIENT_RETRY_MAX_ATTEMPTS) {
           throw err;
@@ -355,13 +384,20 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   };
 
   try {
-    const result = await runWithTransientRetry(baseMaxTokens);
+    const result = await runWithTransientRetry(() =>
+      runWithOutputRetry(
+        baseMaxTokens,
+        reasoningEnabled,
+        reasoningEnabled ? REASONING_OUTPUT_RETRIES : FALLBACK_OUTPUT_RETRIES
+      )
+    );
     return result.text;
   } catch (err) {
-    if (isRetryableOutputLimitError(err)) {
-      const retryMaxTokens = resolveRetryMaxTokens(baseMaxTokens);
+    if (reasoningEnabled) {
       try {
-        const retryResult = await runWithTransientRetry(retryMaxTokens);
+        const retryResult = await runWithTransientRetry(() =>
+          runWithOutputRetry(fallbackMaxTokens, false, FALLBACK_OUTPUT_RETRIES)
+        );
         return retryResult.text;
       } catch (retryErr) {
         return throwAdapterError(retryErr, provider, baseUrl ?? config.llm.endpoint);
