@@ -1,58 +1,61 @@
 # Hadrix
+[Hadrix](https://cli.hadrix.ai/) is an AI-powered security scanner that audits your codebase for vulnerabilities. Simply run a scan and copy and paste the output into your agent of choice (Codex, Claude Code) for remediation.
 
-Hadrix is a local, read-only security scanner that combines deterministic analysis with LLM-based rule evaluation to find real vulnerabilities with low noise.
+NOTE: more detail can be found on https://cli.hadrix.ai. 
 
-## What it does
+## How it works
+We do a combination of static scanning and LLM-powered scanning. Please see https://cli.hadrix.ai/#scan-pipeline for more details on how the scan pipeline works.
 
-- Deterministic signal extraction to understand code behavior
-- Rule-based security checks (auth, access control, injection, misconfiguration, etc.)
-- LLMs are used only to evaluate whether specific rules apply, not for free-form discovery
-- Designed to minimize false positives and keep scans fast and explainable
+## Install & Setup
 
-## Installation
-
-### Install from npm
-
+Install
 ```bash
-npm install -g hadrix
+npm install -g hadrix-ai/cli
+```
+
+Setup - installs required binaries - static scanners
+```bash
 hadrix setup
-````
+```
 
-### Build from source
-
-See the build guide:
-**docs/build.md**
+Set required environment variables
+```bash
+export HADRIX_PROVIDER=openai
+export HADRIX_API_KEY=sk-...
+```
+Supported providers: openai, anthropic
 
 ## Usage
+Run scan
+```bash
+hadrix scan
+```
+Flags supported by the CLI
+hadrix scan [target]
+Target defaults to the current directory when omitted.
+```bash
+hadrix scan
+    -f, --format <format> Output format (text|json|core-json)
+    --json Shortcut for --format json
+    --skip-static Skip running static scanners
+    --cheap Cheap mode switches the model from the default (gpt-5.2-codex, claude-opus-4-5) to a more lightweight model (gpt-5.1-codex-mini, claude-haiku-4-5).
+    --debug Enable debug logging
+```
+Optional: provide a path to scan a specific directory. hadrix scan path/to/repo. Defaults to the current directory if no path is provided.
+
+## Build from source
+Use if you want to run Hadrix directly from the repo instead of the published npm package.
 
 ```bash
-hadrix scan /path/to/repo
+npm install
+npm run dev -- setup
+npm run dev -- scan /path/to/repo
 ```
 
-Environment variables (example):
-
-```bash
-HADRIX_PROVIDER=openai
-HADRIX_API_KEY=sk-...
-```
-
-## How it works (high level)
-
-1. Optional static scans (eslint, semgrep, dependency and secret scanners)
-2. Reachability analysis using Jelly
-3. Security-focused chunking and deterministic sampling
-4. LLM-based chunk understanding and signal extraction
-5. Deterministic rule selection based on signals
-6. Rule evaluation using token-budgeted LLM prompts
-7. Optional fallback scan when signals are insufficient
-8. Deduplication and optional composite analysis
-
-LLMs are used only for rule evaluation, not to decide what to scan.
+If you omit the path scan defaults to the current directory.
 
 ## Contributing
-
-See **CONTRIBUTING.md** for guidelines on development, evals, and adding new rules or signals.
+PRs are encouraged. We check for new PRs daily. If your PR has been waiting for awhile, reach out to [Henry](https://x.com/henryborska) on X.
 
 ## License
-
 Apache License 2.0. See **LICENSE**.
