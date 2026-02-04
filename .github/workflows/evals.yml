@@ -7,6 +7,12 @@ jobs:
   sanity:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - default
+          - power
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,13 +39,18 @@ jobs:
           HADRIX_PROVIDER: openai
           HADRIX_API_KEY: ${{ secrets.HADRIX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: npm run dev -- evals --cheap --reasoning --spec evals-sanity-check
+        run: |
+          MODE_FLAG=""
+          if [ "${{ matrix.mode }}" = "power" ]; then
+            MODE_FLAG="--power"
+          fi
+          npm run dev -- evals $MODE_FLAG --reasoning --spec evals-sanity-check
 
       - name: Upload eval artifacts (sanity)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hadrix-evals-sanity-${{ github.sha }}
+          name: hadrix-evals-sanity-${{ matrix.mode }}-${{ github.sha }}
           path: |
             .hadrix-evals/summary.md
             .hadrix-evals/results.json
@@ -62,6 +73,9 @@ jobs:
           - hadrix-evals-secrets-exposure
           - hadrix-evals-file-upload
           - hadrix-evals-vulnerable-dependencies
+        mode:
+          - default
+          - power
           # Excluded (in evals-todo or deferred):
           # - hadrix-evals-admin-authz
           # - hadrix-evals-command-injection
@@ -100,13 +114,18 @@ jobs:
           HADRIX_PROVIDER: openai
           HADRIX_API_KEY: ${{ secrets.HADRIX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: npm run dev -- evals --cheap --reasoning --spec ${{ matrix.spec }}
+        run: |
+          MODE_FLAG=""
+          if [ "${{ matrix.mode }}" = "power" ]; then
+            MODE_FLAG="--power"
+          fi
+          npm run dev -- evals $MODE_FLAG --reasoning --spec ${{ matrix.spec }}
 
       - name: Upload eval artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hadrix-evals-${{ matrix.spec }}-${{ github.sha }}
+          name: hadrix-evals-${{ matrix.spec }}-${{ matrix.mode }}-${{ github.sha }}
           path: |
             .hadrix-evals/summary.md
             .hadrix-evals/results.json

@@ -57,13 +57,13 @@ const DEFAULT_EMBEDDING_MODELS = {
 } as const;
 
 const DEFAULT_LLM_MODELS = {
-  openai: "gpt-5.2-codex",
-  anthropic: "claude-opus-4-5"
-} as const;
-
-const CHEAP_LLM_MODELS = {
   openai: "gpt-5.1-codex-mini",
   anthropic: "claude-haiku-4-5"
+} as const;
+
+const POWER_LLM_MODELS = {
+  openai: "gpt-5.2-codex",
+  anthropic: "claude-opus-4-5"
 } as const;
 
 type DefaultProviderId = keyof typeof DEFAULT_BASE_URLS;
@@ -81,6 +81,6 @@ export function defaultLlmModel(provider: DefaultProviderId): string {
   return DEFAULT_LLM_MODELS[provider];
 }
 
-export function cheapLlmModel(provider: keyof typeof CHEAP_LLM_MODELS): string {
-  return CHEAP_LLM_MODELS[provider];
+export function powerLlmModel(provider: keyof typeof POWER_LLM_MODELS): string {
+  return POWER_LLM_MODELS[provider];
 }

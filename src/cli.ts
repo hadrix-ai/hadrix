@@ -6,13 +6,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
 import { SUPABASE_SCHEMA_SCAN_FLAG, isSupabaseSchemaScanEnabled } from "./config/featureFlags.js";
-import {
-  CHEAP_LLM_MODEL_ANTHROPIC,
-  CHEAP_LLM_MODEL_OPENAI,
-  DEFAULT_LLM_MODEL_ANTHROPIC,
-  DEFAULT_LLM_MODEL_OPENAI,
-  enableCheapMode
-} from "./config/cheapMode.js";
+import { defaultLlmModel, powerLlmModel } from "./config/defaults.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "../evals/runner/runEvals.js";
@@ -23,6 +17,10 @@ import type { ScanProgressEvent, ScanProgressPhase, ScanProgressHandler } from "
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
+const DEFAULT_LLM_MODEL_OPENAI = defaultLlmModel("openai");
+const DEFAULT_LLM_MODEL_ANTHROPIC = defaultLlmModel("anthropic");
+const POWER_LLM_MODEL_OPENAI = powerLlmModel("openai");
+const POWER_LLM_MODEL_ANTHROPIC = powerLlmModel("anthropic");
 class Spinner {
   private frames = ["-", "\\", "|", "/"];
   private frameIndex = 0;
@@ -245,10 +243,9 @@ program
   .option("--repo-id <id>", "Repository id for metadata")
   .option("--commit-sha <sha>", "Commit SHA for metadata")
   .option(
-    "--cheap",
-    `Use cheap LLM mode (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}); cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
+    "--power",
+    `Use power LLM mode (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}); power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
   )
-  .option("--fast", "Alias for --cheap")
   .option("--reasoning", "Enable LLM reasoning mode")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
@@ -269,8 +266,7 @@ program
       repoFullName?: string;
       repoId?: string;
       commitSha?: string;
-      cheap?: boolean;
-      fast?: boolean;
+      power?: boolean;
       reasoning?: boolean;
       debug?: boolean;
       debugLog?: string;
@@ -283,11 +279,8 @@ program
     const spinner = useSpinner ? new Spinner(process.stderr) : null;
     let scanStart = Date.now();
     let statusMessage = "Running scan...";
-    const cheapMode = Boolean(options.cheap || options.fast);
+    const powerMode = Boolean(options.power);
     const reasoningMode = Boolean(options.reasoning);
-    if (cheapMode) {
-      enableCheapMode();
-    }
     if (reasoningMode) {
       process.env.HADRIX_LLM_REASONING = "1";
     }
@@ -419,9 +412,9 @@ program
       }
     };
     const progress = spinner ? createProgressReporter(logger) : undefined;
-    if (cheapMode) {
+    if (powerMode) {
       logger(
-        `Cheap mode enabled (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}). Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
+        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
       );
     }
 
@@ -450,6 +443,7 @@ program
           progress,
           debug: options.debug,
           debugLogPath: options.debugLog,
+          powerMode,
           resume: resumeMode,
           supabase: supabaseSchemaPath
             ? { schemaSnapshotPath: supabaseSchemaPath }
@@ -537,10 +531,9 @@ program
   .option("--json", "Output JSON instead of text")
   .option("--skip-static", "Skip static scanners")
   .option(
-    "--cheap",
-    `Use cheap LLM mode (default for evals). OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}. Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
+    "--power",
+    `Use power LLM mode. OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}. Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC})`
   )
-  .option("--fast", "Alias for --cheap")
   .option("--reasoning", "Enable LLM reasoning mode")
   .option("--debug", "Enable debug logging to a file")
   .option("--debug-log <path>", "Path to write debug log (implies --debug)")
@@ -558,8 +551,7 @@ program
     outDir?: string;
     json?: boolean;
     skipStatic?: boolean;
-    cheap?: boolean;
-    fast?: boolean;
+    power?: boolean;
     reasoning?: boolean;
     debug?: boolean;
     debugLog?: string;
@@ -574,7 +566,7 @@ program
     const evalStart = Date.now();
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
-    const cheapMode = options.fast ? true : options.cheap ?? true;
+    const powerMode = Boolean(options.power);
     const reasoningMode = Boolean(options.reasoning);
     if (reasoningMode) {
       process.env.HADRIX_LLM_REASONING = "1";
@@ -604,9 +596,9 @@ program
       }
       console.error(formatLogMessage(message));
     };
-    if (cheapMode) {
+    if (powerMode) {
       logger(
-        `Cheap mode enabled (OpenAI: ${CHEAP_LLM_MODEL_OPENAI}, Anthropic: ${CHEAP_LLM_MODEL_ANTHROPIC}). Cheap mode results in fewer results than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
+        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
       );
     }
 
@@ -646,8 +638,7 @@ program
         summaryMatchThreshold: parseNumber(options.threshold),
         shortCircuitThreshold: parseNumber(options.shortCircuit),
         comparisonConcurrency: parseNumber(options.concurrency),
-        cheap: cheapMode,
-        fast: options.fast,
+        power: powerMode,
         debug: options.debug,
         debugLogPath,
         output,

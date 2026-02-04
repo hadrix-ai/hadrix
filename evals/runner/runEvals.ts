@@ -3,7 +3,6 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
 import { readEnv } from "../../src/config/env.js";
-import { enableCheapMode } from "../../src/config/cheapMode.js";
 import { runScan } from "../../src/scan/runScan.js";
 import { buildFindingIdentityKey } from "../../src/scan/dedupeKey.js";
 import type { CoreFinding, ScanResult } from "../../src/types.js";
@@ -74,8 +73,7 @@ export interface RunEvalsOptions {
   output?: "text" | "json";
   outDir?: string | null;
   skipStatic?: boolean;
-  cheap?: boolean;
-  fast?: boolean;
+  power?: boolean;
   debug?: boolean;
   debugLogPath?: string | null;
   logger?: (message: string) => void;
@@ -401,9 +399,6 @@ export function formatEvalsSummaryMarkdown(result: RunEvalsResult): string {
 export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsResult> {
   const start = Date.now();
   const logger = options.logger ?? (() => {});
-  if (options.cheap || options.fast) {
-    enableCheapMode();
-  }
   const specsToRun = ALL_EVAL_SPECS.filter((spec) => matchesSpec(spec, options.specId));
   if (specsToRun.length === 0) {
     throw new Error(`No eval specs matched: ${options.specId ?? "(all)"}`);
@@ -452,6 +447,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
         repoPath: options.repoPath ?? null,
         inferRepoPath: options.inferRepoPath,
         skipStatic: options.skipStatic,
+        powerMode: Boolean(options.power),
         repoFullName: spec.repoFullName,
         logger,
         debug: options.debug,

@@ -6,11 +6,10 @@ import {
   DEFAULT_ESLINT_EXTENSIONS,
   DEFAULT_EXCLUDES,
   DEFAULT_INCLUDE_EXTENSIONS,
-  cheapLlmModel,
   defaultBaseUrl,
-  defaultLlmModel
+  defaultLlmModel,
+  powerLlmModel
 } from "./defaults.js";
-import { isCheapModeEnabled } from "./cheapMode.js";
 import {
   ConfigMissingApiBaseUrlError,
   ConfigMissingApiKeyError
@@ -112,6 +111,7 @@ export interface LoadConfigParams {
   projectRoot: string;
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
+  powerMode?: boolean;
 }
 
 function normalizeProvider(raw: string | undefined | null): LLMProvider {
@@ -196,7 +196,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
 
   const resolvedLlmModel =
     readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
-  const llmModel = isCheapModeEnabled() ? cheapLlmModel(llmProvider) : resolvedLlmModel;
+  const llmModel = params.powerMode ? powerLlmModel(llmProvider) : resolvedLlmModel;
 
   const llmReasoning =
     parseOptionalBoolean(readEnvRaw("HADRIX_LLM_REASONING")) ??
@@ -207,7 +207,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   const llmReasoningModel =
     typeof llmReasoningModelRaw === "string" && llmReasoningModelRaw.trim()
       ? llmReasoningModelRaw.trim()
-      : resolvedLlmModel;
+      : llmModel;
 
   const defaultLlmEndpoint =
     llmProvider === LLMProviderId.Anthropic

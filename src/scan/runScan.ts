@@ -49,6 +49,7 @@ export interface RunScanOptions {
   projectRoot: string;
   configPath?: string | null;
   overrides?: Partial<HadrixConfig>;
+  powerMode?: boolean;
   repoPath?: string | null;
   inferRepoPath?: boolean;
   skipStatic?: boolean;
@@ -997,7 +998,8 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     const config = await loadConfig({
       projectRoot: options.projectRoot,
       configPath: options.configPath,
-      overrides: options.overrides
+      overrides: options.overrides,
+      powerMode: options.powerMode
     });
 
     const log = options.logger ?? (() => {});
