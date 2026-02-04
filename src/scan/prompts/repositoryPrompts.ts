@@ -67,7 +67,11 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
       return [
         "IDOR guidance:",
         "- Authentication alone is not authorization; checking a userId/header does NOT satisfy ownership unless the data access is scoped by that identity.",
-        "- Report when a record is fetched by a client-supplied ID/email/username without an ownership or membership filter."
+        "- Treat emails/usernames as identifiers for IDOR purposes.",
+        "- Report when a record is fetched by a client-supplied ID/email/username without an ownership or membership filter.",
+        "- If a handler reads a request param/query (id/email/userId/orgId) and uses it in a data lookup without scoping to the authenticated user or tenant, report IDOR.",
+        "- It is valid to report IDOR even if the handler shows no authentication at all; missing ownership/tenant validation still applies.",
+        "- Evidence can be: request param read + query/lookup using it + response returning the record."
       ];
     case "missing_rate_limiting":
       return [
@@ -107,14 +111,6 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Do NOT report on login/signup/token issuance endpoints; those are public by design.",
         "- Only report when the handler performs sensitive actions without any auth/session validation."
       ];
-    case "idor":
-      return [
-        "IDOR guidance:",
-        "- Treat emails/usernames as identifiers when they are used to fetch or return records.",
-        "- If a handler reads a request param/query (id/email/userId/orgId) and uses it in a data lookup without scoping to the authenticated user or tenant, report IDOR.",
-        "- It is valid to report IDOR even if the handler shows no authentication at all; missing ownership/tenant validation still applies.",
-        "- Evidence can be: request param read + query/lookup using it + response returning the record."
-      ];
     case "missing_bearer_token":
       return [
         "Bearer token guidance:",
@@ -122,13 +118,6 @@ function buildRuleExtraGuidance(ruleId: string): string[] {
         "- Treat frontend session tokens (from client auth SDKs or localStorage) as attacker-controlled; if they can be empty, report.",
         "- Phrase impact as: requests can be sent with empty or forged access tokens; server-side must verify and reject.",
         "- Evidence can be: `const accessToken = ... ?? \"\"` and `authorization: `Bearer ${accessToken}``."
-      ];
-    case "idor":
-      return [
-        "IDOR guidance:",
-        "- Treat user-supplied emails/usernames the same as IDs for IDOR purposes.",
-        "- Report when a handler fetches or returns a record using a user-supplied identifier without scoping it to the authenticated user/tenant.",
-        "- Authentication alone is insufficient unless the query is scoped by that identity."
       ];
     case "anon_key_bearer":
       return [
