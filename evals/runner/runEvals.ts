@@ -5,6 +5,7 @@ import pc from "picocolors";
 import { readEnv } from "../../src/config/env.js";
 import { runScan } from "../../src/scan/runScan.js";
 import { buildFindingIdentityKey } from "../../src/scan/dedupeKey.js";
+import { noopLogger, type Logger } from "../../src/logging/logger.js";
 import type { CoreFinding, ScanResult } from "../../src/types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
 import { ALL_EVAL_SPECS } from "./specs.js";
@@ -76,7 +77,8 @@ export interface RunEvalsOptions {
   power?: boolean;
   debug?: boolean;
   debugLogPath?: string | null;
-  logger?: (message: string) => void;
+  uiLogger?: Logger;
+  appLogger?: Logger;
 }
 
 const emptyCounts = (): EvalCounts => ({ expected: 0, matched: 0, missing: 0, unexpected: 0 });
@@ -398,7 +400,8 @@ export function formatEvalsSummaryMarkdown(result: RunEvalsResult): string {
 
 export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsResult> {
   const start = Date.now();
-  const logger = options.logger ?? (() => {});
+  const uiLog = options.uiLogger ?? noopLogger;
+  const appLog = options.appLogger ?? noopLogger;
   const specsToRun = ALL_EVAL_SPECS.filter((spec) => matchesSpec(spec, options.specId));
   if (specsToRun.length === 0) {
     throw new Error(`No eval specs matched: ${options.specId ?? "(all)"}`);
@@ -433,7 +436,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
 
     let evalResults: EvalGroupResult[] = [];
     if (runnableGroups.length > 0) {
-      logger(`Running scan for ${spec.repoFullName}...`);
+      uiLog.info(`Running scan for ${spec.repoFullName}...`);
       const resolvedConfigPath = options.configPath
         ? path.isAbsolute(options.configPath)
           ? options.configPath
@@ -449,7 +452,8 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
         skipStatic: options.skipStatic,
         powerMode: Boolean(options.power),
         repoFullName: spec.repoFullName,
-        logger,
+        uiLogger: uiLog,
+        appLogger: appLog,
         debug: options.debug,
         debugLogPath: options.debugLogPath ?? null,
         supabase: supabaseSchemaSnapshot ? { schemaSnapshotPath: supabaseSchemaSnapshot } : null,

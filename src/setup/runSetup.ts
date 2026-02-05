@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { getToolsDir, resolveToolPath } from "../scan/staticScanners.js";
 import { getJellyInstallDir, resolveJellyPath } from "../scan/jelly.js";
 import { promptYesNo as promptYesNoPrompt } from "../ui/prompts.js";
+import { noopLogger, type Logger } from "../logging/logger.js";
 
 const require = createRequire(import.meta.url);
 const tar = require("tar") as typeof import("tar");
@@ -19,7 +20,8 @@ const VERSIONS = {
 
 interface SetupOptions {
   autoYes?: boolean;
-  logger?: (message: string) => void;
+  uiLogger?: Logger;
+  appLogger?: Logger;
 }
 
 interface InstallResult {
@@ -27,10 +29,6 @@ interface InstallResult {
   installed: boolean;
   path?: string;
   optional?: boolean;
-}
-
-function log(logger: ((message: string) => void) | undefined, message: string) {
-  logger?.(message);
 }
 
 function isEslintAvailable(): boolean {
@@ -55,9 +53,9 @@ function isHadrixRepo(cwd: string): boolean {
   }
 }
 
-async function installEslintDeps(logger?: (message: string) => void): Promise<InstallResult> {
+async function installEslintDeps(logger: Logger): Promise<InstallResult> {
   if (isEslintAvailable()) {
-    log(logger, "eslint already available (node_modules).");
+    logger.info("eslint already available (node_modules).");
     return { tool: "eslint", installed: true, path: "node_modules" };
   }
 
@@ -143,7 +141,7 @@ function ensureBinDir(): string {
   return binDir;
 }
 
-async function installGitleaks(logger?: (message: string) => void): Promise<InstallResult> {
+async function installGitleaks(logger: Logger): Promise<InstallResult> {
   const platform = getPlatformKey();
   const archAliases = getArchAliases();
   const asset = await resolveGithubAsset("gitleaks/gitleaks", VERSIONS.gitleaks, platform, archAliases);
@@ -166,12 +164,12 @@ async function installGitleaks(logger?: (message: string) => void): Promise<Inst
     chmodSync(target, 0o755);
   }
 
-  log(logger, `Installed gitleaks to ${target}`);
+  logger.info(`Installed gitleaks to ${target}`);
   rmSync(tmpPath, { force: true });
   return { tool: "gitleaks", installed: true, path: target };
 }
 
-async function installOsvScanner(logger?: (message: string) => void): Promise<InstallResult> {
+async function installOsvScanner(logger: Logger): Promise<InstallResult> {
   const platform = getPlatformKey();
   const archAliases = getArchAliases();
   const asset = await resolveGithubAsset("google/osv-scanner", VERSIONS.osvScanner, platform, archAliases);
@@ -182,7 +180,7 @@ async function installOsvScanner(logger?: (message: string) => void): Promise<In
   let target = path.join(binDir, process.platform === "win32" ? "osv-scanner.exe" : "osv-scanner");
   renameSync(tmpPath, target);
   chmodSync(target, 0o755);
-  log(logger, `Installed osv-scanner to ${target}`);
+  logger.info(`Installed osv-scanner to ${target}`);
   return { tool: "osv-scanner", installed: true, path: target };
 }
 
@@ -192,7 +190,7 @@ function getManagedBinPath(name: string): string {
   return path.join(binDir, `${name}${ext}`);
 }
 
-async function installJelly(logger?: (message: string) => void): Promise<InstallResult> {
+async function installJelly(logger: Logger): Promise<InstallResult> {
   const jellyDir = getJellyInstallDir();
   mkdirSync(jellyDir, { recursive: true });
 
@@ -209,7 +207,7 @@ async function installJelly(logger?: (message: string) => void): Promise<Install
   if (!jellyPath) {
     throw new Error("jelly install failed; binary not found.");
   }
-  log(logger, `Installed jelly to ${jellyPath}`);
+  logger.info(`Installed jelly to ${jellyPath}`);
   return { tool: "jelly", installed: true, path: jellyPath };
 }
 
@@ -219,11 +217,11 @@ async function promptYesNo(question: string, autoYes: boolean): Promise<boolean>
 }
 
 export async function runSetup(options: SetupOptions = {}): Promise<InstallResult[]> {
-  const logger = options.logger ?? (() => {});
+  const logger = options.uiLogger ?? noopLogger;
   const autoYes = options.autoYes ?? false;
   const results: InstallResult[] = [];
 
-  log(logger, "Hadrix setup: installing required scanners and jelly call graph analyzer.");
+  logger.info("Hadrix setup: installing required scanners and jelly call graph analyzer.");
 
   if (!isEslintAvailable()) {
     const ok = await promptYesNo("Install eslint scanner dependencies (npm)?", autoYes);
@@ -235,7 +233,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
         results.push(result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        log(logger, `Failed to install eslint dependencies: ${message}`);
+        logger.error(`Failed to install eslint dependencies: ${message}`);
         results.push({ tool: "eslint", installed: false });
       }
     }
@@ -254,7 +252,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
   for (const tool of tools) {
     const existing = resolveToolPath(tool.name, null);
     if (existing) {
-      log(logger, `${tool.name} already installed at ${existing}`);
+      logger.info(`${tool.name} already installed at ${existing}`);
       results.push({ tool: tool.name, installed: true, path: existing });
       continue;
     }
@@ -270,14 +268,14 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
       results.push(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log(logger, `Failed to install ${tool.name}: ${message}`);
+      logger.error(`Failed to install ${tool.name}: ${message}`);
       results.push({ tool: tool.name, installed: false });
     }
   }
 
   const existingJelly = resolveJellyPath();
   if (existingJelly) {
-    log(logger, `jelly already available at ${existingJelly}`);
+    logger.info(`jelly already available at ${existingJelly}`);
     results.push({ tool: "jelly", installed: true, path: existingJelly });
   } else {
     const ok = await promptYesNo("Install jelly call graph analyzer?", autoYes);
@@ -289,7 +287,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<InstallResul
         results.push(result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        log(logger, `Failed to install jelly: ${message}`);
+        logger.error(`Failed to install jelly: ${message}`);
         results.push({ tool: "jelly", installed: false });
       }
     }

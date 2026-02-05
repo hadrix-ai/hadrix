@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { mkdir, readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import pg from "pg";
 import type { StaticFinding, Severity } from "../types.js";
+import { noopLogger, type Logger } from "../logging/logger.js";
 
 const { Client } = pg;
 
@@ -217,7 +218,7 @@ async function runSupabaseCliDump(params: {
   }
 }
 
-async function ensureSupabaseLoggedIn(cwd: string, log: (message: string) => void): Promise<void> {
+async function ensureSupabaseLoggedIn(cwd: string, log: Logger): Promise<void> {
   const cliPath = resolveSupabaseCliPath();
   if (!cliPath) {
     throw new Error("Supabase CLI not found. Install it and run `supabase login` + `supabase link`.");
@@ -229,16 +230,16 @@ async function ensureSupabaseLoggedIn(cwd: string, log: (message: string) => voi
   }
   const controls = log as LoggerControls;
   controls.pause?.();
-  if (process.stderr.isTTY) {
-    process.stderr.write("\n");
+  if (process.stdout.isTTY) {
+    process.stdout.write("\n");
   }
-  log("Supabase CLI not authenticated. Launching `supabase login`...");
+  log.info("Supabase CLI not authenticated. Launching `supabase login`...");
   await runSupabaseCliInteractive(cliPath, ["login"], cwd);
-  log("Finished supabase login.");
+  log.info("Finished supabase login.");
   controls.resume?.();
 }
 
-async function ensureSupabaseLinked(cwd: string, log: (message: string) => void): Promise<void> {
+async function ensureSupabaseLinked(cwd: string, log: Logger): Promise<void> {
   const cliPath = resolveSupabaseCliPath();
   if (!cliPath) {
     throw new Error("Supabase CLI not found. Install it and run `supabase login` + `supabase link`.");
@@ -248,12 +249,12 @@ async function ensureSupabaseLinked(cwd: string, log: (message: string) => void)
   }
   const controls = log as LoggerControls;
   controls.pause?.();
-  if (process.stderr.isTTY) {
-    process.stderr.write("\n");
+  if (process.stdout.isTTY) {
+    process.stdout.write("\n");
   }
-  log("Supabase project not linked. Launching `supabase link`...");
+  log.info("Supabase project not linked. Launching `supabase link`...");
   await runSupabaseCliInteractive(cliPath, ["link"], cwd);
-  log("Finished supabase link.");
+  log.info("Finished supabase link.");
   controls.resume?.();
 }
 
@@ -265,7 +266,7 @@ async function runSupabaseCliDumpWithRetry(
     dataOnly?: boolean;
     exclude?: string[];
   },
-  log: (message: string) => void
+  log: Logger
 ): Promise<void> {
   let attemptedLogin = false;
   let attemptedLink = false;
@@ -624,9 +625,9 @@ export async function runSupabaseSchemaScan(params: {
   useCli?: boolean;
   projectRoot: string;
   stateDir: string;
-  logger?: (message: string) => void;
+  logger?: Logger;
 }): Promise<SupabaseSchemaScanResult> {
-  const log = params.logger ?? (() => {});
+  const log = params.logger ?? noopLogger;
   const fromSnapshot = Boolean(params.schemaSnapshotPath);
   const fromCli = Boolean(params.useCli);
   let schemaPath = "";
@@ -1160,11 +1161,11 @@ ORDER BY name;
   }
 
   if (metadata.errors.length > 0) {
-    log(
+    log.warn(
       `Supabase schema scan completed with ${metadata.errors.length} warning(s). See ${schemaRelPath} for details.`
     );
   } else {
-    log(
+    log.info(
       fromSnapshot
         ? `Supabase schema scan loaded snapshot from ${schemaRelPath}.`
         : fromCli

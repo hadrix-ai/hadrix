@@ -23,6 +23,7 @@ import { runSupabaseSchemaScan } from "../supabase/supabaseSchemaScan.js";
 import { ProviderRequestFailedError } from "../errors/provider.errors.js";
 import { clearScanResumeState, createScanResumeStore } from "./scanResume.js";
 import type { ScanResumeStore } from "./scanResume.js";
+import { noopLogger, type Logger } from "../logging/logger.js";
 import {
   dedupeFindings,
   dedupeRepositoryFindingsAgainstExisting,
@@ -57,7 +58,8 @@ export interface RunScanOptions {
   repoFullName?: string | null;
   repositoryId?: string | null;
   commitSha?: string | null;
-  logger?: (message: string) => void;
+  uiLogger?: Logger;
+  appLogger?: Logger;
   progress?: ScanProgressHandler;
   debug?: boolean;
   debugLogPath?: string | null;
@@ -86,7 +88,7 @@ async function createDebugLogWriter(params: {
   enabled: boolean;
   requestedPath?: string | null;
   stateDir: string;
-  log: (message: string) => void;
+  logger: Logger;
 }): Promise<DebugLogWriter | null> {
   if (!params.enabled) return null;
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -113,7 +115,7 @@ async function createDebugLogWriter(params: {
     await mkdir(path.dirname(filePath), { recursive: true });
     const stream = createWriteStream(filePath, { flags: "a" });
     stream.on("error", (err) => {
-      params.log(`Debug log error: ${err.message}`);
+      params.logger.warn(`Debug log error: ${err.message}`);
     });
     const log = (event: Record<string, unknown>) => {
       const payload = { timestamp: new Date().toISOString(), ...event };
@@ -124,13 +126,13 @@ async function createDebugLogWriter(params: {
         stream.end(() => resolve());
       });
     const relative = path.relative(process.cwd(), filePath);
-    params.log(
+    params.logger.info(
       `Debug log enabled: ${relative && !relative.startsWith("..") ? relative : filePath}.`
     );
     return { log, close, path: filePath };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    params.log(`Failed to create debug log: ${message}`);
+    params.logger.warn(`Failed to create debug log: ${message}`);
     return null;
   }
 }
@@ -549,7 +551,7 @@ function buildDedupeReport(rawFindings: CoreFinding[], finalCount: number): Dedu
 async function writeDedupeReport(
   stateDir: string,
   report: DedupeReport,
-  log: (message: string) => void
+  logger: Logger
 ): Promise<void> {
   const dir = path.join(stateDir, "reports");
   await mkdir(dir, { recursive: true });
@@ -558,7 +560,7 @@ async function writeDedupeReport(
   const filePath = path.join(dir, filename);
   await writeFile(filePath, JSON.stringify(report, null, 2), "utf-8");
   const relative = path.relative(process.cwd(), filePath);
-  log(
+  logger.info(
     `Dedupe report saved to ${relative && !relative.startsWith("..") ? relative : filePath}.`
   );
 }
@@ -566,7 +568,7 @@ async function writeDedupeReport(
 async function writeJellyAnchorsReport(
   stateDir: string,
   report: JellyAnchorsReport,
-  log: (message: string) => void
+  logger: Logger
 ): Promise<void> {
   const dir = path.join(stateDir, "reports");
   await mkdir(dir, { recursive: true });
@@ -575,7 +577,7 @@ async function writeJellyAnchorsReport(
   const filePath = path.join(dir, filename);
   await writeFile(filePath, JSON.stringify(report, null, 2), "utf-8");
   const relative = path.relative(process.cwd(), filePath);
-  log(
+  logger.info(
     `Jelly anchors report saved to ${relative && !relative.startsWith("..") ? relative : filePath}.`
   );
 }
@@ -1002,13 +1004,14 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       powerMode: options.powerMode
     });
 
-    const log = options.logger ?? (() => {});
+    const uiLog = options.uiLogger ?? noopLogger;
+    const appLog = options.appLogger ?? noopLogger;
     const resumeMode = options.resume ?? "off";
     debugWriter = await createDebugLogWriter({
       enabled: Boolean(options.debug || options.debugLogPath),
       requestedPath: options.debugLogPath ?? null,
       stateDir: config.stateDir,
-      log
+      logger: appLog
     });
     const debugContext = (stage: string): DedupeDebug | undefined =>
       debugWriter ? { stage, log: debugWriter.log } : undefined;
@@ -1030,19 +1033,19 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     const explicitRepoPath = normalizeRepoPath(options.repoPath ?? config.repoPath ?? "");
     let repoPath: string | null = explicitRepoPath || null;
     if (!repoPath && options.inferRepoPath !== false) {
-      log("Inferring repoPath...");
+      uiLog.info("Inferring repoPath...");
       const inferredRepoPath = await inferRepoPathFromDisk(repoRoot);
       if (inferredRepoPath) {
         repoPath = inferredRepoPath;
-        log(`Inferred repoPath: ${repoPath}`);
+        uiLog.info(`Inferred repoPath: ${repoPath}`);
       }
     }
   
     const resolved = resolveScanRoot(repoRoot, repoPath);
     if (resolved.missing) {
-      log(`repoPath missing; falling back to repo root (${resolved.missing})`);
+      uiLog.warn(`repoPath missing; falling back to repo root (${resolved.missing})`);
     } else if (repoPath) {
-      log(`Scanning repoPath: ${repoPath}`);
+      uiLog.info(`Scanning repoPath: ${repoPath}`);
     }
     const scanRoot = resolved.scanRoot;
     repoPath = resolved.repoPath;
@@ -1081,14 +1084,14 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
   
     let supabaseFindings: StaticFinding[] = [];
     if (options.supabase?.connectionString || options.supabase?.schemaSnapshotPath || options.supabase?.useCli) {
-      log("Fetching Supabase schema...");
+      uiLog.info("Fetching Supabase schema...");
       const supabaseResult = await runSupabaseSchemaScan({
         connectionString: options.supabase?.connectionString,
         schemaSnapshotPath: options.supabase?.schemaSnapshotPath,
         useCli: options.supabase?.useCli ?? false,
         projectRoot: config.projectRoot,
         stateDir: config.stateDir,
-        logger: log
+        logger: uiLog
       });
       supabaseFindings = supabaseResult.findings;
     }
@@ -1102,15 +1105,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     }
     const rawStaticFindings = options.skipStatic
       ? [...supabaseFindings]
-      : [...supabaseFindings, ...(await runStaticScanners(config, scanRoot, log))];
+      : [...supabaseFindings, ...(await runStaticScanners(config, scanRoot, uiLog))];
     if (options.progress && !options.skipStatic) {
       options.progress({ phase: "static_scanners", current: 1, total: 1 });
     }
-    log(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
+    uiLog.info(options.skipStatic ? "Static scanners skipped." : "Static scanners complete.");
   
     let jellyResult: JellyAnchorComputation | null = null;
     let jellyIndex: AnchorIndex | null = null;
-    log("Computing jelly anchors...");
+    uiLog.info("Computing jelly anchors...");
     jellyResult = await computeJellyAnchors({
       repoRoot,
       scanRoot,
@@ -1118,12 +1121,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     });
     jellyIndex = jellyResult.index;
     if (jellyIndex) {
-      log(
+      uiLog.info(
         `Jelly anchors ready (${jellyIndex.anchorCount} nodes across ${jellyIndex.fileCount} files).`
       );
     } else {
       const reason = jellyResult.reason ? ` (${jellyResult.reason})` : "";
-      log(`Jelly anchors unavailable${reason}.`);
+      uiLog.warn(`Jelly anchors unavailable${reason}.`);
     }
     {
       const jellyReport = buildJellyAnchorsReport({
@@ -1140,10 +1143,10 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         debugWriter.log({ event: "jelly_anchors", ...jellyReport });
       }
       try {
-        await writeJellyAnchorsReport(config.stateDir, jellyReport, log);
+        await writeJellyAnchorsReport(config.stateDir, jellyReport, appLog);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        log(`Failed to persist jelly anchors report: ${message}`);
+        appLog.warn(`Failed to persist jelly anchors report: ${message}`);
       }
     }
 
@@ -1162,7 +1165,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
     if (jellyIndex) {
       const applied = attachJellyAnchors(staticExistingFindings, jellyIndex);
       if (applied.anchored > 0) {
-        log(`Jelly anchors applied to static findings (${applied.anchored}/${applied.total}).`);
+        uiLog.info(`Jelly anchors applied to static findings (${applied.anchored}/${applied.total}).`);
       }
     }
     staticExistingFindings = staticExistingFindings.map((finding) =>
@@ -1173,7 +1176,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       staticExistingFindings
     );
     if (staticFilteredDropped > 0) {
-      log(`Filtered ${staticFilteredDropped} static findings.`);
+      uiLog.info(`Filtered ${staticFilteredDropped} static findings.`);
     }
   
     const reportStaticFindings = toStaticFindingsFromExisting(filteredStaticExisting);
@@ -1183,7 +1186,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       debugContext("static_dedupe")
     );
     if (staticDedupeDropped > 0) {
-      log(`Deduped ${staticDedupeDropped} static findings.`);
+      uiLog.info(`Deduped ${staticDedupeDropped} static findings.`);
     }
   
     const staticFindings = toStaticFindingsFromExisting(dedupedStaticExisting);
@@ -1215,19 +1218,19 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           repoPath: repoPath ?? null
         });
         if (reachabilityIndex) {
-          log(`Jelly reachability mapped to ${entryPoints.length} entry points.`);
+          uiLog.info(`Jelly reachability mapped to ${entryPoints.length} entry points.`);
         } else {
-          log("Jelly reachability unavailable (entry points did not match call graph).");
+          uiLog.warn("Jelly reachability unavailable (entry points did not match call graph).");
         }
       }
     }
   
     const db = new HadrixDb({
       stateDir: config.stateDir,
-      logger: log
+      logger: appLog
     });
     const desiredChunkFormat = "security_semantic";
-    log("Security chunking enabled.");
+    uiLog.info("Security chunking enabled.");
     const repoSnapshotEntries: string[] = [];
   
     // Embeddings removed.
@@ -1284,7 +1287,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           callGraph: jellyIndex?.callGraph ?? null
         });
         if (chunks.length === 0) {
-          log(`Security chunking produced no chunks for ${relPath}; skipping file.`);
+          uiLog.warn(`Security chunking produced no chunks for ${relPath}; skipping file.`);
           continue;
         }
   
@@ -1336,7 +1339,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       }
   
       if (scopedChunks.length > 0) {
-        log("Chunk sampling...");
+        uiLog.info("Chunk sampling...");
 
         const localChunks = scopedChunks.map((chunk) =>
           toLocalChunk({
@@ -1444,19 +1447,20 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
               repoPath: repoPath ?? null,
               repoSnapshot,
               mode: resumeMode,
-              logger: log
+              logger: appLog
             });
             await resumeStore.setStage("rule");
           }
 
-          log("LLM scan (rule pass)...");
+          uiLog.info("LLM scan (rule pass)...");
           try {
             llmFindings = await scanRepository({
               config,
               repository: repositoryDescriptor,
               files: fileSamples,
               existingFindings,
-              logger: log,
+              logger: uiLog,
+              appLogger: appLog,
               debug: debugContext("llm_rule_pass"),
               resume: resumeStore ?? undefined,
               progress: options.progress
@@ -1483,7 +1487,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       if (jellyIndex && llmFindings.length > 0) {
         const appliedLlm = attachJellyAnchors(llmFindings, jellyIndex);
         if (appliedLlm.anchored > 0) {
-          log(`Jelly anchors applied to LLM findings (${appliedLlm.anchored}/${appliedLlm.total}).`);
+          uiLog.info(`Jelly anchors applied to LLM findings (${appliedLlm.anchored}/${appliedLlm.total}).`);
         }
       }
   
@@ -1493,7 +1497,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           normalizedLlmFindings
         );
         if (filteredLlmDropped > 0) {
-          log(`Filtered ${filteredLlmDropped} LLM findings.`);
+          uiLog.info(`Filtered ${filteredLlmDropped} LLM findings.`);
         }
         reportLlmFindings = filteredLlmFindings;
   
@@ -1503,7 +1507,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           debugContext("llm_dedupe")
         );
         if (dedupeLlmDropped > 0) {
-          log(`Deduped ${dedupeLlmDropped} LLM findings.`);
+          uiLog.info(`Deduped ${dedupeLlmDropped} LLM findings.`);
         }
   
         const { findings: dedupedAgainstStatic, dropped: dedupeAgainstStaticDropped } =
@@ -1513,12 +1517,12 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
             debugContext("llm_vs_static")
           );
         if (dedupeAgainstStaticDropped > 0) {
-          log(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
+          uiLog.info(`Deduped ${dedupeAgainstStaticDropped} LLM findings against static findings.`);
         }
         const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
           dropRepositorySummaryDuplicates(dedupedAgainstStatic, debugContext("llm_summary"));
         if (summaryDropped > 0) {
-          log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+          uiLog.info(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
         }
         llmFindings = dedupedSummaryFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
       }
@@ -1529,7 +1533,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         (llmFindings.length || existingFindings.length)
       ) {
         if (!isCompositeScanEnabled()) {
-          log("LLM composite pass disabled (HADRIX_DISABLE_COMPOSITE_SCAN=1).");
+          uiLog.info("LLM composite pass disabled (HADRIX_DISABLE_COMPOSITE_SCAN=1).");
           options.progress?.({ phase: "llm_composite", current: 0, total: 0, message: "disabled" });
         } else {
           const resumedComposite = resumeStore?.getCompositeResults();
@@ -1540,7 +1544,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
             if (resumeStore) {
               await resumeStore.setStage("composite");
             }
-            log("LLM scan (composite pass)...");
+            uiLog.info("LLM scan (composite pass)...");
             try {
               options.progress?.({ phase: "llm_composite", current: 0, total: 1 });
               compositeFindings = await scanRepositoryComposites({
@@ -1549,6 +1553,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
                 files: fileSamples,
                 existingFindings,
                 priorFindings: llmFindings,
+                appLogger: appLog,
                 debug: debugContext("llm_composite_pass")
               });
               await resumeStore?.recordCompositeResult(compositeFindings);
@@ -1577,7 +1582,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
       if (jellyIndex && compositeFindings.length > 0) {
         const appliedComposite = attachJellyAnchors(compositeFindings, jellyIndex);
         if (appliedComposite.anchored > 0) {
-          log(
+          uiLog.info(
             `Jelly anchors applied to composite findings (${appliedComposite.anchored}/${appliedComposite.total}).`
           );
         }
@@ -1597,7 +1602,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
         const { findings: dedupedSummaryFindings, dropped: summaryDropped } =
           dropRepositorySummaryDuplicates(combinedFindings, debugContext("combined_summary"));
         if (summaryDropped > 0) {
-          log(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
+          uiLog.info(`Dropped ${summaryDropped} repository summary findings duplicated by file findings.`);
         }
         combinedFindings = dedupedSummaryFindings;
         const { findings: dedupedCombined, dropped: dedupeCombinedDropped } = dedupeFindings(
@@ -1606,7 +1611,7 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           debugContext("combined_dedupe")
         );
         if (dedupeCombinedDropped > 0) {
-          log(`Deduped ${dedupeCombinedDropped} combined LLM findings.`);
+          uiLog.info(`Deduped ${dedupeCombinedDropped} combined LLM findings.`);
         }
         combinedFindings = dedupedCombined;
       }
@@ -1684,23 +1689,23 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
 
       // Only emit and persist dedupe report diagnostics in debug mode.
       if (debugWriter) {
-        log(
+        appLog.debug(
           `Dedupe report: total=${dedupeReport.totalFindings}, uniqueLocations=${dedupeReport.uniqueByLocation}, exactDuplicates=${dedupeReport.exactDuplicates}, merged=${dedupeReport.mergedCount}, missingAnchors=${dedupeReport.missingAnchorPercent.toFixed(1)}%, missingOverlap=${dedupeReport.missingOverlapPercent.toFixed(1)}%.`
         );
         if (Object.keys(dedupeReport.duplicatesBySource).length > 0) {
-          log(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
+          appLog.debug(`Duplicates by source: ${formatCountMap(dedupeReport.duplicatesBySource)}.`);
         }
         if (Object.keys(dedupeReport.duplicatesByRule).length > 0) {
-          log(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
+          appLog.debug(`Duplicates by rule: ${formatCountMap(dedupeReport.duplicatesByRule)}.`);
         }
         if (Object.keys(dedupeReport.duplicatesByCategory).length > 0) {
-          log(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
+          appLog.debug(`Duplicates by category: ${formatCountMap(dedupeReport.duplicatesByCategory)}.`);
         }
         try {
-          await writeDedupeReport(config.stateDir, dedupeReport, log);
+          await writeDedupeReport(config.stateDir, dedupeReport, appLog);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          log(`Failed to persist dedupe report: ${message}`);
+          appLog.warn(`Failed to persist dedupe report: ${message}`);
         }
       }
   

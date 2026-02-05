@@ -2,6 +2,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { RepositoryScanFinding } from "../types.js";
+import type { Logger } from "../logging/logger.js";
 
 const RESUME_DIR = "resume";
 const STATE_FILE = "scan-resume.json";
@@ -163,7 +164,7 @@ export async function createScanResumeStore(params: {
   repoPath: string | null;
   repoSnapshot?: ScanResumeSnapshot | null;
   mode: "new" | "resume";
-  logger?: (message: string) => void;
+  logger?: Logger;
 }): Promise<ScanResumeStore> {
   const paths = getResumePaths(params.stateDir);
   const now = new Date().toISOString();
@@ -193,11 +194,11 @@ export async function createScanResumeStore(params: {
       const scopeMismatch = !isCompatibleState(existing, params.scanRoot, params.repoPath);
       const snapshotMismatch = !isSnapshotMatch(existing, params.repoSnapshot);
       if (scopeMismatch) {
-        params.logger?.("Resume state found but did not match current scan scope; starting fresh.");
+        params.logger?.info("Resume state found but did not match current scan scope; starting fresh.");
       } else if (snapshotMismatch) {
-        params.logger?.("Resume state found but repo contents changed; starting fresh.");
+        params.logger?.info("Resume state found but repo contents changed; starting fresh.");
       } else {
-        params.logger?.("Resume state found but could not be verified; starting fresh.");
+        params.logger?.info("Resume state found but could not be verified; starting fresh.");
       }
     }
     await mkdir(paths.dir, { recursive: true });

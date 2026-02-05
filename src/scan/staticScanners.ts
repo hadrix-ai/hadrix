@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import fg from "fast-glob";
 import { readEnv, readEnvRaw } from "../config/env.js";
 import type { HadrixConfig } from "../config/loadConfig.js";
+import type { Logger } from "../logging/logger.js";
 import type { StaticFinding, Severity } from "../types.js";
 
 interface ToolPaths {
@@ -302,7 +303,12 @@ function stripEslintPluginConfigs(plugin: any): any {
   return copy;
 }
 
-async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: string): Promise<StaticFinding[]> {
+async function runEslint(
+  config: HadrixConfig,
+  scanRoot: string,
+  repoRoot: string,
+  logger?: Logger
+): Promise<StaticFinding[]> {
   if (!config.staticScanners.eslint.enabled) return [];
 
   const extensions = (config.staticScanners.eslint.extensions ?? [])
@@ -340,7 +346,7 @@ async function runEslint(config: HadrixConfig, scanRoot: string, repoRoot: strin
   const recommendedRules = (eslintPluginSecurity as any).configs?.recommended?.rules ?? {};
   const { configPath, legacyDetected } = findEslintConfig(scanRoot);
   if (legacyDetected && !configPath) {
-    console.warn(
+    logger?.warn(
       "[hadrix] Detected legacy ESLint config; ignoring it in favor of built-in security rules."
     );
   }
@@ -767,19 +773,23 @@ async function runOsvScanner(
   return [...findings, ...packageJsonFindings];
 }
 
-export async function runStaticScanners(config: HadrixConfig, scanRoot: string, logger?: (message: string) => void): Promise<StaticFinding[]> {
+export async function runStaticScanners(
+  config: HadrixConfig,
+  scanRoot: string,
+  logger?: Logger
+): Promise<StaticFinding[]> {
   mkdirSync(getToolsDir(), { recursive: true });
   const { tools, missing } = resolveStaticScannersAvailable(config);
 
   const logSkip = (tool: string, reason: string) => {
-    logger?.(`[hadrix] Skipping ${tool} static scanner: ${reason}`);
+    logger?.warn(`[hadrix] Skipping ${tool} static scanner: ${reason}`);
   };
   const runSafe = async (tool: string, runner: () => Promise<StaticFinding[]>): Promise<StaticFinding[]> => {
     try {
       return await runner();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger?.(`[hadrix] ${tool} static scanner failed; skipping. ${message}`);
+      logger?.warn(`[hadrix] ${tool} static scanner failed; skipping. ${message}`);
       return [];
     }
   };
@@ -790,9 +800,9 @@ export async function runStaticScanners(config: HadrixConfig, scanRoot: string, 
     }
   }
 
-  logger?.("Running static scanners (eslint, gitleaks, osv-scanner)...");
+  logger?.info("Running static scanners (eslint, gitleaks, osv-scanner)...");
   const [eslint, gitleaks, osv] = await Promise.all([
-    runSafe("eslint", () => runEslint(config, scanRoot, config.projectRoot)),
+    runSafe("eslint", () => runEslint(config, scanRoot, config.projectRoot, logger)),
     tools.gitleaks
       ? runSafe("gitleaks", () => runGitleaks(tools.gitleaks!, scanRoot, config.projectRoot))
       : Promise.resolve([]),

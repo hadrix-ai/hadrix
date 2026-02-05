@@ -13,10 +13,13 @@ import { formatEvalsText, runEvals, writeEvalArtifacts } from "../evals/runner/r
 import { runSetup } from "./setup/runSetup.js";
 import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
+import { createAppLogger, noopLogger, type AppLogger, type Logger } from "./logging/logger.js";
 import type { ScanProgressEvent, ScanProgressPhase, ScanProgressHandler } from "./scan/progress.js";
 import type { ExistingScanFinding } from "./types.js";
 
 const program = new Command();
+type UiLogger = Logger & { pause?: () => void; resume?: () => void };
+
 const DEFAULT_LLM_MODEL_OPENAI = defaultLlmModel("openai");
 const DEFAULT_LLM_MODEL_ANTHROPIC = defaultLlmModel("anthropic");
 const POWER_LLM_MODEL_OPENAI = powerLlmModel("openai");
@@ -162,9 +165,12 @@ function shouldSuppressCliError(message: string): boolean {
   return lowered.includes("organization's rate limit") && lowered.includes("input tokens per minute");
 }
 
-function logCliError(message: string): void {
-  if (shouldSuppressCliError(message)) return;
-  console.error(pc.red(`Error: ${message}`));
+function logCliError(logger: Logger, message: string): void {
+  if (shouldSuppressCliError(message)) {
+    logger.debug(`Suppressed CLI error: ${message}`);
+    return;
+  }
+  logger.error(`Error: ${message}`);
 }
 
 function buildSupabaseConnectionString(raw: string, password?: string | null): string {
@@ -277,13 +283,80 @@ program
     const projectRoot = path.resolve(process.cwd(), target ?? ".");
     const format = options.json ? "json" : options.format ?? "text";
     const isJsonOutput = format === "json" || format === "core-json";
-    const useSpinner = !isJsonOutput && process.stderr.isTTY;
-    const spinner = useSpinner ? new Spinner(process.stderr) : null;
+    const useSpinner = !isJsonOutput && process.stdout.isTTY;
+    const spinner = useSpinner ? new Spinner(process.stdout) : null;
     let scanStart = Date.now();
     let statusMessage = "Running scan...";
     const powerMode = Boolean(options.power);
 
     const stateDir = path.join(projectRoot, ".hadrix");
+    let appLogger: AppLogger | null = null;
+    try {
+      appLogger = await createAppLogger({ stateDir, label: "scan" });
+    } catch {
+      appLogger = null;
+    }
+    const appLog = appLogger ?? noopLogger;
+    let loggerPaused = false;
+    let pausedAt: number | null = null;
+    let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+    const formatElapsed = () => formatDuration(Date.now() - scanStart);
+    const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
+    const logUi = (level: "info" | "warn" | "error", message: string, uiMessage?: string) => {
+      appLog[level](message);
+      if (isJsonOutput) return;
+      if (spinner && !loggerPaused) {
+        statusMessage = uiMessage ?? message;
+        spinner.update(formatStatus(statusMessage));
+        return;
+      }
+      console.log(uiMessage ?? message);
+    };
+    const uiLogger: UiLogger = {
+      info: (message, meta) => {
+        appLog.info(message, meta);
+        if (isJsonOutput) return;
+        if (spinner && !loggerPaused) {
+          statusMessage = message;
+          spinner.update(formatStatus(statusMessage));
+          return;
+        }
+        console.log(message);
+      },
+      warn: (message, meta) => logUi("warn", message, pc.yellow(message)),
+      error: (message, meta) => logUi("error", message, pc.red(message)),
+      debug: (message, meta) => appLog.debug(message, meta)
+    };
+    uiLogger.pause = () => {
+      loggerPaused = true;
+      if (pausedAt === null) {
+        pausedAt = Date.now();
+      }
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      spinner?.stop();
+    };
+    uiLogger.resume = () => {
+      if (pausedAt !== null) {
+        scanStart += Date.now() - pausedAt;
+        pausedAt = null;
+      }
+      loggerPaused = false;
+      if (!spinner) return;
+      spinner.start(formatStatus(statusMessage));
+      if (!elapsedTimer) {
+        elapsedTimer = setInterval(() => {
+          spinner.update(formatStatus(statusMessage));
+        }, 1000);
+      }
+    };
+    const updateStatus = (message: string) => {
+      if (isJsonOutput || !spinner || loggerPaused) return;
+      statusMessage = message;
+      spinner.update(formatStatus(statusMessage));
+    };
     let resumeMode: "new" | "resume" = "new";
     const resumeState = await loadScanResumeState(stateDir);
     const canPromptResume = Boolean(process.stdin.isTTY && process.stdout.isTTY && !isJsonOutput);
@@ -303,9 +376,7 @@ program
         }
       } else {
         resumeMode = "resume";
-        if (!isJsonOutput) {
-          console.error(`Resuming interrupted scan from ${timestamp}.`);
-        }
+        uiLogger.info(`Resuming interrupted scan from ${timestamp}.`);
       }
     }
 
@@ -326,11 +397,9 @@ program
         envSupabaseSchema
     );
     if (!supabaseSchemaScanEnabled) {
-      if (wantsSupabase && !isJsonOutput) {
-        console.error(
-          pc.yellow(
-            `Supabase schema scan is disabled. Set ${SUPABASE_SCHEMA_SCAN_FLAG}=1 to enable it.`
-          )
+      if (wantsSupabase) {
+        uiLogger.warn(
+          `Supabase schema scan is disabled. Set ${SUPABASE_SCHEMA_SCAN_FLAG}=1 to enable it.`
         );
       }
     } else if (wantsSupabase) {
@@ -360,64 +429,19 @@ program
         defaultIndex: 1
       });
       if (choice === 0) {
-        useSupabaseCli = true;
-      }
-    }
+	        useSupabaseCli = true;
+	      }
+	    }
 
-    const formatElapsed = () => formatDuration(Date.now() - scanStart);
-    const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
-    let elapsedTimer: ReturnType<typeof setInterval> | null = null;
-    let pausedAt: number | null = null;
-    let loggerPaused = false;
+	    const progress = spinner ? createProgressReporter(updateStatus) : undefined;
+	    if (powerMode) {
+	      uiLogger.info(
+	        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
+	      );
+	    }
 
-    type ScanLogger = ((message: string) => void) & {
-      pause?: () => void;
-      resume?: () => void;
-    };
-
-    const logger: ScanLogger = (message: string) => {
-      if (isJsonOutput) return;
-      if (spinner && !loggerPaused) {
-        statusMessage = message;
-        spinner.update(formatStatus(statusMessage));
-        return;
-      }
-      console.error(message);
-    };
-    logger.pause = () => {
-      loggerPaused = true;
-      if (pausedAt === null) {
-        pausedAt = Date.now();
-      }
-      if (elapsedTimer) {
-        clearInterval(elapsedTimer);
-        elapsedTimer = null;
-      }
-      spinner?.stop();
-    };
-    logger.resume = () => {
-      if (pausedAt !== null) {
-        scanStart += Date.now() - pausedAt;
-        pausedAt = null;
-      }
-      loggerPaused = false;
-      if (!spinner) return;
-      spinner.start(formatStatus(statusMessage));
-      if (!elapsedTimer) {
-        elapsedTimer = setInterval(() => {
-          spinner.update(formatStatus(statusMessage));
-        }, 1000);
-      }
-    };
-    const progress = spinner ? createProgressReporter(logger) : undefined;
-    if (powerMode) {
-      logger(
-        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
-      );
-    }
-
-    try {
-      if (spinner) {
+	    try {
+	      if (spinner) {
         scanStart = Date.now();
         spinner.start(formatStatus(statusMessage));
         elapsedTimer = setInterval(() => {
@@ -437,7 +461,8 @@ program
           repoFullName: options.repoFullName,
           repositoryId: options.repoId,
           commitSha: options.commitSha,
-          logger,
+          uiLogger,
+          appLogger: appLog,
           progress,
           debug: options.debug,
           debugLogPath: options.debugLog,
@@ -474,7 +499,7 @@ program
         if (!ok) {
           throw err;
         }
-        await runSetup({ autoYes: false, logger: (msg) => console.log(msg) });
+        await runSetup({ autoYes: false, uiLogger, appLogger: appLog });
         if (spinner) {
           spinner.start(formatStatus(statusMessage));
           elapsedTimer = setInterval(() => {
@@ -507,8 +532,10 @@ program
       }
       spinner?.stop();
       const message = err instanceof Error ? err.message : String(err);
-      logCliError(message);
+      logCliError(uiLogger, message);
       process.exitCode = 2;
+    } finally {
+      await appLogger?.close();
     }
   });
 
@@ -555,15 +582,23 @@ program
     const output = options.json ? "json" : "text";
     const useSpinner =
       output !== "json" &&
-      process.stderr.isTTY &&
+      process.stdout.isTTY &&
       !options.debug &&
       !options.debugLog;
-    const spinner = useSpinner ? new Spinner(process.stderr) : null;
+    const spinner = useSpinner ? new Spinner(process.stdout) : null;
     const evalStart = Date.now();
     let statusMessage = "Running evals...";
     const deferredLogs: string[] = [];
     const powerMode = Boolean(options.power);
 
+    const stateDir = path.join(process.cwd(), ".hadrix");
+    let appLogger: AppLogger | null = null;
+    try {
+      appLogger = await createAppLogger({ stateDir, label: "evals" });
+    } catch {
+      appLogger = null;
+    }
+    const appLog = appLogger ?? noopLogger;
     const formatElapsed = () => formatDuration(Date.now() - evalStart);
     const formatStatus = (message: string) => `${message} (elapsed ${formatElapsed()})`;
     let elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -575,27 +610,42 @@ program
       return `${message} (elapsed ${formatElapsed()})`;
     };
 
-    const logger = (message: string) => {
+    const emitUi = (message: string, uiMessage: string) => {
       if (output === "json") return;
       if (spinner) {
         if (message.startsWith("Dedupe report saved to") || message.length > 120) {
-          deferredLogs.push(message);
+          deferredLogs.push(uiMessage);
           return;
         }
         statusMessage = message;
         spinner.update(formatStatus(statusMessage));
         return;
       }
-      console.error(formatLogMessage(message));
+      console.log(uiMessage);
     };
-    if (powerMode) {
-      logger(
-        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
-      );
-    }
+    const uiLogger: Logger = {
+      info: (message, meta) => {
+        appLog.info(message, meta);
+        emitUi(message, formatLogMessage(message));
+      },
+      warn: (message, meta) => {
+        appLog.warn(message, meta);
+        emitUi(message, pc.yellow(formatLogMessage(message)));
+      },
+	      error: (message, meta) => {
+	        appLog.error(message, meta);
+	        emitUi(message, pc.red(formatLogMessage(message)));
+	      },
+	      debug: (message, meta) => appLog.debug(message, meta)
+	    };
+	    if (powerMode) {
+	      uiLogger.info(
+	        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
+	      );
+	    }
 
-    const parseNumber = (value?: string): number | undefined => {
-      if (!value) return undefined;
+	    const parseNumber = (value?: string): number | undefined => {
+	      if (!value) return undefined;
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return undefined;
       return parsed;
@@ -635,7 +685,8 @@ program
         debugLogPath,
         output,
         skipStatic: options.skipStatic,
-        logger,
+        uiLogger,
+        appLogger: appLog,
       });
 
       if (elapsedTimer) {
@@ -651,7 +702,7 @@ program
 
       await writeEvalArtifacts(result, outDir).catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
-        logger(`Failed to write eval artifacts: ${message}`);
+        uiLogger.warn(`Failed to write eval artifacts: ${message}`);
       });
 
       if (output === "json") {
@@ -674,8 +725,10 @@ program
         }
       }
       const message = err instanceof Error ? err.message : String(err);
-      logCliError(message);
+      logCliError(uiLogger, message);
       process.exitCode = 2;
+    } finally {
+      await appLogger?.close();
     }
   });
 
@@ -684,25 +737,48 @@ program
   .description("Install required scanners and jelly call graph analyzer")
   .option("-y, --yes", "Install without prompting")
   .action(async (options: { yes?: boolean }) => {
+    const stateDir = path.join(process.cwd(), ".hadrix");
+    let appLogger: AppLogger | null = null;
+    try {
+      appLogger = await createAppLogger({ stateDir, label: "setup" });
+    } catch {
+      appLogger = null;
+    }
+    const appLog = appLogger ?? noopLogger;
+    const logUi = (level: "info" | "warn" | "error", message: string, uiMessage?: string) => {
+      appLog[level](message);
+      console.log(uiMessage ?? message);
+    };
+    const uiLogger: Logger = {
+      info: (message, meta) => {
+        appLog.info(message, meta);
+        console.log(message);
+      },
+      warn: (message, meta) => logUi("warn", message, pc.yellow(message)),
+      error: (message, meta) => logUi("error", message, pc.red(message)),
+      debug: (message, meta) => appLog.debug(message, meta)
+    };
     try {
       const results = await runSetup({
         autoYes: options.yes ?? false,
-        logger: (message) => console.log(message)
+        uiLogger,
+        appLogger: appLog
       });
       const failed = results.filter((result) => !result.installed && !result.optional);
       if (failed.length) {
-        console.error(
-          pc.red(`Setup incomplete. Missing: ${failed.map((r) => r.tool).join(", ")}.`)
-        );
+        uiLogger.error(`Setup incomplete. Missing: ${failed.map((r) => r.tool).join(", ")}.`);
         process.exitCode = 1;
       } else {
+        appLog.info("Setup complete.");
         console.log(pc.green("Setup complete."));
         process.exitCode = 0;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(pc.red(`Setup failed: ${message}`));
+      uiLogger.error(`Setup failed: ${message}`);
       process.exitCode = 1;
+    } finally {
+      await appLogger?.close();
     }
   });
 

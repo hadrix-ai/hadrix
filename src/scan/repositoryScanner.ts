@@ -34,6 +34,7 @@ import { detectApiHandler } from "./signals/detectors/apiHandler.js";
 import { detectUnsafeQueryBuilderSignals } from "./signals/detectors/unsafeQueryBuilder.js";
 import { detectJwtDecodeEvidence } from "./signals/detectors/jwtUsage.js";
 import { detectDebugAuthLeakSignals } from "./signals/detectors/debugAuthLeak.js";
+import { noopLogger, type Logger } from "../logging/logger.js";
 import type { ScanProgressHandler } from "./progress.js";
 
 export interface RepositoryDescriptor {
@@ -52,7 +53,8 @@ export interface RepositoryScanInput {
   mapConcurrency?: number;
   debug?: DedupeDebug;
   resume?: ScanResumeStore;
-  logger?: (message: string) => void;
+  logger?: Logger;
+  appLogger?: Logger;
   progress?: ScanProgressHandler;
 }
 
@@ -63,6 +65,7 @@ export interface CompositeScanInput {
   existingFindings: ExistingScanFinding[];
   priorFindings: RepositoryScanFinding[];
   debug?: DedupeDebug;
+  appLogger?: Logger;
 }
 
 type LlmFamilyCandidate = {
@@ -964,7 +967,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     return [];
   }
 
-  const log = input.logger ?? (() => {});
+  const uiLog = input.logger ?? noopLogger;
+  const appLog = input.appLogger ?? noopLogger;
   const outputSchema = buildRepositoryScanOutputSchema();
   const { buildKnowledgeContext } = await import("./knowledgeContext.js");
   const systemContext = buildRepositoryContextPrompt(
@@ -1001,7 +1005,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   let resumedTaskCount = 0;
   let ruleEvalCalls = 0;
 
-  log("LLM scan (understanding, batched)...");
+  uiLog.info("LLM scan (understanding, batched)...");
   const mapConcurrency = normalizeMapConcurrency(input.mapConcurrency);
   const ruleScanConcurrency = normalizeRuleScanConcurrency(
     input.config.llm?.ruleScanConcurrency
@@ -1197,6 +1201,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         mappingResponse
       );
       const message = err instanceof Error ? err.message : String(err);
+      appLog.warn(
+        `LLM understanding parse error for ${items.length} chunk(s). ${message}. Saved response: ${savedPath}`
+      );
       logDebug(input.debug, {
         event: "llm_understanding_parse_error",
         message,
@@ -1318,6 +1325,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         response
       );
       const message = err instanceof Error ? err.message : String(err);
+      appLog.warn(
+        `LLM rule scan parse error (${ruleIds.join(",")}) for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+      );
       logDebug(input.debug, {
         event: "llm_parse_error",
         ruleIds,
@@ -1380,7 +1390,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
 
   const tasks: RuleScanTask[] = [];
   const ruleFindingsByChunk = new Map<string, RepositoryScanFinding[]>();
-  log("LLM scan (rule diagnosis)...");
+  uiLog.info("LLM scan (rule diagnosis)...");
   for (const insight of fileInsights) {
     const ruleIds = insight.packedRuleIds;
     if (ruleIds.length === 0) continue;
@@ -1476,7 +1486,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
 
   if (rulePackingSummary) {
     const avgCallsPerChunk = ruleEvalCalls / rulePackingSummary.chunks;
-    log(
+    uiLog.info(
       `LLM rule eval summary: chunks=${rulePackingSummary.chunks}, avgEligibleRulesPerChunk=${rulePackingSummary.avgEligibleRulesPerChunk.toFixed(
         2
       )}, avgPackedRulesPerChunk=${rulePackingSummary.avgPackedRulesPerChunk.toFixed(
@@ -1542,7 +1552,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   }
 
   if (fileInsights.length > 0) {
-    log(
+    uiLog.info(
       `LLM open scan gating: openScans=${openScanTasks.length}, skipped=${fileInsights.length - openScanTasks.length}`
     );
   }
@@ -1551,7 +1561,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     tasks.length + openScanTasks.length + resumedTaskCount
   );
 
-  log("LLM scan (open scan)...");
+  uiLog.info("LLM scan (open scan)...");
   reportProgress?.({ phase: "llm_open", current: 0, total: openScanTasks.length });
   let openTasksCompleted = 0;
   const openScanResults = await runWithConcurrency(
@@ -1638,6 +1648,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
           response
         );
         const message = err instanceof Error ? err.message : String(err);
+        appLog.warn(
+          `LLM open scan parse error for ${file.path}:${file.startLine}-${file.endLine}. ${message}. Saved response: ${savedPath}`
+        );
         logDebug(input.debug, {
           event: "llm_open_scan_parse_error",
           file: {
@@ -1681,6 +1694,7 @@ export async function scanRepositoryComposites(
     return [];
   }
 
+  const appLog = input.appLogger ?? noopLogger;
   const outputSchema = buildRepositoryScanOutputSchema();
   const systemPrompt = buildRepositoryCompositeSystemPrompt();
   const { buildKnowledgeContext } = await import("./knowledgeContext.js");
@@ -1730,6 +1744,9 @@ export async function scanRepositoryComposites(
       response
     );
     const message = err instanceof Error ? err.message : String(err);
+    appLog.warn(
+      `LLM composite parse error. ${message}. Saved response: ${savedPath}`
+    );
     logDebug(input.debug, {
       event: "llm_composite_parse_error",
       message,

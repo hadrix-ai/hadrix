@@ -1,12 +1,13 @@
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import Database from "better-sqlite3";
+import type { Logger } from "../logging/logger.js";
 
 const CURRENT_SCHEMA_VERSION = 2;
 
 export interface DbOptions {
   stateDir: string;
-  logger?: (message: string) => void;
+  logger?: Logger;
 }
 
 export interface FileRow {
@@ -46,7 +47,7 @@ export class HadrixDb {
   }
 
   private log(message: string) {
-    this.options.logger?.(message);
+    this.options.logger?.debug(message);
   }
 
   close() {
