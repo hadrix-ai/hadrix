@@ -27,9 +27,11 @@ export type ScanResumeState = {
   updatedAt: string;
   stage: ScanResumeStage;
   taskCounts?: {
+    map?: number;
     rule?: number;
   };
   taskCompleted?: {
+    map?: number;
     rule?: number;
   };
   lastError?: {
@@ -39,14 +41,23 @@ export type ScanResumeState = {
 };
 
 export type ScanResumeStore = {
+  getMapResults: () => Map<string, unknown>;
   getRuleResults: () => Map<string, RepositoryScanFinding[]>;
   getCompositeResults: () => RepositoryScanFinding[] | null;
   setStage: (stage: ScanResumeStage) => Promise<void>;
+  setMapTaskCount: (count: number) => Promise<void>;
   setRuleTaskCount: (count: number) => Promise<void>;
+  recordMapResult: (chunkId: string, understanding: unknown) => Promise<void>;
   recordRuleResult: (taskKey: string, findings: RepositoryScanFinding[]) => Promise<void>;
   recordCompositeResult: (findings: RepositoryScanFinding[]) => Promise<void>;
   markInterrupted: (message: string, stage: ScanResumeStage) => Promise<void>;
   markCompleted: () => Promise<void>;
+};
+
+type ResumeMapLine = {
+  kind: "map";
+  chunkId: string;
+  understanding: unknown;
 };
 
 type ResumeRuleLine = {
@@ -60,7 +71,7 @@ type ResumeCompositeLine = {
   findings: RepositoryScanFinding[];
 };
 
-type ResumeLine = ResumeRuleLine | ResumeCompositeLine;
+type ResumeLine = ResumeMapLine | ResumeRuleLine | ResumeCompositeLine;
 
 type ResumePaths = {
   dir: string;
@@ -106,18 +117,25 @@ function isSnapshotMatch(
 
 async function loadResumeResults(
   resultsPath: string
-): Promise<{ ruleResults: Map<string, RepositoryScanFinding[]>; compositeResults: RepositoryScanFinding[] | null }> {
+): Promise<{
+  mapResults: Map<string, unknown>;
+  ruleResults: Map<string, RepositoryScanFinding[]>;
+  compositeResults: RepositoryScanFinding[] | null;
+}> {
+  const mapResults = new Map<string, unknown>();
   const ruleResults = new Map<string, RepositoryScanFinding[]>();
   let compositeResults: RepositoryScanFinding[] | null = null;
   if (!existsSync(resultsPath)) {
-    return { ruleResults, compositeResults };
+    return { mapResults, ruleResults, compositeResults };
   }
   const raw = await readFile(resultsPath, "utf-8");
   const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line) as ResumeLine;
-      if (parsed.kind === "rule" && parsed.taskKey) {
+      if (parsed.kind === "map" && parsed.chunkId) {
+        mapResults.set(parsed.chunkId, parsed.understanding ?? null);
+      } else if (parsed.kind === "rule" && parsed.taskKey) {
         ruleResults.set(parsed.taskKey, parsed.findings ?? []);
       } else if (parsed.kind === "composite") {
         compositeResults = parsed.findings ?? [];
@@ -126,7 +144,7 @@ async function loadResumeResults(
       // Ignore malformed resume lines.
     }
   }
-  return { ruleResults, compositeResults };
+  return { mapResults, ruleResults, compositeResults };
 }
 
 async function writeResumeState(paths: ResumePaths, state: ScanResumeState): Promise<void> {
@@ -169,6 +187,7 @@ export async function createScanResumeStore(params: {
   const paths = getResumePaths(params.stateDir);
   const now = new Date().toISOString();
   let state: ScanResumeState;
+  let mapResults = new Map<string, unknown>();
   let ruleResults = new Map<string, RepositoryScanFinding[]>();
   let compositeResults: RepositoryScanFinding[] | null = null;
 
@@ -180,6 +199,7 @@ export async function createScanResumeStore(params: {
     isSnapshotMatch(existing, params.repoSnapshot)
   ) {
     const loaded = await loadResumeResults(paths.resultsPath);
+    mapResults = loaded.mapResults;
     ruleResults = loaded.ruleResults;
     compositeResults = loaded.compositeResults;
     state = {
@@ -189,6 +209,13 @@ export async function createScanResumeStore(params: {
       lastError: undefined,
       repoSnapshot: params.repoSnapshot ?? existing.repoSnapshot
     };
+    const mapCompleted = state.taskCompleted?.map ?? 0;
+    const mapTotal = state.taskCounts?.map ?? 0;
+    const ruleCompleted = state.taskCompleted?.rule ?? 0;
+    const ruleTotal = state.taskCounts?.rule ?? 0;
+    params.logger?.info(
+      `Resume state loaded (stage=${state.stage}, map=${mapCompleted}/${mapTotal}, rule=${ruleCompleted}/${ruleTotal}, cachedMap=${mapResults.size}, cachedTasks=${ruleResults.size}, cachedComposite=${compositeResults?.length ?? 0}).`
+    );
   } else {
     if (existing) {
       const scopeMismatch = !isCompatibleState(existing, params.scanRoot, params.repoPath);
@@ -217,6 +244,7 @@ export async function createScanResumeStore(params: {
       taskCounts: {},
       taskCompleted: {}
     };
+    params.logger?.info("Initialized new resume state.");
   }
 
   await writeResumeState(paths, state);
@@ -228,6 +256,7 @@ export async function createScanResumeStore(params: {
   };
 
   return {
+    getMapResults: () => mapResults,
     getRuleResults: () => ruleResults,
     getCompositeResults: () => compositeResults,
     setStage: async (stage) => {
@@ -236,11 +265,32 @@ export async function createScanResumeStore(params: {
         await writeResumeState(paths, state);
       });
     },
+    setMapTaskCount: async (count) => {
+      await enqueueWrite(async () => {
+        const taskCounts = { ...(state.taskCounts ?? {}) };
+        taskCounts.map = count;
+        state = { ...state, taskCounts, updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
+      });
+    },
     setRuleTaskCount: async (count) => {
       await enqueueWrite(async () => {
         const taskCounts = { ...(state.taskCounts ?? {}) };
         taskCounts.rule = count;
         state = { ...state, taskCounts, updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
+      });
+    },
+    recordMapResult: async (chunkId, understanding) => {
+      if (!chunkId || mapResults.has(chunkId)) return;
+      const normalized = understanding === undefined ? null : understanding;
+      mapResults.set(chunkId, normalized);
+      const line: ResumeMapLine = { kind: "map", chunkId, understanding: normalized };
+      await enqueueWrite(async () => {
+        await appendFile(paths.resultsPath, `${JSON.stringify(line)}\n`, "utf-8");
+        const taskCompleted = { ...(state.taskCompleted ?? {}) };
+        taskCompleted.map = (taskCompleted.map ?? 0) + 1;
+        state = { ...state, taskCompleted, updatedAt: new Date().toISOString() };
         await writeResumeState(paths, state);
       });
     },
@@ -276,6 +326,7 @@ export async function createScanResumeStore(params: {
         };
         await writeResumeState(paths, state);
       });
+      params.logger?.warn(`Scan marked interrupted (stage=${stage}): ${message}`);
     },
     markCompleted: async () => {
       await enqueueWrite(async () => {
@@ -291,6 +342,13 @@ export async function createScanResumeStore(params: {
           await rm(paths.resultsPath, { force: true });
         }
       });
+      const mapCompleted = state.taskCompleted?.map ?? 0;
+      const mapTotal = state.taskCounts?.map ?? 0;
+      const ruleCompleted = state.taskCompleted?.rule ?? 0;
+      const ruleTotal = state.taskCounts?.rule ?? 0;
+      params.logger?.info(
+        `Scan resume state marked complete (map=${mapCompleted}/${mapTotal}, rule=${ruleCompleted}/${ruleTotal}).`
+      );
     }
   };
 }

@@ -1033,14 +1033,39 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     Math.trunc(ruleEvalMaxRulesPerChunkHard)
   );
   const mappingBasePromptTokens = estimateTokens(understandingSystemPrompt);
-  const mappingBatches = buildMappingBatches(input.files, {
-    basePromptTokens: mappingBasePromptTokens,
-    maxPromptTokens: understandingMaxPromptTokens,
-    minBatchSize: understandingMinBatchSize,
-    maxBatchChunks: understandingMaxBatchChunks
-  });
   const reportProgress = input.progress;
-  reportProgress?.({ phase: "llm_map", current: 0, total: mappingBatches.length });
+  const resumeMapResults = input.resume?.getMapResults() ?? new Map<string, unknown>();
+  const coerceCachedUnderstanding = (value: unknown): LlmChunkUnderstanding | null => {
+    if (!value || typeof value !== "object") return null;
+    const record = value as { signals?: unknown; identifiers?: unknown };
+    if (!Array.isArray(record.signals) || !Array.isArray(record.identifiers)) return null;
+    return value as LlmChunkUnderstanding;
+  };
+
+  const mappingItems: MappingItem[] = input.files.map((file) => ({
+    file,
+    chunkId: buildChunkKey(file)
+  }));
+  const cachedMappingItems = mappingItems.filter((item) => resumeMapResults.has(item.chunkId));
+  const cachedMappingCount = cachedMappingItems.length;
+  const mappingTotal = mappingItems.length;
+  await input.resume?.setMapTaskCount(mappingTotal);
+  if (cachedMappingCount > 0) {
+    appLog.info(
+      `Resuming cached LLM map results (${cachedMappingCount}/${mappingTotal} chunks).`
+    );
+  }
+  reportProgress?.({ phase: "llm_map", current: cachedMappingCount, total: mappingTotal });
+
+  const mappingBatches = buildMappingBatches(
+    mappingItems.filter((item) => !resumeMapResults.has(item.chunkId)).map((item) => item.file),
+    {
+      basePromptTokens: mappingBasePromptTokens,
+      maxPromptTokens: understandingMaxPromptTokens,
+      minBatchSize: understandingMinBatchSize,
+      maxBatchChunks: understandingMaxBatchChunks
+    }
+  );
 
   const buildMappingPayload = (file: RepositoryFileSample, chunkId: string) => ({
     chunk_id: chunkId,
@@ -1374,21 +1399,33 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     );
   };
 
-  let mappingCompleted = 0;
-  const fileInsights = (await runWithConcurrency(
-    mappingBatches,
-    mapConcurrency,
-    async (batch) => {
-      const result = await mapBatch(batch);
-      mappingCompleted += 1;
-      reportProgress?.({
-        phase: "llm_map",
-        current: mappingCompleted,
-        total: mappingBatches.length
-      });
-      return result;
+  const cachedInsights: LlmFileInsight[] = [];
+  for (const item of cachedMappingItems) {
+    const cachedValue = resumeMapResults.get(item.chunkId);
+    const cachedUnderstanding =
+      cachedValue === null || cachedValue === undefined
+        ? null
+        : coerceCachedUnderstanding(cachedValue);
+    cachedInsights.push(buildFileInsight(item.file, item.chunkId, cachedUnderstanding, null));
+  }
+
+  let mappingCompleted = cachedMappingCount;
+  const mappedInsights = (await runWithConcurrency(mappingBatches, mapConcurrency, async (batch) => {
+    const result = await mapBatch(batch);
+    if (input.resume) {
+      for (const insight of result) {
+        await input.resume.recordMapResult(insight.chunkId, insight.understanding ?? null);
+      }
     }
-  )).flat();
+    mappingCompleted += result.length;
+    reportProgress?.({
+      phase: "llm_map",
+      current: Math.min(mappingCompleted, mappingTotal),
+      total: mappingTotal
+    });
+    return result;
+  })).flat();
+  const fileInsights = [...cachedInsights, ...mappedInsights];
 
   const tasks: RuleScanTask[] = [];
   const ruleFindingsByChunk = new Map<string, RepositoryScanFinding[]>();
@@ -1450,6 +1487,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   })();
 
   const totalRuleTasks = tasks.length + resumedRuleTaskCount;
+  if (resumedRuleTaskCount > 0) {
+    appLog.info(`Resuming cached LLM rule tasks (${resumedRuleTaskCount}/${totalRuleTasks}).`);
+  }
   reportProgress?.({ phase: "llm_rule", current: resumedRuleTaskCount, total: totalRuleTasks });
   let ruleTasksCompleted = 0;
   const results = await runWithConcurrency(tasks, ruleScanConcurrency, async (task) => {
@@ -1574,6 +1614,9 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
 
   uiLog.info("LLM scan (open scan)...");
   const totalOpenTasks = openScanTasks.length + resumedOpenTaskCount;
+  if (resumedOpenTaskCount > 0) {
+    appLog.info(`Resuming cached LLM open scan tasks (${resumedOpenTaskCount}/${totalOpenTasks}).`);
+  }
   reportProgress?.({ phase: "llm_open", current: resumedOpenTaskCount, total: totalOpenTasks });
   let openTasksCompleted = 0;
   const openScanResults = await runWithConcurrency(

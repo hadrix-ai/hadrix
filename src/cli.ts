@@ -384,8 +384,10 @@ program
         const ok = await promptYesNo(lines.join("\n"), { defaultYes: true });
         if (ok) {
           resumeMode = "resume";
+          uiLogger.info(`Resuming interrupted scan from ${timestamp}.`);
         } else {
           await clearScanResumeState(stateDir);
+          uiLogger.info("Cleared interrupted scan state; starting fresh.");
         }
       } else {
         resumeMode = "resume";
