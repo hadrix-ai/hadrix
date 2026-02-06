@@ -1471,6 +1471,15 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
           }
         }
       }
+
+      // If we never ran the repository LLM pass (e.g. no chunks / nothing sampled),
+      // mark all LLM phases as skipped so the CLI progress bar can still reach 100%.
+      if (fileSamples.length === 0) {
+        const reason = scannedChunks === 0 ? "no chunks" : "no sampled files";
+        options.progress?.({ phase: "llm_map", current: 0, total: 0, message: reason });
+        options.progress?.({ phase: "llm_rule", current: 0, total: 0, message: reason });
+        options.progress?.({ phase: "llm_open", current: 0, total: 0, message: reason });
+      }
   
       if (llmFindings.length > 0) {
         llmFindings = llmFindings.map((finding) => applyFindingIdentityKey(finding, repoPath));
@@ -1564,6 +1573,16 @@ export async function runScan(options: RunScanOptions): Promise<ScanResult> {
             }
           }
         }
+      } else {
+        // Ensure the overall progress bar can still reach 100% when the composite stage is not run.
+        // (Otherwise the `llm_composite` phase remains at 0 in the reporter's weighted average.)
+        const reason =
+          fileSamples.length === 0
+            ? scannedChunks === 0
+              ? "no chunks"
+              : "no sampled files"
+            : "no findings";
+        options.progress?.({ phase: "llm_composite", current: 0, total: 0, message: reason });
       }
   
       if (compositeFindings.length > 0) {

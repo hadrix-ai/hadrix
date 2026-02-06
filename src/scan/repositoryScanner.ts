@@ -1003,6 +1003,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   const resumedFindings: RepositoryScanFinding[] = [];
   const resumedOpenFindings: RepositoryScanFinding[] = [];
   let resumedTaskCount = 0;
+  let resumedRuleTaskCount = 0;
+  let resumedOpenTaskCount = 0;
   let ruleEvalCalls = 0;
 
   uiLog.info("LLM scan (understanding, batched)...");
@@ -1404,6 +1406,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         ruleFindingsByChunk.set(insight.chunkId, existing);
       }
       resumedTaskCount += 1;
+      resumedRuleTaskCount += 1;
       continue;
     }
     tasks.push({
@@ -1446,7 +1449,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
     };
   })();
 
-  reportProgress?.({ phase: "llm_rule", current: 0, total: tasks.length });
+  const totalRuleTasks = tasks.length + resumedRuleTaskCount;
+  reportProgress?.({ phase: "llm_rule", current: resumedRuleTaskCount, total: totalRuleTasks });
   let ruleTasksCompleted = 0;
   const results = await runWithConcurrency(tasks, ruleScanConcurrency, async (task) => {
     const { ruleIds, file, existingFindings: existing, taskKey, llmUnderstanding, familyMapping } = task;
@@ -1463,14 +1467,20 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         details: { ...toRecord(finding.details), overlapGroupId }
       }));
       await input.resume?.recordRuleResult(taskKey, adjusted);
+      ruleTasksCompleted += 1;
+      reportProgress?.({
+        phase: "llm_rule",
+        current: resumedRuleTaskCount + ruleTasksCompleted,
+        total: totalRuleTasks
+      });
       return adjusted;
     }
     await input.resume?.recordRuleResult(taskKey, scoped);
     ruleTasksCompleted += 1;
     reportProgress?.({
       phase: "llm_rule",
-      current: ruleTasksCompleted,
-      total: tasks.length
+      current: resumedRuleTaskCount + ruleTasksCompleted,
+      total: totalRuleTasks
     });
     return scoped;
   });
@@ -1542,6 +1552,7 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         resumedOpenFindings.push(...stored);
       }
       resumedTaskCount += 1;
+      resumedOpenTaskCount += 1;
       continue;
     }
     openScanTasks.push({
@@ -1562,7 +1573,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
   );
 
   uiLog.info("LLM scan (open scan)...");
-  reportProgress?.({ phase: "llm_open", current: 0, total: openScanTasks.length });
+  const totalOpenTasks = openScanTasks.length + resumedOpenTaskCount;
+  reportProgress?.({ phase: "llm_open", current: resumedOpenTaskCount, total: totalOpenTasks });
   let openTasksCompleted = 0;
   const openScanResults = await runWithConcurrency(
     openScanTasks,
@@ -1631,14 +1643,20 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
             details: { ...toRecord(finding.details), overlapGroupId }
           }));
           await input.resume?.recordRuleResult(taskKey, adjusted);
+          openTasksCompleted += 1;
+          reportProgress?.({
+            phase: "llm_open",
+            current: resumedOpenTaskCount + openTasksCompleted,
+            total: totalOpenTasks
+          });
           return adjusted;
         }
         await input.resume?.recordRuleResult(taskKey, scoped);
         openTasksCompleted += 1;
         reportProgress?.({
           phase: "llm_open",
-          current: openTasksCompleted,
-          total: openScanTasks.length
+          current: resumedOpenTaskCount + openTasksCompleted,
+          total: totalOpenTasks
         });
         return scoped;
       } catch (err) {
@@ -1665,8 +1683,8 @@ export async function scanRepository(input: RepositoryScanInput): Promise<Reposi
         openTasksCompleted += 1;
         reportProgress?.({
           phase: "llm_open",
-          current: openTasksCompleted,
-          total: openScanTasks.length
+          current: resumedOpenTaskCount + openTasksCompleted,
+          total: totalOpenTasks
         });
         return [];
       }

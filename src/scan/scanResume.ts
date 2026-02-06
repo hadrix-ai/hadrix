@@ -227,21 +227,22 @@ export async function createScanResumeStore(params: {
     await writeQueue;
   };
 
-  const updateState = async (next: Partial<ScanResumeState>) => {
-    state = { ...state, ...next, updatedAt: new Date().toISOString() };
-    await writeResumeState(paths, state);
-  };
-
   return {
     getRuleResults: () => ruleResults,
     getCompositeResults: () => compositeResults,
     setStage: async (stage) => {
-      await updateState({ stage });
+      await enqueueWrite(async () => {
+        state = { ...state, stage, updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
+      });
     },
     setRuleTaskCount: async (count) => {
-      const taskCounts = { ...(state.taskCounts ?? {}) };
-      taskCounts.rule = count;
-      await updateState({ taskCounts });
+      await enqueueWrite(async () => {
+        const taskCounts = { ...(state.taskCounts ?? {}) };
+        taskCounts.rule = count;
+        state = { ...state, taskCounts, updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
+      });
     },
     recordRuleResult: async (taskKey, findings) => {
       if (!taskKey || ruleResults.has(taskKey)) return;
@@ -249,31 +250,47 @@ export async function createScanResumeStore(params: {
       const line: ResumeRuleLine = { kind: "rule", taskKey, findings };
       await enqueueWrite(async () => {
         await appendFile(paths.resultsPath, `${JSON.stringify(line)}\n`, "utf-8");
+        const taskCompleted = { ...(state.taskCompleted ?? {}) };
+        taskCompleted.rule = (taskCompleted.rule ?? 0) + 1;
+        state = { ...state, taskCompleted, updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
       });
-      const taskCompleted = { ...(state.taskCompleted ?? {}) };
-      taskCompleted.rule = (taskCompleted.rule ?? 0) + 1;
-      await updateState({ taskCompleted });
     },
     recordCompositeResult: async (findings) => {
       compositeResults = findings;
       const line: ResumeCompositeLine = { kind: "composite", findings };
       await enqueueWrite(async () => {
         await appendFile(paths.resultsPath, `${JSON.stringify(line)}\n`, "utf-8");
+        state = { ...state, stage: "finalize", updatedAt: new Date().toISOString() };
+        await writeResumeState(paths, state);
       });
-      await updateState({ stage: "finalize" });
     },
     markInterrupted: async (message, stage) => {
-      await updateState({
-        status: "interrupted",
-        stage,
-        lastError: { message, stage }
+      await enqueueWrite(async () => {
+        state = {
+          ...state,
+          status: "interrupted",
+          stage,
+          lastError: { message, stage },
+          updatedAt: new Date().toISOString()
+        };
+        await writeResumeState(paths, state);
       });
     },
     markCompleted: async () => {
-      await updateState({ status: "complete", stage: "finalize", lastError: undefined });
-      if (existsSync(paths.resultsPath)) {
-        await rm(paths.resultsPath, { force: true });
-      }
+      await enqueueWrite(async () => {
+        state = {
+          ...state,
+          status: "complete",
+          stage: "finalize",
+          lastError: undefined,
+          updatedAt: new Date().toISOString()
+        };
+        await writeResumeState(paths, state);
+        if (existsSync(paths.resultsPath)) {
+          await rm(paths.resultsPath, { force: true });
+        }
+      });
     }
   };
 }

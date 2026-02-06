@@ -283,10 +283,15 @@ program
     const projectRoot = path.resolve(process.cwd(), target ?? ".");
     const format = options.json ? "json" : options.format ?? "text";
     const isJsonOutput = format === "json" || format === "core-json";
-    const useSpinner = !isJsonOutput && process.stdout.isTTY;
-    const spinner = useSpinner ? new Spinner(process.stdout) : null;
+    const useStatusSpinner = !isJsonOutput && process.stdout.isTTY;
+    const statusSpinner = useStatusSpinner ? new Spinner(process.stdout) : null;
+    // When stdout is being piped (or we're emitting JSON), keep progress UI on stderr so users
+    // still get interactive feedback without polluting stdout.
+    const useProgressSpinner = !useStatusSpinner && process.stderr.isTTY;
+    const progressSpinner = useProgressSpinner ? new Spinner(process.stderr) : null;
     let scanStart = Date.now();
     let statusMessage = "Running scan...";
+    let progressMessage = statusMessage;
     const powerMode = Boolean(options.power);
 
     const stateDir = path.join(projectRoot, ".hadrix");
@@ -305,9 +310,9 @@ program
     const logUi = (level: "info" | "warn" | "error", message: string, uiMessage?: string) => {
       appLog[level](message);
       if (isJsonOutput) return;
-      if (spinner && !loggerPaused) {
+      if (statusSpinner && !loggerPaused) {
         statusMessage = uiMessage ?? message;
-        spinner.update(formatStatus(statusMessage));
+        statusSpinner.update(formatStatus(statusMessage));
         return;
       }
       console.log(uiMessage ?? message);
@@ -316,9 +321,9 @@ program
       info: (message, meta) => {
         appLog.info(message, meta);
         if (isJsonOutput) return;
-        if (spinner && !loggerPaused) {
+        if (statusSpinner && !loggerPaused) {
           statusMessage = message;
-          spinner.update(formatStatus(statusMessage));
+          statusSpinner.update(formatStatus(statusMessage));
           return;
         }
         console.log(message);
@@ -336,7 +341,8 @@ program
         clearInterval(elapsedTimer);
         elapsedTimer = null;
       }
-      spinner?.stop();
+      statusSpinner?.stop();
+      progressSpinner?.stop();
     };
     uiLogger.resume = () => {
       if (pausedAt !== null) {
@@ -344,18 +350,25 @@ program
         pausedAt = null;
       }
       loggerPaused = false;
-      if (!spinner) return;
-      spinner.start(formatStatus(statusMessage));
+      if (!statusSpinner && !progressSpinner) return;
+      statusSpinner?.start(formatStatus(statusMessage));
+      progressSpinner?.start(formatStatus(progressMessage));
       if (!elapsedTimer) {
         elapsedTimer = setInterval(() => {
-          spinner.update(formatStatus(statusMessage));
+          statusSpinner?.update(formatStatus(statusMessage));
+          progressSpinner?.update(formatStatus(progressMessage));
         }, 1000);
       }
     };
     const updateStatus = (message: string) => {
-      if (isJsonOutput || !spinner || loggerPaused) return;
+      if (!statusSpinner || loggerPaused) return;
       statusMessage = message;
-      spinner.update(formatStatus(statusMessage));
+      statusSpinner.update(formatStatus(statusMessage));
+    };
+    const updateProgress = (message: string) => {
+      if (!progressSpinner || loggerPaused) return;
+      progressMessage = message;
+      progressSpinner.update(formatStatus(progressMessage));
     };
     let resumeMode: "new" | "resume" = "new";
     const resumeState = await loadScanResumeState(stateDir);
@@ -433,7 +446,11 @@ program
 	      }
 	    }
 
-	    const progress = spinner ? createProgressReporter(updateStatus) : undefined;
+	    const progress = statusSpinner
+        ? createProgressReporter(updateStatus)
+        : progressSpinner
+          ? createProgressReporter(updateProgress)
+          : undefined;
 	    if (powerMode) {
 	      uiLogger.info(
 	        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`
@@ -441,11 +458,13 @@ program
 	    }
 
 	    try {
-	      if (spinner) {
+	      if (statusSpinner || progressSpinner) {
         scanStart = Date.now();
-        spinner.start(formatStatus(statusMessage));
+        statusSpinner?.start(formatStatus(statusMessage));
+        progressSpinner?.start(formatStatus(progressMessage));
         elapsedTimer = setInterval(() => {
-          spinner.update(formatStatus(statusMessage));
+          statusSpinner?.update(formatStatus(statusMessage));
+          progressSpinner?.update(formatStatus(progressMessage));
         }, 1000);
       }
       const existingFindings = await loadExistingFindings(options.existingFindings);
@@ -487,7 +506,8 @@ program
         if (!shouldPrompt) {
           throw err;
         }
-        spinner?.stop();
+        statusSpinner?.stop();
+        progressSpinner?.stop();
         if (elapsedTimer) {
           clearInterval(elapsedTimer);
           elapsedTimer = null;
@@ -500,10 +520,12 @@ program
           throw err;
         }
         await runSetup({ autoYes: false, uiLogger, appLogger: appLog });
-        if (spinner) {
-          spinner.start(formatStatus(statusMessage));
+        if (statusSpinner || progressSpinner) {
+          statusSpinner?.start(formatStatus(statusMessage));
+          progressSpinner?.start(formatStatus(progressMessage));
           elapsedTimer = setInterval(() => {
-            spinner.update(formatStatus(statusMessage));
+            statusSpinner?.update(formatStatus(statusMessage));
+            progressSpinner?.update(formatStatus(progressMessage));
           }, 1000);
         }
         result = await runScanOnce();
@@ -513,7 +535,8 @@ program
         clearInterval(elapsedTimer);
         elapsedTimer = null;
       }
-      spinner?.stop();
+      statusSpinner?.stop();
+      progressSpinner?.stop();
 
       if (format === "json") {
         console.log(formatScanResultJson(result));
@@ -530,7 +553,8 @@ program
         clearInterval(elapsedTimer);
         elapsedTimer = null;
       }
-      spinner?.stop();
+      statusSpinner?.stop();
+      progressSpinner?.stop();
       const message = err instanceof Error ? err.message : String(err);
       logCliError(uiLogger, message);
       process.exitCode = 2;
