@@ -165,7 +165,40 @@ function shouldSuppressCliError(message: string): boolean {
   return lowered.includes("organization's rate limit") && lowered.includes("input tokens per minute");
 }
 
+function normalizeFatalCliErrorMessage(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) return "Unknown error.";
+  if (!shouldSuppressCliError(trimmed)) return trimmed;
+
+  const lowered = trimmed.toLowerCase();
+  if (lowered.includes("output token limit") || lowered.includes("llm response incomplete")) {
+    return "LLM response was incomplete (output token limit). Retry, or reduce prompt size / increase max tokens.";
+  }
+  if (
+    lowered.includes("rate limit") ||
+    lowered.includes("contact-sales") ||
+    lowered.includes("claude.com/en/api/rate-limits")
+  ) {
+    return "LLM request failed due to rate limiting. Please retry later.";
+  }
+  return "CLI run failed. See logs for details.";
+}
+
+function printFatalCliError(params: { message: string; logPath?: string | null }): void {
+  const normalized = normalizeFatalCliErrorMessage(params.message);
+  const prefixed = normalized.toLowerCase().startsWith("error:") ? normalized : `Error: ${normalized}`;
+  const output = process.stderr.isTTY ? pc.red(prefixed) : prefixed;
+  process.stderr.write(`${output}\n`);
+
+  if (params.logPath) {
+    const hint = `Details: ${params.logPath}`;
+    const hintOutput = process.stderr.isTTY ? pc.dim(hint) : hint;
+    process.stderr.write(`${hintOutput}\n`);
+  }
+}
+
 function logCliError(logger: Logger, message: string): void {
+  // Preserve log suppression for non-fatal logging paths.
   if (shouldSuppressCliError(message)) {
     logger.debug(`Suppressed CLI error: ${message}`);
     return;
@@ -558,7 +591,12 @@ program
       statusSpinner?.stop();
       progressSpinner?.stop();
       const message = err instanceof Error ? err.message : String(err);
-      logCliError(uiLogger, message);
+      const meta =
+        err instanceof Error
+          ? { name: err.name, message: err.message, stack: err.stack }
+          : { value: String(err) };
+      appLog.error("Fatal CLI error (scan).", meta);
+      printFatalCliError({ message, logPath: appLogger?.path });
       process.exitCode = 2;
     } finally {
       await appLogger?.close();
@@ -751,7 +789,12 @@ program
         }
       }
       const message = err instanceof Error ? err.message : String(err);
-      logCliError(uiLogger, message);
+      const meta =
+        err instanceof Error
+          ? { name: err.name, message: err.message, stack: err.stack }
+          : { value: String(err) };
+      appLog.error("Fatal CLI error (evals).", meta);
+      printFatalCliError({ message, logPath: appLogger?.path });
       process.exitCode = 2;
     } finally {
       await appLogger?.close();
