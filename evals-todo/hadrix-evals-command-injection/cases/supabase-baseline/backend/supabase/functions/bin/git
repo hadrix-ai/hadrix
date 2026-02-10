@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+
+if [ "$1" != "ls-remote" ]; then
+  exit 0
+fi
+
+has_heads=0
+for arg in "$@"; do
+  if [ "$arg" = "--heads" ]; then
+    has_heads=1
+    break
+  fi
+done
+
+if [ "$has_heads" -eq 1 ]; then
+  printf "%s\t%s\n" \
+    "7c0f5df8c4c9f8a9d3b1f9f7c2a1d7e5f3b2a1c0" "refs/heads/main" \
+    "5d2b9c1e8a3f7b6c4a9d0e1f2b3c4d5e6f7a8b9c" "refs/heads/release"
+else
+  printf "%s\t%s\n" \
+    "7c0f5df8c4c9f8a9d3b1f9f7c2a1d7e5f3b2a1c0" "refs/heads/main" \
+    "5d2b9c1e8a3f7b6c4a9d0e1f2b3c4d5e6f7a8b9c" "refs/heads/release" \
+    "4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b" "refs/tags/v0.2.0"
+fi

@@ -24,5 +24,6 @@ export async function requestPasswordReset(req: Request, res: Response) {
     [userId, token]
   );
 
+  // TODO: Attach the support agent name once the helpdesk form includes it.
   res.json({ token });
 }

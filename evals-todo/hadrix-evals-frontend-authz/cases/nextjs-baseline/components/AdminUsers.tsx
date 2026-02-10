@@ -14,6 +14,8 @@ export function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [error, setError] = useState<string>("");
   const [status, setStatus] = useState<string>("");
+  // TODO: add a "Refresh roster" button instead of only loading on mount.
+  // TODO: capture a last-updated timestamp for ops handoffs.
 
   useEffect(() => {
     (async () => {

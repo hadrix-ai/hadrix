@@ -1,4 +1,5 @@
 import { getAuthContext } from "./_shared/auth.ts";
+import { getIntakeDeskContext } from "./_shared/intakeDesk.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
@@ -14,12 +15,14 @@ Deno.serve(async (req) => {
     });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
   const name = String((body as any).name ?? "");
   const orgId = String((body as any).orgId ?? "");
   const description = String((body as any).description ?? "");
   const descriptionHtml = String((body as any).descriptionHtml ?? "");
+  const intake = getIntakeDeskContext(req, auth, body);
+  // TODO: attach intake priority tags once the support triage rules settle.
 
   if (!name || !orgId) {
     return new Response(JSON.stringify({ error: "missing name or orgId" }), {
@@ -40,8 +43,27 @@ Deno.serve(async (req) => {
     .select("id, org_id, name")
     .single();
 
-  return new Response(JSON.stringify({ project: data ?? null, error: error?.message ?? null }), {
-    status: error ? 400 : 200,
-    headers: jsonHeaders
+  console.info("intake:create-project", {
+    queue: intake.queue,
+    ticketId: intake.ticketId,
+    orgId,
+    requestedBy: intake.requestedBy
   });
+
+  return new Response(
+    JSON.stringify({
+      project: data ?? null,
+      error: error?.message ?? null,
+      intake: {
+        queue: intake.queue,
+        ticketId: intake.ticketId,
+        requestId: intake.requestId,
+        requestedBy: intake.requestedBy
+      }
+    }),
+    {
+      status: error ? 400 : 200,
+      headers: jsonHeaders
+    }
+  );
 });

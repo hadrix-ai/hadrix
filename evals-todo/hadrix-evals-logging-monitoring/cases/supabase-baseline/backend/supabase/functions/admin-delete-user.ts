@@ -16,6 +16,11 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const userId = String((body as any).userId ?? "");
+  const ticketId = String((body as any).ticketId ?? "");
+  const requestedBy = String((body as any).requestedBy ?? auth.email ?? "");
+  const reason = String((body as any).reason ?? "");
+  const queue = String((body as any).queue ?? "");
+  const opsContext = { ticketId, requestedBy, reason, queue };
 
   if (!userId) {
     return new Response(JSON.stringify({ error: "missing userId" }), {
@@ -40,11 +45,11 @@ Deno.serve(async (req) => {
       actor_user_id: auth.userId,
       action: "admin_delete_user",
       target: userId,
-      metadata: { via: "edge-function" }
+      metadata: { via: "edge-function", ops: opsContext }
     });
   }
 
-  return new Response(JSON.stringify({ ok: !error, error: error?.message ?? null }), {
+  return new Response(JSON.stringify({ ok: !error, error: error?.message ?? null, ops: opsContext }), {
     status: error ? 400 : 200,
     headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
   });

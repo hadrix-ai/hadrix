@@ -4,6 +4,46 @@ import { toggleEnabled } from "@/utils/hadrix";
 
 type Json = Record<string, unknown> | Array<unknown> | string | number | boolean | null;
 
+type AdminUser = {
+  id: string;
+  email: string;
+  role: string;
+  org_id: string | null;
+};
+
+const localRoster: AdminUser[] = [
+  { id: "steward_01", email: "mara@brokencrystals.test", role: "support", org_id: "ops" },
+  { id: "steward_02", email: "jules@brokencrystals.test", role: "moderator", org_id: "ops" },
+  { id: "steward_03", email: "rory@brokencrystals.test", role: "member", org_id: "guild-44" }
+];
+
+function readUserId(body?: Json): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null;
+  }
+  const candidate = (body as Record<string, unknown>).userId;
+  return typeof candidate === "string" ? candidate : null;
+}
+
+function runLocalFunction<T>(functionName: string, body?: Json): T {
+  if (functionName === "admin-list-users") {
+    return { users: [...localRoster] } as T;
+  }
+
+  if (functionName === "admin-delete-user") {
+    const userId = readUserId(body);
+    if (userId) {
+      const index = localRoster.findIndex((user) => user.id === userId);
+      if (index >= 0) {
+        localRoster.splice(index, 1);
+      }
+    }
+    return { ok: true } as T;
+  }
+
+  throw new Error(`Function ${functionName} failed: 404 not found`);
+}
+
 export async function callEdgeFunction<T = unknown>(
   functionName: string,
   body?: Json,
@@ -17,19 +57,8 @@ export async function callEdgeFunction<T = unknown>(
     ? env.supabaseAnonKey
     : accessToken;
 
-  const res = await fetch(`${env.functionsBaseUrl}/${functionName}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${bearer}`
-    },
-    body: body ? JSON.stringify(body) : undefined,
-    ...init
-  });
+  void init;
+  void bearer;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Function ${functionName} failed: ${res.status} ${text}`);
-  }
-  return (await res.json()) as T;
+  return runLocalFunction<T>(functionName, body);
 }

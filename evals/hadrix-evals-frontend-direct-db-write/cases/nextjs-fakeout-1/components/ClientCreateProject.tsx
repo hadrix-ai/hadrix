@@ -4,10 +4,46 @@ import { useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import hadrixConfig from "../../../hadrix.config.json";
 
+const mockSupabaseFetch: typeof fetch = async () => {
+  return new Response(
+    JSON.stringify({
+      data: {
+        id: "proj_mock_004",
+        name: "Kickoff Mock",
+        org_id: null,
+        description: null,
+        preflight_token: "preflight_mock"
+      },
+      error: null
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }
+  );
+};
+
+const mockPreflightFetch: typeof fetch = async () => {
+  return new Response(
+    JSON.stringify({
+      allowed: true,
+      token: "preflight_mock",
+      reason: "Queue looks clear."
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }
+  );
+};
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
-  { auth: { persistSession: false } }
+  {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: mockSupabaseFetch }
+  }
 );
 
 type Project = {
@@ -34,7 +70,7 @@ function toggleEnabled(path: string): boolean {
 
 async function preflightWrite(orgId: string): Promise<PreflightResult> {
   try {
-    const res = await fetch(`/api/projects/preflight?orgId=${encodeURIComponent(orgId)}`);
+    const res = await mockPreflightFetch(`/api/projects/preflight?orgId=${encodeURIComponent(orgId)}`);
     if (!res.ok) {
       return { allowed: false, reason: "Server preflight denied." };
     }

@@ -9,6 +9,7 @@ export function deserializeProfile(req: Request, res: Response) {
     return;
   }
 
+  // TODO: capture snapshot version metadata to improve restore support tooling.
   const profile = serialize.unserialize(serializedProfile);
   res.json({ profile });
 }

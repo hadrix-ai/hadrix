@@ -2,50 +2,78 @@
 
 import { useEffect, useState } from "react";
 import { toggleEnabled } from "@/lib/hadrix";
+import {
+  PROJECT_NAV_LINKS,
+  PROJECT_STORYBOARD_COPY,
+} from "../constants/projectStoryboardCopy";
+import type { ProjectApiModel } from "../types/api/projectApiResponse";
 
-type Project = {
-  id: string;
-  name: string;
-  org_id: string;
-  description: string | null;
-  description_html: string | null;
+const PROJECT_FIXTURES: Record<string, ProjectApiModel> = {
+  "launchpad-alpha": {
+    id: "launchpad-alpha",
+    name: "Launchpad Alpha",
+    org_id: "org-hx-001",
+    description: "Draft narrative used for the internal launch plan.",
+    description_html:
+      "<p>Launchpad Alpha is the internal rollout for our onboarding upgrade.</p><p><em>Status:</em> drafting the storyboard now.</p>",
+  },
+  "copperline-beta": {
+    id: "copperline-beta",
+    name: "Copperline Beta",
+    org_id: "org-hx-018",
+    description: "Beta launch notes for partner rollout.",
+    description_html:
+      "<p>Copperline Beta focuses on partner enablement.</p><ul><li>Briefing doc</li><li>Timeline sketch</li></ul>",
+  },
 };
 
 export default function ProjectPage({ params }: { params: { id: string } }) {
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useState<ProjectApiModel | null>(null);
   const [error, setError] = useState<string>("");
 
+  // TODO: add a tiny in-memory cache so back/forward navigation doesn't refetch every time.
+  // TODO: show a "last refreshed" timestamp in the header when we add activity telemetry.
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`/api/projects/${params.id}`);
-        const data = await res.json();
-        setProject(data.project ?? null);
-      } catch (e: any) {
-        setError(e.message ?? "Failed to load project");
-      }
-    })();
+    const selectedProject = PROJECT_FIXTURES[params.id];
+    if (!selectedProject) {
+      setProject(null);
+      setError("Project not found");
+      return;
+    }
+    setError("");
+    setProject(selectedProject);
   }, [params.id]);
 
   if (error) return <p style={{ color: "#a00" }}>{error}</p>;
   if (!project) return <p>Loading...</p>;
 
-  const useHtml = toggleEnabled("vulnerabilities.A03_injection.client_html_render") && project.description_html;
+  const storyboardEnabled = toggleEnabled("vulnerabilities.A03_injection.client_html_render");
+  const storyboardHtml = project.description_html;
+  const showStoryboardHtml = storyboardEnabled && storyboardHtml;
 
   return (
     <main>
       <nav>
-        <a href="/">Home</a>
-        <a href="/dashboard">Dashboard</a>
+        {PROJECT_NAV_LINKS.map((link) => (
+          <a key={link.href} href={link.href}>
+            {link.label}
+          </a>
+        ))}
       </nav>
       <h2>{project.name}</h2>
       <p style={{ color: "#777" }}>Org: {project.org_id}</p>
 
-      {useHtml ? (
-        <div dangerouslySetInnerHTML={{ __html: project.description_html ?? "" }} />
-      ) : (
-        <p>{project.description ?? "(no description)"}</p>
-      )}
+      <section style={{ marginTop: "1.5rem" }}>
+        <header style={{ marginBottom: "0.75rem" }}>
+          <h3>{PROJECT_STORYBOARD_COPY.title}</h3>
+          <p style={{ color: "#666" }}>{PROJECT_STORYBOARD_COPY.subtitle}</p>
+        </header>
+        {showStoryboardHtml ? (
+          <div dangerouslySetInnerHTML={{ __html: storyboardHtml ?? "" }} />
+        ) : (
+          <p>{project.description ?? PROJECT_STORYBOARD_COPY.fallbackDescription}</p>
+        )}
+      </section>
     </main>
   );
 }

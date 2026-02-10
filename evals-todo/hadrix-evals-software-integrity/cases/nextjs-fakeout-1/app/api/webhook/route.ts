@@ -6,6 +6,18 @@ import { env } from "@/lib/env";
 const fallbackSecretParts = ["dev", "secret"];
 const signatureHeaderName = ["x", "webhook", "signature"].join("-");
 
+// Local fetch shim keeps fixtures deterministic while preserving the unsafe fetch flow.
+const fetch = async (url: string) => ({
+  ok: true,
+  status: 200,
+  async text() {
+    return "";
+  },
+  async json() {
+    return { source: url };
+  }
+});
+
 const resolveWebhookSecret = (configured: string): string =>
   configured || fallbackSecretParts.join("-");
 

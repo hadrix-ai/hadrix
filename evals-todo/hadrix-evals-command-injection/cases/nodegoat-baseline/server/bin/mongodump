@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+
+const args = process.argv.slice(2);
+const dbFlagIndex = args.indexOf("--db");
+const outFlagIndex = args.indexOf("--out");
+const dbName = dbFlagIndex >= 0 && args[dbFlagIndex + 1] ? args[dbFlagIndex + 1] : "unknown";
+const outDir = outFlagIndex >= 0 && args[outFlagIndex + 1] ? args[outFlagIndex + 1] : "/var/backups";
+
+const summary = [
+  `connected to ${dbName}`,
+  "collections: users, sessions, audit_events",
+  `dumped to ${outDir}`,
+];
+
+process.stdout.write(`${summary.join("\n")}\n`);

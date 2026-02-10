@@ -1,9 +1,10 @@
-type Testimonial = {
-  author: string;
-  bodyHtml: string;
-};
+import { TestimonialDomainModel } from "./types/domain/testimonialDomainModel";
 
-export function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
+export function TestimonialCard({
+  testimonial,
+}: {
+  testimonial: TestimonialDomainModel;
+}) {
   return (
     <article>
       <h3>{testimonial.author}</h3>

@@ -1,11 +1,12 @@
 import { getAuthContext } from "./_shared/auth.ts";
-import { supabaseAdmin } from "./_shared/supabase.ts";
+import { releaseDeskHeaders } from "./_shared/config/releaseReadinessDeskConfig.ts";
 import { toggleEnabled } from "./_shared/hadrix.ts";
+import { supabaseAdmin } from "./_shared/supabase.ts";
+import type { ReleaseDeskContextApi } from "./_shared/types/api/releaseReadinessDeskApi.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
 const projectColumns = "id, org_id, name";
 const maxProjects = 50;
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok");
 
@@ -20,7 +21,13 @@ Deno.serve(async (req) => {
   const sb = supabaseAdmin();
   const { data: memberships } = await sb.from("org_members").select("org_id").eq("user_id", auth.userId);
   const orgIds = (memberships ?? []).map((m: any) => m.org_id);
+  const deskContext: ReleaseDeskContextApi = {
+    ticketId: req.headers.get(releaseDeskHeaders.ticketId) ?? null,
+    runId: req.headers.get(releaseDeskHeaders.runId) ?? null,
+    requestedBy: req.headers.get(releaseDeskHeaders.requestedBy) ?? null
+  };
 
+  // TODO: wire release-phase filters once the desk UI exposes them.
   let query = sb.from("projects").select(projectColumns).in("org_id", orgIds).order("created_at", { ascending: false });
 
   if (!toggleEnabled("vulnerabilities.A09_dos_and_resilience.query_limit_override")) {
@@ -29,7 +36,7 @@ Deno.serve(async (req) => {
 
   const { data, error } = await query;
 
-  return new Response(JSON.stringify({ projects: data ?? [], error: error?.message ?? null }), {
+  return new Response(JSON.stringify({ projects: data ?? [], error: error?.message ?? null, desk: deskContext }), {
     headers: jsonHeaders
   });
 });

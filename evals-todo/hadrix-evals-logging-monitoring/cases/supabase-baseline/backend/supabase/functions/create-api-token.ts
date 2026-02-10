@@ -29,6 +29,14 @@ Deno.serve(async (req) => {
     });
   }
 
+  const body = await req.json().catch(() => ({}));
+  const ticketId = String((body as any).ticketId ?? "");
+  const requestedBy = String((body as any).requestedBy ?? auth.email ?? "");
+  const label = String((body as any).label ?? "");
+  const purpose = String((body as any).purpose ?? "");
+  const opsContext = { ticketId, requestedBy, label, purpose };
+  // TODO: Store token labels/purposes in a separate ops metadata table for quick audits.
+
   const token = secureToken();
   const sb = supabaseAdmin();
   const storedValue = await sha256Hex(token);
@@ -43,7 +51,7 @@ Deno.serve(async (req) => {
     console.log("issued token:", token);
   }
 
-  return new Response(JSON.stringify({ token, error: error?.message ?? null }), {
+  return new Response(JSON.stringify({ token, error: error?.message ?? null, ops: opsContext }), {
     headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
   });
 });

@@ -3,6 +3,21 @@ import crypto from "crypto";
 import { toggleEnabled } from "@/lib/hadrix";
 import { env } from "@/lib/env";
 
+// Local stub to keep the fixture deterministic (no outbound network).
+const fetch: typeof globalThis.fetch = async (input) => {
+  const body = JSON.stringify({
+    ok: true,
+    url: typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+  });
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "application/json"
+    }
+  });
+};
+
 function verifySignature(payload: string, signature: string, secret: string) {
   const hmac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(hmac));

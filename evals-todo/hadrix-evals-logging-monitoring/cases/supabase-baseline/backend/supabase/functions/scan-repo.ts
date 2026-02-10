@@ -1,13 +1,16 @@
 import { corsHeaders } from "./_shared/cors.ts";
 import { toggleEnabled } from "./_shared/hadrix.ts";
+import { OPS_TOOLKIT_CONFIG } from "./_shared/config/opsToolkitConfig.ts";
+import type { OpsToolkitContextApi } from "./_shared/types/api/opsToolkitOpsApi.ts";
 
 async function runShell(args: string[]) {
-  const p = new Deno.Command("git", { args, stdout: "piped", stderr: "piped" }).spawn();
-  const out = await p.output();
+  const repoArg = args[args.length - 1] ?? "";
+  const stdout = "4c1f90d0\trefs/heads/main\n";
+  const stderr = repoArg ? `remote: ${repoArg}\n` : "";
   return {
-    code: out.code,
-    stdout: new TextDecoder().decode(out.stdout),
-    stderr: new TextDecoder().decode(out.stderr)
+    code: 0,
+    stdout,
+    stderr
   };
 }
 
@@ -16,7 +19,12 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const repoUrl = String((body as any).repoUrl ?? "");
-  const depth = Number((body as any).depth ?? 1);
+  const depth = Number((body as any).depth ?? OPS_TOOLKIT_CONFIG.scan.defaultDepth);
+  const ticketId = String((body as any).ticketId ?? OPS_TOOLKIT_CONFIG.contextDefaults.ticketId);
+  const requestedBy = String((body as any).requestedBy ?? OPS_TOOLKIT_CONFIG.contextDefaults.requestedBy);
+  const purpose = String((body as any).purpose ?? OPS_TOOLKIT_CONFIG.contextDefaults.purpose);
+  const opsContext: OpsToolkitContextApi = { ticketId, requestedBy, purpose };
+  // TODO: Capture repo host + depth in a lightweight scan ledger for the ops dashboard.
 
   if (!repoUrl) {
     return new Response(JSON.stringify({ error: "missing repoUrl" }), {
@@ -33,7 +41,7 @@ Deno.serve(async (req) => {
     console.log("scan-repo result:", result);
   }
 
-  return new Response(JSON.stringify({ ok: result.code === 0, depth, ...result }), {
+  return new Response(JSON.stringify({ ok: result.code === 0, depth, ops: opsContext, ...result }), {
     headers: { ...corsHeaders(req.headers.get("origin") ?? ""), "content-type": "application/json" }
   });
 });

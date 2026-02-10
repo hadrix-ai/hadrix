@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+
+const args = process.argv.slice(2);
+const countFlagIndex = args.indexOf("-c");
+const count = countFlagIndex >= 0 && args[countFlagIndex + 1] ? Number.parseInt(args[countFlagIndex + 1], 10) : 1;
+const host = args[args.length - 1] ?? "unknown";
+
+const countLine = Number.isFinite(count) ? `${count} packets transmitted, ${count} packets received, 0% packet loss` : "1 packets transmitted, 1 packets received, 0% packet loss";
+const summary = [
+  `PING ${host} (${host}): 56 data bytes`,
+  `64 bytes from ${host}: icmp_seq=0 ttl=64 time=0.042 ms`,
+  `--- ${host} ping statistics ---`,
+  countLine,
+];
+
+process.stdout.write(`${summary.join("\n")}\n`);

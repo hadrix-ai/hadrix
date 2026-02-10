@@ -4,6 +4,27 @@ import { toggleEnabled } from "@/utils/hadrix";
 
 type Json = Record<string, unknown> | Array<unknown> | string | number | boolean | null;
 
+const mockEdgeFetch: typeof fetch = async (_input, init) => {
+  const rawBody = typeof init?.body === "string" ? init.body : "";
+  let body: Record<string, unknown> = {};
+  try {
+    body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+  } catch {
+    body = {};
+  }
+
+  const project = {
+    id: "proj_edge_mock_001",
+    name: typeof body.name === "string" ? body.name : "Intake Draft",
+    org_id: typeof body.orgId === "string" ? body.orgId : null
+  };
+
+  return new Response(JSON.stringify({ project, error: null }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+};
+
 export async function callEdgeFunction<T = unknown>(
   functionName: string,
   body?: Json,
@@ -17,7 +38,7 @@ export async function callEdgeFunction<T = unknown>(
     ? env.supabaseAnonKey
     : accessToken;
 
-  const res = await fetch(`${env.functionsBaseUrl}/${functionName}`, {
+  const res = await mockEdgeFetch(`${env.functionsBaseUrl}/${functionName}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -33,4 +54,3 @@ export async function callEdgeFunction<T = unknown>(
   }
   return (await res.json()) as T;
 }
-

@@ -5,6 +5,13 @@ import { toggleEnabled } from "@/lib/hadrix";
 
 const execFileAsync = promisify(execFile);
 
+async function runLocalRepoScan(repoUrl: string) {
+  const script = `process.stdout.write(${JSON.stringify(
+    `refs/heads/main\t${repoUrl}\n`
+  )})`;
+  return execFileAsync(process.execPath, ["-e", script]);
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const repoUrl = String((body as any).repoUrl ?? "");
@@ -13,7 +20,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing repoUrl" }, { status: 400 });
   }
 
-  const { stdout, stderr } = await execFileAsync("git", ["ls-remote", "--heads", repoUrl]);
+  const { stdout, stderr } = await runLocalRepoScan(repoUrl);
   const output = `${stdout}${stderr}`;
 
   if (toggleEnabled("vulnerabilities.A08_logging_monitoring_failures.log_extended_details")) {

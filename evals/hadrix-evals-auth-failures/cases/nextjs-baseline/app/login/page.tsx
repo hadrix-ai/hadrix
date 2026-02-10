@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { signSession } from "@/lib/auth";
 
 async function loginAction(formData: FormData) {
@@ -12,6 +13,7 @@ async function loginAction(formData: FormData) {
 
   const token = signSession({ sub: "user-123", email, role: "member" });
   cookies().set("session", token);
+  redirect("/dashboard");
 }
 
 export default function LoginPage() {

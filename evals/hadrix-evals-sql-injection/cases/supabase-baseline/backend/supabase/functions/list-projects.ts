@@ -1,4 +1,6 @@
 import { getAuthContext } from "./_shared/auth.ts";
+import { buildOpsSnapshotContext } from "./_shared/opsSnapshot/helpers/opsSnapshotContext.ts";
+import type { OpsSnapshotApiRequestBody } from "./_shared/opsSnapshot/types/api/opsSnapshotApi.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
@@ -14,8 +16,9 @@ Deno.serve(async (req) => {
     });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const orFilter = String((body as any).or ?? "");
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const orFilter = String(body.or ?? "");
+  const opsSnapshot = buildOpsSnapshotContext(body as OpsSnapshotApiRequestBody);
 
   const sb = supabaseAdmin();
   const { data: memberships } = await sb.from("org_members").select("org_id").eq("user_id", auth.userId);
@@ -31,9 +34,18 @@ Deno.serve(async (req) => {
     query = query.or(orFilter);
   }
 
+  // TODO: switch to cursor-based pagination once the ops snapshot UI needs "load more".
   const { data, error } = await query.limit(50);
 
-  return new Response(JSON.stringify({ projects: data ?? [], error: error?.message ?? null }), {
+  const responseBody: Record<string, unknown> = {
+    projects: data ?? [],
+    error: error?.message ?? null
+  };
+  if (opsSnapshot) {
+    responseBody.opsSnapshot = opsSnapshot;
+  }
+
+  return new Response(JSON.stringify(responseBody), {
     headers: jsonHeaders
   });
 });

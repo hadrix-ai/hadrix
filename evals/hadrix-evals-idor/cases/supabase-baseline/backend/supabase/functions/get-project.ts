@@ -1,5 +1,7 @@
 import { getAuthContext } from "./_shared/auth.ts";
+import { buildProjectPulseContext } from "./_shared/projectPulseContext.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
+import type { ProjectPulseResponseApi } from "./_shared/types/api/projectPulseApi.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
 
@@ -15,7 +17,17 @@ Deno.serve(async (req) => {
   }
 
   const body = await req.json().catch(() => ({}));
-  const id = String((body as any).id ?? "");
+  // TODO: accept `ticketRef` once the support desk payloads finish migrating.
+  const id =
+    (body as any)?.id != null
+      ? String((body as any).id)
+      : (body as any)?.projectId != null
+      ? String((body as any).projectId)
+      : (body as any)?.project_id != null
+      ? String((body as any).project_id)
+      : (body as any)?.pulse?.projectId != null
+      ? String((body as any).pulse.projectId)
+      : "";
 
   if (!id) {
     return new Response(JSON.stringify({ error: "missing id" }), {
@@ -31,7 +43,12 @@ Deno.serve(async (req) => {
     .eq("id", id)
     .maybeSingle();
 
-  return new Response(JSON.stringify({ project: data ?? null, error: error?.message ?? null }), {
-    headers: jsonHeaders
-  });
+  const pulseContext = buildProjectPulseContext(body, auth);
+  const response: ProjectPulseResponseApi = {
+    project: data ?? null,
+    error: error?.message ?? null,
+    pulse: pulseContext
+  };
+
+  return new Response(JSON.stringify(response), { headers: jsonHeaders });
 });

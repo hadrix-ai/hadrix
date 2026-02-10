@@ -1,4 +1,6 @@
 import { getAuthContext } from "./_shared/auth.ts";
+import { buildOpsSnapshotContext } from "./_shared/opsSnapshot/helpers/opsSnapshotContext.ts";
+import type { OpsSnapshotApiRequestBody } from "./_shared/opsSnapshot/types/api/opsSnapshotApi.ts";
 import { supabaseAdmin } from "./_shared/supabase.ts";
 import { runQuery } from "./_shared/runQuery.ts";
 
@@ -15,8 +17,9 @@ Deno.serve(async (req) => {
     });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const id = String((body as any).id ?? "");
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const id = String(body.id ?? "");
+  const opsSnapshot = buildOpsSnapshotContext(body as OpsSnapshotApiRequestBody);
 
   if (!id) {
     return new Response(JSON.stringify({ error: "missing id" }), {
@@ -39,11 +42,17 @@ Deno.serve(async (req) => {
     });
   }
 
+  // TODO: cache org membership lookups when ops snapshot fan-out grows.
   const sql =
     `select id, org_id, name, description, description_html from public.projects where id = '${id}' and org_id = '${membership.org_id}' limit 1;`;
   const rows = await runQuery<any>(sql);
 
-  return new Response(JSON.stringify({ project: rows[0] ?? null }), {
+  const responseBody: Record<string, unknown> = { project: rows[0] ?? null };
+  if (opsSnapshot) {
+    responseBody.opsSnapshot = opsSnapshot;
+  }
+
+  return new Response(JSON.stringify(responseBody), {
     headers: jsonHeaders
   });
 });
