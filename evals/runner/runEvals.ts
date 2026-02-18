@@ -1,11 +1,15 @@
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import fg from "fast-glob";
 import pc from "picocolors";
+import { LLMProviderId, loadConfig } from "../../src/config/loadConfig.js";
 import { readEnv } from "../../src/config/env.js";
 import { runScan } from "../../src/scan/runScan.js";
 import { buildFindingIdentityKey } from "../../src/scan/dedupeKey.js";
 import { noopLogger, type Logger } from "../../src/logging/logger.js";
+import { CODEX_CLI_COMMAND } from "../../src/services/llm/codexClient.js";
+import { promptYesNo } from "../../src/ui/prompts.js";
 import type { CoreFinding, ScanResult } from "../../src/types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
 import { ALL_EVAL_SPECS } from "./specs.js";
@@ -20,6 +24,9 @@ import type {
 const DEFAULT_EVAL_DIR = "evals";
 const DEFAULT_SUMMARY_MATCH_THRESHOLD = 0.45;
 const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
+const CODEX_AUTH_ERROR_MESSAGE = "Codex CLI is not authenticated. Run `codex login` to continue.";
+const CODEX_AUTH_NON_TTY_ERROR_MESSAGE =
+  "Codex CLI is not authenticated. Run `codex login --with-api-key` in non-interactive environments, or `codex login` in a TTY, then retry.";
 
 export type EvalGroupStatus = "pass" | "fail" | "skipped";
 
@@ -81,6 +88,8 @@ export interface RunEvalsOptions {
   appLogger?: Logger;
 }
 
+type LoggerControls = Logger & { pause?: () => void; resume?: () => void };
+
 const emptyCounts = (): EvalCounts => ({ expected: 0, matched: 0, missing: 0, unexpected: 0 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -92,6 +101,86 @@ const hash32 = (value: string): string => {
     hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
   }
   return (hash >>> 0).toString(36);
+};
+
+const formatCodexCliSpawnError = (error: unknown): string => {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : null;
+  if (code === "ENOENT") {
+    return "Codex CLI not found on PATH. Install it and ensure `codex` is available.";
+  }
+  if (code === "EACCES") {
+    return "Codex CLI is not executable. Check permissions for the `codex` binary.";
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message) return `Codex CLI failed to start: ${message}`;
+  return "Codex CLI failed to start.";
+};
+
+const runCodexLoginStatus = async (cwd: string): Promise<number | null> =>
+  await new Promise((resolve, reject) => {
+    const proc = spawn(CODEX_CLI_COMMAND, ["login", "status"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    proc.on("error", (error) => reject(new Error(formatCodexCliSpawnError(error))));
+    proc.on("close", (code) => resolve(code));
+  });
+
+const runCodexLoginInteractive = async (cwd: string): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    const proc = spawn(CODEX_CLI_COMMAND, ["login"], {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatCodexCliSpawnError(error))));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Codex CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+
+const ensureCodexEvalsPreflight = async (params: {
+  projectRoot: string;
+  configPath?: string | null;
+  powerMode?: boolean;
+  uiLogger?: Logger;
+}): Promise<void> => {
+  const config = await loadConfig({
+    projectRoot: params.projectRoot,
+    configPath: params.configPath,
+    powerMode: params.powerMode
+  });
+  if (config.llm.provider !== LLMProviderId.Codex) return;
+  const status = await runCodexLoginStatus(params.projectRoot);
+  if (status === 0) return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(CODEX_AUTH_NON_TTY_ERROR_MESSAGE);
+  }
+  const controls = params.uiLogger as LoggerControls | undefined;
+  controls?.pause?.();
+  if (process.stdout.isTTY) {
+    process.stdout.write("\n");
+  }
+  try {
+    const ok = await promptYesNo("Codex CLI is not authenticated. Run `codex login` now?", {
+      defaultYes: true
+    });
+    if (!ok) {
+      throw new Error(CODEX_AUTH_ERROR_MESSAGE);
+    }
+    await runCodexLoginInteractive(params.projectRoot);
+  } finally {
+    controls?.resume?.();
+  }
+  const retryStatus = await runCodexLoginStatus(params.projectRoot);
+  if (retryStatus === 0) return;
+  throw new Error(CODEX_AUTH_ERROR_MESSAGE);
 };
 
 const resolveFixturesDir = (options: RunEvalsOptions): string => {
@@ -442,6 +531,12 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
           ? options.configPath
           : path.join(repoPath, options.configPath)
         : null;
+      await ensureCodexEvalsPreflight({
+        projectRoot: repoPath,
+        configPath: resolvedConfigPath,
+        powerMode: Boolean(options.power),
+        uiLogger: options.uiLogger
+      });
       const supabaseSchemaSnapshot = await findSupabaseSchemaSnapshot(repoPath);
 
       const scanResult = await runScan({

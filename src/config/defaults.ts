@@ -49,7 +49,8 @@ export const DEFAULT_QUERIES = [
 
 const DEFAULT_BASE_URLS = {
   openai: "https://api.openai.com",
-  anthropic: "https://api.anthropic.com"
+  anthropic: "https://api.anthropic.com",
+  codex: "https://api.openai.com"
 } as const;
 
 const DEFAULT_EMBEDDING_MODELS = {
@@ -58,16 +59,19 @@ const DEFAULT_EMBEDDING_MODELS = {
 
 const DEFAULT_LLM_MODELS = {
   openai: "gpt-5.1-codex-mini",
-  anthropic: "claude-haiku-4-5"
+  anthropic: "claude-haiku-4-5",
+  codex: "gpt-5.1-codex-mini"
 } as const;
 
 const POWER_LLM_MODELS = {
   openai: "gpt-5.2-codex",
-  anthropic: "claude-opus-4-5"
+  anthropic: "claude-opus-4-5",
+  codex: "gpt-5.2-codex"
 } as const;
 
 type DefaultProviderId = keyof typeof DEFAULT_BASE_URLS;
 type EmbeddingProviderId = keyof typeof DEFAULT_EMBEDDING_MODELS;
+type LlmProviderId = keyof typeof DEFAULT_LLM_MODELS;
 
 export function defaultBaseUrl(provider: DefaultProviderId): string {
   return DEFAULT_BASE_URLS[provider];
@@ -77,7 +81,7 @@ export function defaultEmbeddingModel(provider: EmbeddingProviderId): string {
   return DEFAULT_EMBEDDING_MODELS[provider];
 }
 
-export function defaultLlmModel(provider: DefaultProviderId): string {
+export function defaultLlmModel(provider: LlmProviderId): string {
   return DEFAULT_LLM_MODELS[provider];
 }
 

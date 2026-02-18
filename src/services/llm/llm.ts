@@ -7,6 +7,7 @@ import {
   ProviderRequestFailedError
 } from "../../errors/provider.errors.js";
 import { runAnthropicAdapter } from "./anthropicClient.js";
+import { runCodexAdapter } from "./codexClient.js";
 import { runOpenAiAdapter } from "./openaiClient.js";
 import { Semaphore } from "./rateLimitHelpers.js";
 import { RateLimitManager } from "./rateLimitManager.js";
@@ -49,6 +50,7 @@ const FALLBACK_OUTPUT_RETRIES = 1;
 const TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 8000;
+const CODEX_API_KEY_PLACEHOLDER = "codex-cli";
 const concurrencyLimiters = new Map<string, Semaphore>();
 const rateLimitManagers = new Map<string, RateLimitManager>();
 const SDK_ENDPOINT_SUFFIX = /\/v1\/(chat\/completions|responses|messages)\/?$/;
@@ -283,9 +285,10 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   const provider = config.llm.provider;
   const apiKey = config.llm.apiKey || config.api.apiKey;
 
-  if (!apiKey) {
+  if (provider !== LLMProviderId.Codex && !apiKey) {
     throw new LlmMissingApiKeyError();
   }
+  const resolvedApiKey = apiKey ?? CODEX_API_KEY_PLACEHOLDER;
 
   const model = resolveReasoningModel(config);
   const effectiveConfig =
@@ -306,8 +309,8 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   const fallbackMaxTokens = Math.max(config.llm.maxTokens, gpt5MinMaxTokens);
   const baseUrl = resolveSdkBaseUrl(config);
   const defaultHeaders = resolveAdapterHeaders(config);
-  const rateLimitManager = resolveRateLimitManager(effectiveConfig, apiKey, baseUrl);
-  const limiter = resolveConcurrencyLimiter(effectiveConfig, apiKey, baseUrl);
+  const rateLimitManager = resolveRateLimitManager(effectiveConfig, resolvedApiKey, baseUrl);
+  const limiter = resolveConcurrencyLimiter(effectiveConfig, resolvedApiKey, baseUrl);
   const release = limiter ? await limiter.acquire() : null;
 
   const runAdapter = async (maxTokens: number, reasoning?: boolean): Promise<LlmAdapterResult> => {
@@ -322,16 +325,22 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
         maxTokens,
         reasoning
       };
-      const adapterOptions = {
-        apiKey,
-        baseUrl,
-        maxRetries: Math.max(0, MAX_ATTEMPTS - 1),
-        defaultHeaders
-      };
       const result =
-        provider === LLMProviderId.Anthropic
-          ? await runAnthropicAdapter(adapterInput, adapterOptions)
-          : await runOpenAiAdapter(adapterInput, adapterOptions);
+        provider === LLMProviderId.Codex
+          ? await runCodexAdapter(adapterInput, { cwd: config.projectRoot })
+          : provider === LLMProviderId.Anthropic
+            ? await runAnthropicAdapter(adapterInput, {
+                apiKey: resolvedApiKey,
+                baseUrl,
+                maxRetries: Math.max(0, MAX_ATTEMPTS - 1),
+                defaultHeaders
+              })
+            : await runOpenAiAdapter(adapterInput, {
+                apiKey: resolvedApiKey,
+                baseUrl,
+                maxRetries: Math.max(0, MAX_ATTEMPTS - 1),
+                defaultHeaders
+              });
       rateLimitManager.updateFromResponse(result.response);
       return result;
     } catch (err) {

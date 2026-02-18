@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { Command, Option } from "commander";
@@ -7,6 +8,7 @@ import pc from "picocolors";
 import { readEnvRaw } from "./config/env.js";
 import { SUPABASE_SCHEMA_SCAN_FLAG, isSupabaseSchemaScanEnabled } from "./config/featureFlags.js";
 import { defaultLlmModel, powerLlmModel } from "./config/defaults.js";
+import { LLMProviderId, loadConfig } from "./config/loadConfig.js";
 import { runScan } from "./scan/runScan.js";
 import { formatFindingsText, formatScanResultCoreJson, formatScanResultJson } from "./report/formatters.js";
 import { formatEvalsText, runEvals, writeEvalArtifacts } from "../evals/runner/runEvals.js";
@@ -14,6 +16,7 @@ import { runSetup } from "./setup/runSetup.js";
 import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import { createAppLogger, noopLogger, type AppLogger, type Logger } from "./logging/logger.js";
+import { CODEX_CLI_COMMAND } from "./services/llm/codexClient.js";
 import type { ScanProgressEvent, ScanProgressPhase, ScanProgressHandler } from "./scan/progress.js";
 import type { ExistingScanFinding } from "./types.js";
 
@@ -259,10 +262,201 @@ function isMissingScannersError(message: string): boolean {
   );
 }
 
+function formatCodexCliSpawnError(error: unknown): string {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : null;
+  if (code === "ENOENT") {
+    return "Codex CLI not found on PATH. Install it and ensure `codex` is available.";
+  }
+  if (code === "EACCES") {
+    return "Codex CLI is not executable. Check permissions for the `codex` binary.";
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message) return `Codex CLI failed to start: ${message}`;
+  return "Codex CLI failed to start.";
+}
+
+async function runCodexLoginInteractive(cwd: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(CODEX_CLI_COMMAND, ["login"], {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatCodexCliSpawnError(error))));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Codex CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+}
+
+async function runCodexLoginStatus(
+  cwd: string,
+  options: { emitOutput?: boolean } = {}
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CODEX_CLI_COMMAND, ["login", "status"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const emitOutput = options.emitOutput !== false;
+    proc.stdout?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      if (emitOutput) {
+        process.stdout.write(text);
+      }
+    });
+    proc.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      if (emitOutput) {
+        process.stderr.write(text);
+      }
+    });
+    proc.on("error", (error) => reject(new Error(formatCodexCliSpawnError(error))));
+    proc.on("close", (code) => {
+      resolve({ exitCode: code, stdout, stderr });
+    });
+  });
+}
+
+async function runCodexLogout(
+  cwd: string
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CODEX_CLI_COMMAND, ["logout"], {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatCodexCliSpawnError(error))));
+    proc.on("close", (code) => {
+      resolve({ exitCode: code, stdout: "", stderr: "" });
+    });
+  });
+}
+
+async function ensureCodexScanPreflight(params: {
+  projectRoot: string;
+  configPath?: string;
+  powerMode?: boolean;
+}): Promise<void> {
+  const config = await loadConfig({
+    projectRoot: params.projectRoot,
+    configPath: params.configPath,
+    powerMode: params.powerMode
+  });
+  if (config.llm.provider !== LLMProviderId.Codex) return;
+  const status = await runCodexLoginStatus(params.projectRoot, { emitOutput: false });
+  if (status.exitCode === 0) return;
+  const authErrorMessage = "Codex CLI is not authenticated. Run `codex login` to continue.";
+  const nonTtyAuthErrorMessage =
+    "Codex CLI is not authenticated. Run `codex login --with-api-key` in non-interactive environments, or `codex login` in a TTY, then retry.";
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(nonTtyAuthErrorMessage);
+  }
+  const ok = await promptYesNo("Codex CLI is not authenticated. Run `codex login` now?", {
+    defaultYes: true
+  });
+  if (!ok) {
+    throw new Error(authErrorMessage);
+  }
+  await runCodexLoginInteractive(params.projectRoot);
+  const retryStatus = await runCodexLoginStatus(params.projectRoot, { emitOutput: false });
+  if (retryStatus.exitCode === 0) return;
+  throw new Error(authErrorMessage);
+}
+
 program
   .name("hadrix")
   .description("Hadrix local security scan (OpenAI Responses API by default; Anthropic Messages API via SDKs)")
   .version("0.1.0");
+
+const authCommand = program.command("auth").description("Authentication commands");
+
+authCommand
+  .command("login")
+  .description("Authenticate with a provider (Codex CLI)")
+  .requiredOption("--provider <provider>", "LLM provider to authenticate")
+  .action(async (options: { provider?: string }) => {
+    const provider = options.provider?.trim().toLowerCase();
+    if (provider !== LLMProviderId.Codex) {
+      const message =
+        options.provider?.trim()
+          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
+          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
+      printFatalCliError({ message });
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      await runCodexLoginInteractive(process.cwd());
+      const successMessage = "Codex login complete.";
+      console.log(process.stdout.isTTY ? pc.green(successMessage) : successMessage);
+      process.exitCode = 0;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      printFatalCliError({ message });
+      process.exitCode = 1;
+    }
+  });
+
+authCommand
+  .command("status")
+  .description("Check authentication status for a provider (Codex CLI)")
+  .requiredOption("--provider <provider>", "LLM provider to authenticate")
+  .action(async (options: { provider?: string }) => {
+    const provider = options.provider?.trim().toLowerCase();
+    if (provider !== LLMProviderId.Codex) {
+      const message =
+        options.provider?.trim()
+          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
+          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
+      printFatalCliError({ message });
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await runCodexLoginStatus(process.cwd());
+      process.exitCode = result.exitCode === 0 ? 0 : result.exitCode ?? 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      printFatalCliError({ message });
+      process.exitCode = 1;
+    }
+  });
+
+authCommand
+  .command("logout")
+  .description("Logout from a provider (Codex CLI)")
+  .requiredOption("--provider <provider>", "LLM provider to authenticate")
+  .action(async (options: { provider?: string }) => {
+    const provider = options.provider?.trim().toLowerCase();
+    if (provider !== LLMProviderId.Codex) {
+      const message =
+        options.provider?.trim()
+          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
+          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
+      printFatalCliError({ message });
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await runCodexLogout(process.cwd());
+      process.exitCode = result.exitCode === 0 ? 0 : result.exitCode ?? 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      printFatalCliError({ message });
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("scan [target]")
@@ -427,6 +621,12 @@ program
         uiLogger.info(`Resuming interrupted scan from ${timestamp}.`);
       }
     }
+
+    await ensureCodexScanPreflight({
+      projectRoot,
+      configPath: options.config,
+      powerMode
+    });
 
     const envSupabaseUrl = readEnvRaw("HADRIX_SUPABASE_URL");
     const envSupabasePassword = readEnvRaw("HADRIX_SUPABASE_PASSWORD");
@@ -687,7 +887,7 @@ program
       }
       console.log(uiMessage);
     };
-    const uiLogger: Logger = {
+    const uiLogger: UiLogger = {
       info: (message, meta) => {
         appLog.info(message, meta);
         emitUi(message, formatLogMessage(message));
@@ -702,6 +902,22 @@ program
 	      },
 	      debug: (message, meta) => appLog.debug(message, meta)
 	    };
+    uiLogger.pause = () => {
+      spinner?.stop();
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+    };
+    uiLogger.resume = () => {
+      if (!spinner) return;
+      spinner.start(formatStatus(statusMessage));
+      if (!elapsedTimer) {
+        elapsedTimer = setInterval(() => {
+          spinner.update(formatStatus(statusMessage));
+        }, 1000);
+      }
+    };
 	    if (powerMode) {
 	      uiLogger.info(
 	        `Power mode enabled (OpenAI: ${POWER_LLM_MODEL_OPENAI}, Anthropic: ${POWER_LLM_MODEL_ANTHROPIC}). Power mode gives more thorough results at higher cost than default models (OpenAI: ${DEFAULT_LLM_MODEL_OPENAI}, Anthropic: ${DEFAULT_LLM_MODEL_ANTHROPIC}).`

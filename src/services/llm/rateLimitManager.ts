@@ -92,7 +92,10 @@ const parseSnapshot = (
   if (provider === LLMProviderId.OpenAI) {
     return parseOpenAiSnapshot(headers, nowMs);
   }
-  return parseAnthropicSnapshot(headers);
+  if (provider === LLMProviderId.Anthropic) {
+    return parseAnthropicSnapshot(headers);
+  }
+  return null;
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

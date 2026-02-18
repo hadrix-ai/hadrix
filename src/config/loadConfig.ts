@@ -17,27 +17,31 @@ import {
 
 export const LLMProviderId = {
   OpenAI: "openai",
-  Anthropic: "anthropic"
+  Anthropic: "anthropic",
+  Codex: "codex"
 } as const;
 
 const LLMProviderAlias = {
-  Claude: "claude"
+  Claude: "claude",
+  OpenAiCodex: "openai-codex"
 } as const;
 
 export type LLMProvider = typeof LLMProviderId[keyof typeof LLMProviderId];
+type DefaultProviderId = typeof LLMProviderId.OpenAI | typeof LLMProviderId.Anthropic;
 
-const PROVIDER_API_KEY_ENV: Record<LLMProvider, string> = {
+const PROVIDER_API_KEY_ENV: Partial<Record<LLMProvider, string>> = {
   [LLMProviderId.OpenAI]: "OPENAI_API_KEY",
   [LLMProviderId.Anthropic]: "ANTHROPIC_API_KEY"
 };
 
-const PROVIDER_API_BASE_ENV: Record<LLMProvider, string> = {
+const PROVIDER_API_BASE_ENV: Partial<Record<LLMProvider, string>> = {
   [LLMProviderId.OpenAI]: "OPENAI_API_BASE",
   [LLMProviderId.Anthropic]: "ANTHROPIC_API_BASE"
 };
 
 const PROVIDER_ALIASES: Record<string, LLMProvider> = {
-  [LLMProviderAlias.Claude]: LLMProviderId.Anthropic
+  [LLMProviderAlias.Claude]: LLMProviderId.Anthropic,
+  [LLMProviderAlias.OpenAiCodex]: LLMProviderId.Codex
 };
 
 export interface HadrixConfig {
@@ -117,12 +121,24 @@ export interface LoadConfigParams {
 function normalizeProvider(raw: string | undefined | null): LLMProvider {
   const value = (raw || "").toLowerCase();
   if (!value) return LLMProviderId.OpenAI;
-  if (value === LLMProviderId.OpenAI || value === LLMProviderId.Anthropic) {
-    return value as LLMProvider;
+  if (
+    value === LLMProviderId.OpenAI ||
+    value === LLMProviderId.Anthropic ||
+    value === LLMProviderId.Codex
+  ) {
+    return value;
   }
   const alias = PROVIDER_ALIASES[value];
   if (alias) return alias;
   return LLMProviderId.OpenAI;
+}
+
+function isDefaultProvider(provider: LLMProvider): provider is DefaultProviderId {
+  return provider === LLMProviderId.OpenAI || provider === LLMProviderId.Anthropic;
+}
+
+function readFirstEnvOptional(names: Array<string | null | undefined>): string | null {
+  return readFirstEnv(names.filter((name): name is string => Boolean(name)));
 }
 
 function parsePositiveNumber(value: string | number | null | undefined): number | null {
@@ -170,22 +186,35 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   );
 
   const baseUrl =
-    readFirstEnv(["HADRIX_API_BASE", PROVIDER_API_BASE_ENV[provider]]) ||
+    readFirstEnvOptional([
+      "HADRIX_API_BASE",
+      isDefaultProvider(provider) ? PROVIDER_API_BASE_ENV[provider] : null
+    ]) ||
     configFile.api?.baseUrl ||
     defaultBaseUrl(provider);
 
   const llmBaseUrl =
-    readFirstEnv(["HADRIX_LLM_BASE", PROVIDER_API_BASE_ENV[llmProvider]]) ||
+    readFirstEnvOptional([
+      "HADRIX_LLM_BASE",
+      isDefaultProvider(llmProvider) ? PROVIDER_API_BASE_ENV[llmProvider] : null
+    ]) ||
     configFile.llm?.baseUrl ||
     (llmProvider === provider ? baseUrl : defaultBaseUrl(llmProvider));
 
   const apiKey =
-    readFirstEnv(["HADRIX_API_KEY", PROVIDER_API_KEY_ENV[provider]]) ||
+    readFirstEnvOptional([
+      "HADRIX_API_KEY",
+      isDefaultProvider(provider) ? PROVIDER_API_KEY_ENV[provider] : null
+    ]) ||
     configFile.api?.apiKey ||
     "";
 
   const llmApiKey =
-    readFirstEnv(["HADRIX_LLM_API_KEY", "HADRIX_API_KEY", PROVIDER_API_KEY_ENV[llmProvider]]) ||
+    readFirstEnvOptional([
+      "HADRIX_LLM_API_KEY",
+      "HADRIX_API_KEY",
+      isDefaultProvider(llmProvider) ? PROVIDER_API_KEY_ENV[llmProvider] : null
+    ]) ||
     configFile.llm?.apiKey ||
     apiKey;
 
@@ -361,7 +390,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     }
   };
 
-  if (!cfg.api.apiKey) {
+  if (isDefaultProvider(cfg.api.provider) && !cfg.api.apiKey) {
     throw new ConfigMissingApiKeyError();
   }
 

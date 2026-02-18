@@ -1,6 +1,6 @@
 {
   "name": "hadrix",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Hadrix open source CLI",
   "license": "Apache-2.0",
   "type": "module",
@@ -39,12 +39,11 @@
     "ignore": "^5.3.1",
     "openai": "^4.0.0",
     "path-type": "^4.0.0",
-    "picocolors": "^1.0.0",
     "pg": "^8.11.5",
+    "picocolors": "^1.0.0",
     "tar": "^7.5.4",
     "typescript": ">=4.7.4 <5.6.0"
   },
-  "optionalDependencies": {},
   "devDependencies": {
     "tsup": "^8.0.1",
     "tsx": "^4.7.0"
