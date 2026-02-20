@@ -8,7 +8,17 @@ import { readEnv } from "../../src/config/env.js";
 import { runScan } from "../../src/scan/runScan.js";
 import { buildFindingIdentityKey } from "../../src/scan/dedupeKey.js";
 import { noopLogger, type Logger } from "../../src/logging/logger.js";
+import {
+  CLAUDE_CODE_CLI_COMMAND,
+  mapClaudeCodeExecFailure,
+  mapClaudeCodeExecSpawnFailure,
+  runClaudeCodePrompt
+} from "../../src/services/llm/claudeCodeClient.js";
 import { CODEX_CLI_COMMAND } from "../../src/services/llm/codexClient.js";
+import {
+  ProviderApiResponseError,
+  ProviderRequestFailedError
+} from "../../src/errors/provider.errors.js";
 import { promptYesNo } from "../../src/ui/prompts.js";
 import type { CoreFinding, ScanResult } from "../../src/types.js";
 import { evaluateRepoSpec, normalizeExpectedFindings } from "./evaluator.js";
@@ -27,6 +37,10 @@ const DEFAULT_SHORT_CIRCUIT_THRESHOLD = 0.85;
 const CODEX_AUTH_ERROR_MESSAGE = "Codex CLI is not authenticated. Run `codex login` to continue.";
 const CODEX_AUTH_NON_TTY_ERROR_MESSAGE =
   "Codex CLI is not authenticated. Run `codex login --with-api-key` in non-interactive environments, or `codex login` in a TTY, then retry.";
+const CLAUDE_CODE_AUTH_ERROR_MESSAGE =
+  "Claude Code CLI is not authenticated. Run `claude` and use /login to continue.";
+const CLAUDE_CODE_AUTH_NON_TTY_ERROR_MESSAGE =
+  "Claude Code CLI is not authenticated. In non-interactive environments, run `claude setup-token`. In a TTY, run `claude` and use /login. Then retry.";
 
 export type EvalGroupStatus = "pass" | "fail" | "skipped";
 
@@ -95,6 +109,21 @@ const emptyCounts = (): EvalCounts => ({ expected: 0, matched: 0, missing: 0, un
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+const isClaudeCodeAuthError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("claude code cli is not authenticated") ||
+    lowered.includes("not logged in") ||
+    lowered.includes("/login") ||
+    lowered.includes("unauthorized") ||
+    lowered.includes("authentication") ||
+    (lowered.includes("auth") && lowered.includes("required")) ||
+    lowered.includes("access token") ||
+    lowered.includes("api key")
+  );
+};
+
 const hash32 = (value: string): string => {
   let hash = 5381;
   for (let i = 0; i < value.length; i += 1) {
@@ -117,6 +146,59 @@ const formatCodexCliSpawnError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (message) return `Codex CLI failed to start: ${message}`;
   return "Codex CLI failed to start.";
+};
+
+const CLAUDE_CODE_HELP_ARGS = ["--help"];
+const CLAUDE_CODE_LOGIN_ARGS = ["login"];
+const CLAUDE_CODE_LOGIN_COMMAND_PATTERN = /^\s*login(\s|$)/i;
+
+const runClaudeCodeHelp = async (
+  cwd: string
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> =>
+  await new Promise((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, CLAUDE_CODE_HELP_ARGS, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", (error) => reject(mapClaudeCodeExecSpawnFailure(error)));
+    proc.on("close", (code) => {
+      resolve({ exitCode: code, stdout, stderr });
+    });
+  });
+
+const hasClaudeCodeLoginCommand = (helpOutput: string): boolean =>
+  helpOutput.split(/\r?\n/).some((line) => CLAUDE_CODE_LOGIN_COMMAND_PATTERN.test(line));
+
+const resolveClaudeCodeLoginArgs = async (cwd: string): Promise<string[]> => {
+  const result = await runClaudeCodeHelp(cwd);
+  const combined = `${result.stdout}\n${result.stderr}`;
+  return hasClaudeCodeLoginCommand(combined) ? CLAUDE_CODE_LOGIN_ARGS : [];
+};
+
+const runClaudeCodeLoginInteractive = async (cwd: string): Promise<void> => {
+  const args = await resolveClaudeCodeLoginArgs(cwd);
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, args, {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(mapClaudeCodeExecSpawnFailure(error)));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Claude Code CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
 };
 
 const runCodexLoginStatus = async (cwd: string): Promise<number | null> =>
@@ -144,6 +226,70 @@ const runCodexLoginInteractive = async (cwd: string): Promise<void> =>
       }
     });
   });
+
+const ensureClaudeCodeEvalsPreflight = async (params: {
+  projectRoot: string;
+  configPath?: string | null;
+  powerMode?: boolean;
+  uiLogger?: Logger;
+}): Promise<void> => {
+  const config = await loadConfig({
+    projectRoot: params.projectRoot,
+    configPath: params.configPath,
+    powerMode: params.powerMode
+  });
+  if (config.llm.provider !== LLMProviderId.ClaudeCode) return;
+  const checkLoginStatus = async (): Promise<void> => {
+    try {
+      const result = await runClaudeCodePrompt("ping", [], { cwd: params.projectRoot });
+      if (result.exitCode !== 0 || result.signal !== null) {
+        throw mapClaudeCodeExecFailure(result);
+      }
+    } catch (error) {
+      if (error instanceof ProviderApiResponseError || error instanceof ProviderRequestFailedError) {
+        throw error;
+      }
+      throw mapClaudeCodeExecSpawnFailure(error);
+    }
+  };
+  try {
+    await checkLoginStatus();
+  } catch (error) {
+    const isAuthError = isClaudeCodeAuthError(error);
+    const isNonTty = !process.stdin.isTTY || !process.stdout.isTTY;
+    if (isNonTty && isAuthError) {
+      throw new Error(CLAUDE_CODE_AUTH_NON_TTY_ERROR_MESSAGE);
+    }
+    if (isAuthError) {
+      const controls = params.uiLogger as LoggerControls | undefined;
+      controls?.pause?.();
+      if (process.stdout.isTTY) {
+        process.stdout.write("\n");
+      }
+      try {
+        const ok = await promptYesNo("Claude Code CLI is not authenticated. Run `claude` now?", {
+          defaultYes: true
+        });
+        if (!ok) {
+          throw new Error(CLAUDE_CODE_AUTH_ERROR_MESSAGE);
+        }
+        await runClaudeCodeLoginInteractive(params.projectRoot);
+      } finally {
+        controls?.resume?.();
+      }
+      try {
+        await checkLoginStatus();
+      } catch (retryError) {
+        if (isClaudeCodeAuthError(retryError)) {
+          throw new Error(CLAUDE_CODE_AUTH_ERROR_MESSAGE);
+        }
+        throw retryError;
+      }
+      return;
+    }
+    throw error;
+  }
+};
 
 const ensureCodexEvalsPreflight = async (params: {
   projectRoot: string;
@@ -531,6 +677,12 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<RunEvalsR
           ? options.configPath
           : path.join(repoPath, options.configPath)
         : null;
+      await ensureClaudeCodeEvalsPreflight({
+        projectRoot: repoPath,
+        configPath: resolvedConfigPath,
+        powerMode: Boolean(options.power),
+        uiLogger: options.uiLogger
+      });
       await ensureCodexEvalsPreflight({
         projectRoot: repoPath,
         configPath: resolvedConfigPath,

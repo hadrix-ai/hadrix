@@ -16,7 +16,15 @@ import { runSetup } from "./setup/runSetup.js";
 import { clearScanResumeState, loadScanResumeState } from "./scan/scanResume.js";
 import { promptHidden, promptSelect, promptYesNo } from "./ui/prompts.js";
 import { createAppLogger, noopLogger, type AppLogger, type Logger } from "./logging/logger.js";
+import {
+  CLAUDE_CODE_CLI_COMMAND,
+  mapClaudeCodeExecFailure,
+  mapClaudeCodeJsonError,
+  isClaudeCodeJsonErrorResult,
+  runClaudeCodePrompt
+} from "./services/llm/claudeCodeClient.js";
 import { CODEX_CLI_COMMAND } from "./services/llm/codexClient.js";
+import { ProviderApiResponseError, ProviderRequestFailedError } from "./errors/provider.errors.js";
 import type { ScanProgressEvent, ScanProgressPhase, ScanProgressHandler } from "./scan/progress.js";
 import type { ExistingScanFinding } from "./types.js";
 
@@ -278,6 +286,83 @@ function formatCodexCliSpawnError(error: unknown): string {
   return "Codex CLI failed to start.";
 }
 
+function formatClaudeCodeCliSpawnError(error: unknown): string {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : null;
+  if (code === "ENOENT") {
+    return "Claude Code CLI not found on PATH. Install it and ensure `claude` is available.";
+  }
+  if (code === "EACCES") {
+    return "Claude Code CLI is not executable. Check permissions for the `claude` binary.";
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message) return `Claude Code CLI failed to start: ${message}`;
+  return "Claude Code CLI failed to start.";
+}
+
+const CLAUDE_CODE_HELP_ARGS = ["--help"];
+const CLAUDE_CODE_LOGIN_ARGS = ["login"];
+const CLAUDE_CODE_SETUP_TOKEN_ARGS = ["setup-token"];
+const CLAUDE_CODE_LOGOUT_ARGS = ["logout"];
+const CLAUDE_CODE_LOGIN_COMMAND_PATTERN = /^\s*login(\s|$)/i;
+const CLAUDE_CODE_SETUP_TOKEN_COMMAND_PATTERN = /^\s*setup-token(\s|$)/i;
+const CLAUDE_CODE_LOGOUT_COMMAND_PATTERN = /^\s*logout(\s|$)/i;
+
+async function runClaudeCodeHelp(
+  cwd: string
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, CLAUDE_CODE_HELP_ARGS, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on("error", (error) => reject(new Error(formatClaudeCodeCliSpawnError(error))));
+    proc.on("close", (code) => {
+      resolve({ exitCode: code, stdout, stderr });
+    });
+  });
+}
+
+function hasClaudeCodeLoginCommand(helpOutput: string): boolean {
+  return helpOutput.split(/\r?\n/).some((line) => CLAUDE_CODE_LOGIN_COMMAND_PATTERN.test(line));
+}
+
+function hasClaudeCodeSetupTokenCommand(helpOutput: string): boolean {
+  return helpOutput.split(/\r?\n/).some((line) => CLAUDE_CODE_SETUP_TOKEN_COMMAND_PATTERN.test(line));
+}
+
+function hasClaudeCodeLogoutCommand(helpOutput: string): boolean {
+  return helpOutput.split(/\r?\n/).some((line) => CLAUDE_CODE_LOGOUT_COMMAND_PATTERN.test(line));
+}
+
+async function resolveClaudeCodeLoginArgs(cwd: string): Promise<string[]> {
+  const result = await runClaudeCodeHelp(cwd);
+  const combined = `${result.stdout}\n${result.stderr}`;
+  return hasClaudeCodeLoginCommand(combined) ? CLAUDE_CODE_LOGIN_ARGS : [];
+}
+
+async function resolveClaudeCodeSetupTokenArgs(cwd: string): Promise<string[]> {
+  const result = await runClaudeCodeHelp(cwd);
+  const combined = `${result.stdout}\n${result.stderr}`;
+  return hasClaudeCodeSetupTokenCommand(combined) ? CLAUDE_CODE_SETUP_TOKEN_ARGS : [];
+}
+
+async function resolveClaudeCodeLogoutArgs(cwd: string): Promise<string[]> {
+  const result = await runClaudeCodeHelp(cwd);
+  const combined = `${result.stdout}\n${result.stderr}`;
+  return hasClaudeCodeLogoutCommand(combined) ? CLAUDE_CODE_LOGOUT_ARGS : [];
+}
+
 async function runCodexLoginInteractive(cwd: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(CODEX_CLI_COMMAND, ["login"], {
@@ -290,6 +375,64 @@ async function runCodexLoginInteractive(cwd: string): Promise<void> {
         resolve();
       } else {
         reject(new Error(`Codex CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+}
+
+async function runClaudeCodeLoginNonInteractive(cwd: string): Promise<void> {
+  const args = await resolveClaudeCodeSetupTokenArgs(cwd);
+  if (args.length === 0) {
+    throw new Error(
+      "Claude Code CLI does not expose `setup-token`. Run `claude` and use /login in an interactive terminal, or update Claude Code for CI authentication."
+    );
+  }
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, args, {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatClaudeCodeCliSpawnError(error))));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Claude Code CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+}
+
+async function runClaudeCodeLoginInteractive(cwd: string): Promise<void> {
+  const args = await resolveClaudeCodeLoginArgs(cwd);
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, args, {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatClaudeCodeCliSpawnError(error))));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Claude Code CLI exited with code ${code ?? "unknown"}.`));
+      }
+    });
+  });
+}
+
+async function runClaudeCodeLogoutInteractive(cwd: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(CLAUDE_CODE_CLI_COMMAND, args, {
+      cwd,
+      stdio: "inherit"
+    });
+    proc.on("error", (error) => reject(new Error(formatClaudeCodeCliSpawnError(error))));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Claude Code CLI exited with code ${code ?? "unknown"}.`));
       }
     });
   });
@@ -328,6 +471,23 @@ async function runCodexLoginStatus(
   });
 }
 
+async function runClaudeCodeLoginStatus(cwd: string): Promise<void> {
+  try {
+    const result = await runClaudeCodePrompt("ping", [], { cwd });
+    if (result.exitCode !== 0 || result.signal !== null) {
+      throw mapClaudeCodeExecFailure(result);
+    }
+    if (isClaudeCodeJsonErrorResult(result)) {
+      throw mapClaudeCodeJsonError(result);
+    }
+  } catch (error) {
+    if (error instanceof ProviderApiResponseError || error instanceof ProviderRequestFailedError) {
+      throw error;
+    }
+    throw new Error(formatClaudeCodeCliSpawnError(error));
+  }
+}
+
 async function runCodexLogout(
   cwd: string
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
@@ -341,6 +501,69 @@ async function runCodexLogout(
       resolve({ exitCode: code, stdout: "", stderr: "" });
     });
   });
+}
+
+const CLAUDE_CODE_AUTH_NON_TTY_ERROR_MESSAGE =
+  "Claude Code CLI is not authenticated. In non-interactive environments, run `claude setup-token`. In a TTY, run `claude` and use /login. Then retry.";
+const CLAUDE_CODE_AUTH_ERROR_MESSAGE =
+  "Claude Code CLI is not authenticated. Run `claude` and use /login to continue.";
+
+const isClaudeCodeAuthError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("claude code cli is not authenticated") ||
+    lowered.includes("not logged in") ||
+    lowered.includes("not signed in") ||
+    lowered.includes("not authenticated") ||
+    lowered.includes("/login") ||
+    lowered.includes("unauthorized") ||
+    lowered.includes("authentication") ||
+    (lowered.includes("auth") && lowered.includes("required")) ||
+    lowered.includes("access token") ||
+    lowered.includes("api key")
+  );
+};
+
+async function ensureClaudeCodeScanPreflight(params: {
+  projectRoot: string;
+  configPath?: string;
+  powerMode?: boolean;
+}): Promise<void> {
+  const config = await loadConfig({
+    projectRoot: params.projectRoot,
+    configPath: params.configPath,
+    powerMode: params.powerMode
+  });
+  if (config.llm.provider !== LLMProviderId.ClaudeCode) return;
+  try {
+    await runClaudeCodeLoginStatus(params.projectRoot);
+  } catch (error) {
+    const isAuthError = isClaudeCodeAuthError(error);
+    const isNonTty = !process.stdin.isTTY || !process.stdout.isTTY;
+    if (isNonTty && isAuthError) {
+      throw new Error(CLAUDE_CODE_AUTH_NON_TTY_ERROR_MESSAGE);
+    }
+    if (isAuthError) {
+      const ok = await promptYesNo("Claude Code CLI is not authenticated. Run `claude` now?", {
+        defaultYes: true
+      });
+      if (!ok) {
+        throw new Error(CLAUDE_CODE_AUTH_ERROR_MESSAGE);
+      }
+      await runClaudeCodeLoginInteractive(params.projectRoot);
+      try {
+        await runClaudeCodeLoginStatus(params.projectRoot);
+      } catch (retryError) {
+        if (isClaudeCodeAuthError(retryError)) {
+          throw new Error(CLAUDE_CODE_AUTH_ERROR_MESSAGE);
+        }
+        throw retryError;
+      }
+      return;
+    }
+    throw error;
+  }
 }
 
 async function ensureCodexScanPreflight(params: {
@@ -374,6 +597,28 @@ async function ensureCodexScanPreflight(params: {
   throw new Error(authErrorMessage);
 }
 
+const AUTH_PROVIDER_HINT = `${LLMProviderId.Codex} or ${LLMProviderId.ClaudeCode}`;
+type AuthProviderId = typeof LLMProviderId.Codex | typeof LLMProviderId.ClaudeCode;
+const CLAUDE_CODE_LOGOUT_HINT = "Claude Code CLI will open. Run /logout, then exit.";
+
+function resolveAuthProvider(options: { provider?: string }): AuthProviderId | null {
+  const rawProvider = options.provider?.trim();
+  if (!rawProvider) {
+    printFatalCliError({ message: `Missing --provider. Use --provider ${AUTH_PROVIDER_HINT}.` });
+    process.exitCode = 1;
+    return null;
+  }
+  const provider = rawProvider.toLowerCase();
+  if (provider === LLMProviderId.Codex || provider === LLMProviderId.ClaudeCode) {
+    return provider;
+  }
+  printFatalCliError({
+    message: `Unsupported auth provider: ${rawProvider}. Use --provider ${AUTH_PROVIDER_HINT}.`
+  });
+  process.exitCode = 1;
+  return null;
+}
+
 program
   .name("hadrix")
   .description("Hadrix local security scan (OpenAI Responses API by default; Anthropic Messages API via SDKs)")
@@ -383,17 +628,29 @@ const authCommand = program.command("auth").description("Authentication commands
 
 authCommand
   .command("login")
-  .description("Authenticate with a provider (Codex CLI)")
+  .description("Authenticate with a provider")
   .requiredOption("--provider <provider>", "LLM provider to authenticate")
   .action(async (options: { provider?: string }) => {
-    const provider = options.provider?.trim().toLowerCase();
-    if (provider !== LLMProviderId.Codex) {
-      const message =
-        options.provider?.trim()
-          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
-          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
-      printFatalCliError({ message });
-      process.exitCode = 1;
+    const provider = resolveAuthProvider(options);
+    if (!provider) return;
+    if (provider === LLMProviderId.ClaudeCode) {
+      try {
+        const isTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+        if (isTty) {
+          await runClaudeCodeLoginInteractive(process.cwd());
+        } else {
+          await runClaudeCodeLoginNonInteractive(process.cwd());
+        }
+        const successMessage = isTty
+          ? "Claude Code login complete."
+          : "Claude Code setup-token complete.";
+        console.log(process.stdout.isTTY ? pc.green(successMessage) : successMessage);
+        process.exitCode = 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        printFatalCliError({ message });
+        process.exitCode = 1;
+      }
       return;
     }
     try {
@@ -410,17 +667,22 @@ authCommand
 
 authCommand
   .command("status")
-  .description("Check authentication status for a provider (Codex CLI)")
+  .description("Check authentication status for a provider")
   .requiredOption("--provider <provider>", "LLM provider to authenticate")
   .action(async (options: { provider?: string }) => {
-    const provider = options.provider?.trim().toLowerCase();
-    if (provider !== LLMProviderId.Codex) {
-      const message =
-        options.provider?.trim()
-          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
-          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
-      printFatalCliError({ message });
-      process.exitCode = 1;
+    const provider = resolveAuthProvider(options);
+    if (!provider) return;
+    if (provider === LLMProviderId.ClaudeCode) {
+      try {
+        await runClaudeCodeLoginStatus(process.cwd());
+        const successMessage = "Claude Code CLI authenticated.";
+        console.log(process.stdout.isTTY ? pc.green(successMessage) : successMessage);
+        process.exitCode = 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        printFatalCliError({ message });
+        process.exitCode = 1;
+      }
       return;
     }
     try {
@@ -435,17 +697,27 @@ authCommand
 
 authCommand
   .command("logout")
-  .description("Logout from a provider (Codex CLI)")
+  .description("Logout from a provider")
   .requiredOption("--provider <provider>", "LLM provider to authenticate")
   .action(async (options: { provider?: string }) => {
-    const provider = options.provider?.trim().toLowerCase();
-    if (provider !== LLMProviderId.Codex) {
-      const message =
-        options.provider?.trim()
-          ? `Unsupported auth provider: ${options.provider}. Use --provider ${LLMProviderId.Codex}.`
-          : `Missing --provider. Use --provider ${LLMProviderId.Codex}.`;
-      printFatalCliError({ message });
-      process.exitCode = 1;
+    const provider = resolveAuthProvider(options);
+    if (!provider) return;
+    if (provider === LLMProviderId.ClaudeCode) {
+      try {
+        const logoutArgs = await resolveClaudeCodeLogoutArgs(process.cwd());
+        if (logoutArgs.length === 0) {
+          const hint = process.stdout.isTTY ? pc.dim(CLAUDE_CODE_LOGOUT_HINT) : CLAUDE_CODE_LOGOUT_HINT;
+          console.log(hint);
+        }
+        await runClaudeCodeLogoutInteractive(process.cwd(), logoutArgs);
+        const successMessage = "Claude Code logout complete.";
+        console.log(process.stdout.isTTY ? pc.green(successMessage) : successMessage);
+        process.exitCode = 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        printFatalCliError({ message });
+        process.exitCode = 1;
+      }
       return;
     }
     try {
@@ -621,6 +893,12 @@ program
         uiLogger.info(`Resuming interrupted scan from ${timestamp}.`);
       }
     }
+
+    await ensureClaudeCodeScanPreflight({
+      projectRoot,
+      configPath: options.config,
+      powerMode
+    });
 
     await ensureCodexScanPreflight({
       projectRoot,

@@ -60,7 +60,8 @@ const DEFAULT_EMBEDDING_MODELS = {
 const DEFAULT_LLM_MODELS = {
   openai: "gpt-5.1-codex-mini",
   anthropic: "claude-haiku-4-5",
-  codex: "gpt-5.1-codex-mini"
+  codex: "gpt-5.1-codex-mini",
+  "claude-code": "claude-haiku-4-5"
 } as const;
 
 const POWER_LLM_MODELS = {

@@ -18,29 +18,34 @@ import {
 export const LLMProviderId = {
   OpenAI: "openai",
   Anthropic: "anthropic",
+  ClaudeCode: "claude-code",
   Codex: "codex"
 } as const;
 
 const LLMProviderAlias = {
   Claude: "claude",
+  ClaudeCli: "claude-cli",
+  ClaudeCodeCli: "claude-code-cli",
   OpenAiCodex: "openai-codex"
 } as const;
 
 export type LLMProvider = typeof LLMProviderId[keyof typeof LLMProviderId];
 type DefaultProviderId = typeof LLMProviderId.OpenAI | typeof LLMProviderId.Anthropic;
 
-const PROVIDER_API_KEY_ENV: Partial<Record<LLMProvider, string>> = {
+const PROVIDER_API_KEY_ENV: Record<DefaultProviderId, string> = {
   [LLMProviderId.OpenAI]: "OPENAI_API_KEY",
   [LLMProviderId.Anthropic]: "ANTHROPIC_API_KEY"
 };
 
-const PROVIDER_API_BASE_ENV: Partial<Record<LLMProvider, string>> = {
+const PROVIDER_API_BASE_ENV: Record<DefaultProviderId, string> = {
   [LLMProviderId.OpenAI]: "OPENAI_API_BASE",
   [LLMProviderId.Anthropic]: "ANTHROPIC_API_BASE"
 };
 
 const PROVIDER_ALIASES: Record<string, LLMProvider> = {
   [LLMProviderAlias.Claude]: LLMProviderId.Anthropic,
+  [LLMProviderAlias.ClaudeCli]: LLMProviderId.ClaudeCode,
+  [LLMProviderAlias.ClaudeCodeCli]: LLMProviderId.ClaudeCode,
   [LLMProviderAlias.OpenAiCodex]: LLMProviderId.Codex
 };
 
@@ -124,6 +129,7 @@ function normalizeProvider(raw: string | undefined | null): LLMProvider {
   if (
     value === LLMProviderId.OpenAI ||
     value === LLMProviderId.Anthropic ||
+    value === LLMProviderId.ClaudeCode ||
     value === LLMProviderId.Codex
   ) {
     return value;
@@ -191,7 +197,7 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       isDefaultProvider(provider) ? PROVIDER_API_BASE_ENV[provider] : null
     ]) ||
     configFile.api?.baseUrl ||
-    defaultBaseUrl(provider);
+    (provider === LLMProviderId.ClaudeCode ? "" : defaultBaseUrl(provider));
 
   const llmBaseUrl =
     readFirstEnvOptional([
@@ -199,7 +205,11 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
       isDefaultProvider(llmProvider) ? PROVIDER_API_BASE_ENV[llmProvider] : null
     ]) ||
     configFile.llm?.baseUrl ||
-    (llmProvider === provider ? baseUrl : defaultBaseUrl(llmProvider));
+    (llmProvider === provider
+      ? baseUrl
+      : llmProvider === LLMProviderId.ClaudeCode
+        ? ""
+        : defaultBaseUrl(llmProvider));
 
   const apiKey =
     readFirstEnvOptional([
@@ -224,8 +234,20 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
   };
 
   const resolvedLlmModel =
-    readEnv("HADRIX_LLM_MODEL") || configFile.llm?.model || defaultLlmModel(llmProvider);
-  const llmModel = params.powerMode ? powerLlmModel(llmProvider) : resolvedLlmModel;
+    readEnv("HADRIX_LLM_MODEL") ||
+    configFile.llm?.model ||
+    (llmProvider === LLMProviderId.ClaudeCode ? "" : defaultLlmModel(llmProvider));
+
+  if (!resolvedLlmModel) {
+    throw new Error(
+      `Missing LLM model for provider ${llmProvider}. Set HADRIX_LLM_MODEL or llm.model in config.`
+    );
+  }
+
+  const llmModel =
+    params.powerMode && llmProvider !== LLMProviderId.ClaudeCode
+      ? powerLlmModel(llmProvider)
+      : resolvedLlmModel;
 
   const llmReasoning =
     parseOptionalBoolean(readEnvRaw("HADRIX_LLM_REASONING")) ??
@@ -390,7 +412,10 @@ export async function loadConfig(params: LoadConfigParams): Promise<HadrixConfig
     }
   };
 
-  if (isDefaultProvider(cfg.api.provider) && !cfg.api.apiKey) {
+  const requiresApiKey =
+    isDefaultProvider(cfg.api.provider) && cfg.llm.provider !== LLMProviderId.ClaudeCode;
+
+  if (requiresApiKey && !cfg.api.apiKey) {
     throw new ConfigMissingApiKeyError();
   }
 

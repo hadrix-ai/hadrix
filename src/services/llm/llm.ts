@@ -7,6 +7,7 @@ import {
   ProviderRequestFailedError
 } from "../../errors/provider.errors.js";
 import { runAnthropicAdapter } from "./anthropicClient.js";
+import { runClaudeCodeAdapter } from "./claudeCodeClient.js";
 import { runCodexAdapter } from "./codexClient.js";
 import { runOpenAiAdapter } from "./openaiClient.js";
 import { Semaphore } from "./rateLimitHelpers.js";
@@ -285,7 +286,7 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
   const provider = config.llm.provider;
   const apiKey = config.llm.apiKey || config.api.apiKey;
 
-  if (provider !== LLMProviderId.Codex && !apiKey) {
+  if (provider !== LLMProviderId.Codex && provider !== LLMProviderId.ClaudeCode && !apiKey) {
     throw new LlmMissingApiKeyError();
   }
   const resolvedApiKey = apiKey ?? CODEX_API_KEY_PLACEHOLDER;
@@ -328,6 +329,8 @@ export async function runChatCompletion(config: HadrixConfig, messages: ChatMess
       const result =
         provider === LLMProviderId.Codex
           ? await runCodexAdapter(adapterInput, { cwd: config.projectRoot })
+          : provider === LLMProviderId.ClaudeCode
+            ? await runClaudeCodeAdapter(adapterInput, { cwd: config.projectRoot })
           : provider === LLMProviderId.Anthropic
             ? await runAnthropicAdapter(adapterInput, {
                 apiKey: resolvedApiKey,

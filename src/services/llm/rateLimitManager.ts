@@ -8,6 +8,12 @@ type RateLimitSnapshot = {
   tokResetAtMs?: number;
 };
 
+const supportsRateLimitHeaders = (provider: LLMProvider): boolean =>
+  provider === LLMProviderId.OpenAI || provider === LLMProviderId.Anthropic;
+
+const isHeadersLike = (value: unknown): value is Headers =>
+  Boolean(value) && typeof (value as Headers).get === "function";
+
 const parseCount = (value: string | null): number | undefined => {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -138,7 +144,11 @@ export class RateLimitManager {
   }
 
   updateFromResponse(response?: Response | null): void {
-    if (!response) {
+    if (!supportsRateLimitHeaders(this.provider)) {
+      this.snapshot = null;
+      return;
+    }
+    if (!response || !isHeadersLike(response.headers)) {
       this.snapshot = null;
       return;
     }

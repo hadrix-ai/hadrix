@@ -9,6 +9,7 @@ const ENV_KEYS = [
   "HADRIX_API_KEY",
   "HADRIX_API_BASE",
   "HADRIX_LLM_BASE",
+  "HADRIX_LLM_MODEL",
   "HADRIX_LLM_API_KEY",
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -59,6 +60,19 @@ test("provider normalization: claude alias maps to anthropic", async (t) => {
   assert.equal(cfg.llm.provider, LLMProviderId.Anthropic);
 });
 
+test("provider normalization: claude-cli alias maps to claude-code", async (t) => {
+  applyEnv(t, {
+    HADRIX_PROVIDER: "claude-cli",
+    HADRIX_API_BASE: "https://claude.local",
+    HADRIX_LLM_MODEL: "claude-haiku-4-5"
+  });
+
+  const cfg = await loadConfig({ projectRoot: PROJECT_ROOT, configPath: CONFIG_PATH });
+
+  assert.equal(cfg.api.provider, LLMProviderId.ClaudeCode);
+  assert.equal(cfg.llm.provider, LLMProviderId.ClaudeCode);
+});
+
 test("provider normalization: openai-codex alias maps to codex", async (t) => {
   applyEnv(t, {
     HADRIX_PROVIDER: "openai-codex",
@@ -70,6 +84,22 @@ test("provider normalization: openai-codex alias maps to codex", async (t) => {
   assert.equal(cfg.api.provider, LLMProviderId.Codex);
   assert.equal(cfg.llm.provider, LLMProviderId.Codex);
   assert.equal(cfg.api.baseUrl, "https://codex.local");
+});
+
+test("provider normalization: claude-code-cli alias maps to claude-code for llm provider", async (t) => {
+  applyEnv(t, {
+    HADRIX_PROVIDER: "openai",
+    HADRIX_API_KEY: "test-key",
+    HADRIX_LLM_PROVIDER: "claude-code-cli",
+    HADRIX_LLM_BASE: "https://claude-llm.local",
+    HADRIX_LLM_MODEL: "claude-haiku-4-5"
+  });
+
+  const cfg = await loadConfig({ projectRoot: PROJECT_ROOT, configPath: CONFIG_PATH });
+
+  assert.equal(cfg.api.provider, LLMProviderId.OpenAI);
+  assert.equal(cfg.llm.provider, LLMProviderId.ClaudeCode);
+  assert.equal(cfg.llm.baseUrl, "https://claude-llm.local");
 });
 
 test("provider normalization: unknown providers fall back to openai", async (t) => {
@@ -131,6 +161,32 @@ test("provider api key requirement: codex does not require key", async (t) => {
 
   assert.equal(cfg.api.provider, LLMProviderId.Codex);
   assert.equal(cfg.llm.provider, LLMProviderId.Codex);
+  assert.equal(cfg.api.apiKey, "");
+});
+
+test("provider api key requirement: claude-code llm bypasses default provider key requirement", async (t) => {
+  applyEnv(t, {
+    HADRIX_PROVIDER: "openai",
+    HADRIX_LLM_PROVIDER: "claude-code"
+  });
+
+  const cfg = await loadConfig({ projectRoot: PROJECT_ROOT, configPath: CONFIG_PATH });
+
+  assert.equal(cfg.api.provider, LLMProviderId.OpenAI);
+  assert.equal(cfg.llm.provider, LLMProviderId.ClaudeCode);
+  assert.equal(cfg.api.apiKey, "");
+});
+
+test("provider api key requirement: claude-code provider does not require key", async (t) => {
+  applyEnv(t, {
+    HADRIX_PROVIDER: "claude-code",
+    HADRIX_API_BASE: "https://claude.local"
+  });
+
+  const cfg = await loadConfig({ projectRoot: PROJECT_ROOT, configPath: CONFIG_PATH });
+
+  assert.equal(cfg.api.provider, LLMProviderId.ClaudeCode);
+  assert.equal(cfg.llm.provider, LLMProviderId.ClaudeCode);
   assert.equal(cfg.api.apiKey, "");
 });
 
