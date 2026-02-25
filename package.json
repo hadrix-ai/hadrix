@@ -1,6 +1,6 @@
 {
   "name": "hadrix",
-  "version": "0.11.1",
+  "version": "0.12.1",
   "description": "Hadrix open source CLI",
   "license": "Apache-2.0",
   "type": "module",
