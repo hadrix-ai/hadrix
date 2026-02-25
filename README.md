@@ -1,5 +1,5 @@
 # Hadrix
-[Hadrix](https://cli.hadrix.ai/) is an AI-powered security scanner that audits your codebase for vulnerabilities. Simply run a scan and copy and paste the output into your agent of choice (Codex, Claude Code) for remediation.
+[Hadrix](https://cli.hadrix.ai/) is an AI-powered security scanner that audits your codebase for vulnerabilities. Simply run a scan and copy and paste the output into your agent of choice (for example, Codex) for remediation.
 
 NOTE: more detail can be found on https://cli.hadrix.ai. 
 
@@ -18,12 +18,46 @@ Setup - installs required binaries - static scanners
 hadrix setup
 ```
 
-Set required environment variables
+Set required environment variables (API-key providers)
+```bash
+# OpenAI (API key)
+export HADRIX_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+```
+
+```bash
+# Anthropic (API key)
+export HADRIX_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=...
+```
+If you prefer a provider-agnostic key, set `HADRIX_API_KEY` instead of the provider-specific key above.
+Supported providers: openai, anthropic, codex
+
+## Provider examples
+OpenAI (API-key mode)
 ```bash
 export HADRIX_PROVIDER=openai
-export HADRIX_API_KEY=sk-...
+export OPENAI_API_KEY=sk-...
+hadrix scan
 ```
-Supported providers: openai, anthropic
+
+Anthropic (API-key mode)
+```bash
+export HADRIX_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=...
+hadrix scan
+```
+
+Codex provider setup and auth flow (uses the local `codex` CLI and does not require `HADRIX_API_KEY`):
+```bash
+export HADRIX_PROVIDER=codex
+hadrix auth login --provider codex
+hadrix auth status --provider codex
+hadrix auth logout --provider codex
+```
+
+## CI guidance
+For CI environments, prefer API-key providers (OpenAI/Anthropic) since Codex requires local CLI auth state. If you must use Codex in CI, run a non-interactive `codex login --with-api-key` step (key via stdin) before `hadrix scan`, and validate with `hadrix auth status --provider codex`.
 
 ## Usage
 Run scan
